@@ -25,9 +25,19 @@ declare module './document' {
 
 export interface TutorMessage {
     role: 'user' | 'assistant';
-    /** chat: normal turn; attempt: divider injected when a new failed submission arrives; accepted: divider for an accepted submission */
-    kind: 'chat' | 'attempt' | 'accepted';
+    /**
+     * chat: legacy panel turn (still used by objective quizzes, which have no
+     * code to anchor cards to); attempt/accepted: dividers injected when a new
+     * submission arrives; anno: a turn of the line-anchored pop-up card
+     * dialogue — the only interaction channel for programming problems.
+     */
+    kind: 'chat' | 'attempt' | 'accepted' | 'anno';
     content: string;
+    /** For kind 'anno': the anchored line range in the submission this card belongs to. */
+    line?: number;
+    endLine?: number;
+    /** For kind 'anno' assistant replies: the tutor accepted the student's reasoning. */
+    resolved?: boolean;
     at: Date;
 }
 

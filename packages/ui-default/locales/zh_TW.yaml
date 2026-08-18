@@ -1023,3 +1023,27 @@ You've already claimed this homework.: 您已認領該功課。
 You've already voted.: 您已經投過票。
 Your permission: 您的許可權
 Your role: 您的角色
+Quizzes: 客觀題
+Programming: 程式題
+Submitted code: 已提交的程式碼
+Attempt: 嘗試
+No submissions yet.: 還沒有提交紀錄。
+Click the red tutor button to review the conversation.: 點擊紅色導師按鈕可回顧對話。
+Read-only history of your line-anchored tutoring. Answer the tutor inside the pop-up cards at your code.: 這裡唯讀展示逐行輔導的歷史。請在程式碼旁的彈出卡片中回答導師。
+No tutoring history yet. Submit your code — the tutor will pop questions right at your lines.: 還沒有輔導紀錄。提交程式碼後，導師會在相應程式碼行旁彈出問題。
+Great reflection — you have truly mastered this problem!: 反思得很好——這道題你已真正掌握！
+Compiler: 編譯器
+OK: 確定
+Close: 關閉
+Submit Result: 提交結果
+Submit At: 提交時間
+Judge At: 評測時間
+Memory Usage: 記憶體
+Time Usage: 耗時
+Submission Detail: 評測詳情
+Submission Code: 提交程式碼
+Compilation Output: 編譯輸出
+Test Case: 測試點
+Memory(KB): 記憶體(KB)
+Time(ms): 耗時(ms)
+'Judging...': 評測中...

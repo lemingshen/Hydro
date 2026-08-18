@@ -8,7 +8,7 @@
   codeLang: handler.user.codeLang,
   codeTemplate: handler.user.codeTemplate,
   pdoc: pdoc,
-  canViewRecord: true
+  canViewRecord: false
 }) }}
 {{ set(UiContext, 'postSubmitUrl', url('self_learning_solve', ssid=sdoc.docId, pid=pdoc.docId)) }}
 {{ set(UiContext, 'getSubmissionsUrl', url('record_main', query={fullStatus:'true', pid:pdoc.docId})) }}
@@ -17,7 +17,7 @@
 </script>
 {% endif %}
 <style>
-  .sl-fab { position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 900; width: 56px; height: 56px; border-radius: 50%; border: none; background: #9e2335; color: #fff; font-size: 26px; line-height: 56px; text-align: center; padding: 0; cursor: grab; box-shadow: 0 4px 14px rgba(0,0,0,.25); touch-action: none; user-select: none; -webkit-user-select: none; }
+  .sl-fab { position: fixed; right: 24px; bottom: 24px; z-index: 900; width: 56px; height: 56px; border-radius: 50%; border: none; background: #9e2335; color: #fff; font-size: 26px; line-height: 56px; text-align: center; padding: 0; cursor: grab; box-shadow: 0 4px 14px rgba(0,0,0,.25); touch-action: none; user-select: none; -webkit-user-select: none; }
   .sl-fab:hover { background: #7f1b2a; }
   .sl-fab:active { cursor: grabbing; }
   .sl-fab__dot { position: absolute; top: 3px; right: 3px; width: 12px; height: 12px; border-radius: 50%; background: #ffcf40; border: 2px solid #fff; }
@@ -44,7 +44,7 @@
   .sl-bubble hr { border: none; border-top: 1px solid #ddd; margin: 8px 0; }
   @media (max-width: 600px) {
     .sl-float { right: 8px; left: 8px; bottom: 8px; width: auto; max-width: none; height: min(560px, calc(100vh - 60px)); }
-    .sl-fab { right: 12px; }
+    .sl-fab { right: 12px; bottom: 12px; }
     .sl-float__resize { display: none; }
   }
   .sl-msg { margin: 8px 0; display: flex; }
@@ -58,6 +58,8 @@
   .sl-divider { text-align: center; color: #888; font-size: 12px; margin: 12px 0; }
   .sl-divider span { background: #eee; border-radius: 10px; padding: 2px 10px; }
   .sl-divider.accepted span { background: #d9f2d9; color: #25ad40; }
+  .sl-loc { font-size: 11px; color: #9e2335; font-weight: bold; margin-bottom: 3px; }
+  .sl-bubble--note { background: #e9f7ec !important; border: 1px solid #bfe6c8 !important; color: #2f9e44; font-weight: bold; }
   .sl-input-row { display: flex; margin: 0; padding: 8px; border-top: 1px solid #e6e6e6; flex: 0 0 auto; background: #fff; }
   .sl-input-row textarea { flex: 1; resize: none; height: 56px; }
   .sl-input-row button { margin-left: 8px; align-self: flex-end; }
@@ -134,6 +136,9 @@
     </div>
 
     {% if isStudent and tutorConfigured and (problemKind == 'objective' or problemKind == 'programming') %}
+    <button id="sl-fab" class="sl-fab" type="button" title="{{ _('AI Socratic Tutor') }}">
+      <span>🤖</span><span class="sl-fab__dot" id="sl-fab-dot" style="display:none"></span>
+    </button>
     <div id="sl-tutor" class="sl-float" style="display:none" role="dialog" aria-label="{{ _('AI Socratic Tutor') }}">
       <div id="sl-tutor-resize" class="sl-float__resize" title="{{ _('Drag to resize') }}"></div>
       <div class="sl-float__header">
@@ -145,12 +150,16 @@
         </span>
       </div>
       <div class="sl-chat" id="sl-chat"></div>
+      {% if problemKind == 'objective' %}
       <div class="sl-typing" id="sl-typing">{{ _('The tutor is thinking...') }}</div>
       <div class="sl-input-row">
         <textarea id="sl-input" class="textbox" placeholder="{{ _('Explain your thinking, answer the tutor, or ask for guidance... (Enter to send)') }}"></textarea>
         <button id="sl-send" class="rounded primary button" type="button">{{ _('Send') }}</button>
       </div>
       <p class="sl-float__hint">{{ _('The tutor guides you with questions and will never hand you the final answer. Take your time to think!') }}</p>
+      {% else %}
+      <p class="sl-float__hint">{{ _('Read-only history of your line-anchored tutoring. Answer the tutor inside the pop-up cards at your code.') }}</p>
+      {% endif %}
     </div>
     {% elif isStudent and not tutorConfigured %}
     <div class="section side">

@@ -13,7 +13,7 @@ import { PERM, PRIV } from '../model/builtin';
 import domain from '../model/domain';
 import problem from '../model/problem';
 import record from '../model/record';
-import SelfLearningModel, { SelfLearningDoc, TutorMessage } from '../model/selflearning';
+import SelfLearningModel, { SelfLearningDoc, TutorMessage, TutorThreadDoc } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
@@ -136,10 +136,33 @@ class SelfLearningProblemBaseHandler extends Handler {
     get problemKind() {
         return aiTutor.problemKindOf(this.pdoc.config);
     }
+
+    /**
+     * The given user's judged submissions on this problem, oldest first,
+     * excluding Scratchpad pretest runs (they carry the RECORD_PRETEST
+     * contest marker and are not real attempts).
+     */
+    async submissionTrajectory(domainId: string, uid: number, limit = 10) {
+        const history = await record.getMulti(domainId, {
+            pid: this.pdoc.docId, uid, contest: { $ne: record.RECORD_PRETEST },
+        }).sort({ _id: -1 }).limit(limit)
+            .project({ code: 1, lang: 1, status: 1, score: 1 })
+            .toArray();
+        return history.reverse().map((r: any) => ({
+            rid: r._id.toHexString(),
+            lang: r.lang || '',
+            status: r.status,
+            statusText: STATUS_TEXTS[r.status] || `${r.status}`,
+            accepted: r.status === STATUS.STATUS_ACCEPTED,
+            score: r.score || 0,
+            at: r._id.getTimestamp().getTime(),
+            code: typeof r.code === 'string' ? r.code.slice(0, 8000) : '',
+        }));
+    }
 }
 
 class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
-    async get() {
+    async get({ domainId }) {
         const langRange = (this.pdoc.config && typeof this.pdoc.config === 'object' && this.pdoc.config.langs)
             ? Object.fromEntries(this.pdoc.config.langs.map((i) => [i, setting.langs[i]?.display || i]))
             : setting.SETTINGS_BY_KEY.codeLang.range;
@@ -217,9 +240,15 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
 }
 
 class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
-    @param('rid', Types.ObjectId)
+    @param('rid', Types.ObjectId, true)
     @param('full', Types.Boolean)
-    async get({ domainId }, rid: ObjectId, full = false) {
+    async get({ domainId }, rid?: ObjectId, full = false) {
+        if (!rid) {
+            // History mode: the solve page's "Submitted code" panel asks for the
+            // requesting user's own trajectory on this problem, no rid needed.
+            this.response.body = { attempts: await this.submissionTrajectory(domainId, this.user._id) };
+            return;
+        }
         const rdoc = await record.get(domainId, rid);
         if (!rdoc || rdoc.pid !== this.pdoc.docId) throw new NotFoundError(domainId, rid);
         if (rdoc.uid !== this.user._id && !this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM)) throw new PermissionError();
@@ -234,6 +263,10 @@ class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
             score: rdoc.score || 0,
             time: rdoc.time || 0,
             memory: rdoc.memory || 0,
+            lang: rdoc.lang || '',
+            code: typeof rdoc.code === 'string' ? rdoc.code.slice(0, 8000) : '',
+            submitAt: rdoc._id.getTimestamp().getTime(),
+            judgeAt: rdoc.judgeAt ? new Date(rdoc.judgeAt).getTime() : null,
             compilerTexts: (rdoc.compilerTexts || []).join('\n').slice(0, 4000),
             judgeTexts: (rdoc.judgeTexts || [])
                 .map((t: any) => (typeof t === 'string' ? t : t?.message || ''))
@@ -244,6 +277,7 @@ class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
                 status: c.status,
                 statusText: STATUS_SHORT_TEXTS[c.status] || STATUS_TEXTS[c.status] || `${c.status}`,
                 message: (typeof c.message === 'string' ? c.message : (c.message?.message || '')).slice(0, 200),
+                score: c.score,
                 time: c.time,
                 memory: c.memory,
             })),
@@ -258,20 +292,7 @@ class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
             };
             // The submission trajectory of the record's owner on this problem
             // (oldest first), so the tutor window can show every attempt's code.
-            const history = await record.getMulti(domainId, { pid: this.pdoc.docId, uid: rdoc.uid })
-                .sort({ _id: -1 }).limit(10)
-                .project({ code: 1, lang: 1, status: 1, score: 1 })
-                .toArray();
-            this.response.body.attempts = history.reverse().map((r: any) => ({
-                rid: r._id.toHexString(),
-                lang: r.lang || '',
-                status: r.status,
-                statusText: STATUS_TEXTS[r.status] || `${r.status}`,
-                accepted: r.status === STATUS.STATUS_ACCEPTED,
-                score: r.score || 0,
-                at: r._id.getTimestamp().getTime(),
-                code: typeof r.code === 'string' ? r.code.slice(0, 8000) : '',
-            }));
+            this.response.body.attempts = await this.submissionTrajectory(domainId, rdoc.uid);
         }
     }
 }
@@ -297,6 +318,27 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             } catch (e) { /* the tutor still works without the key */ }
             objective = aiTutor.analyzeObjective(this.pdoc, rawConfig, rdoc, uiLang);
         }
+        let attempts: aiTutor.TutorAttempt[] | undefined;
+        if (problemKind !== 'objective' && rdoc) {
+            // Requirement: every tutor turn sees the WHOLE submission history so
+            // its questions stay consistent across resubmissions. Older attempts
+            // are truncated harder; the latest rdoc is excluded (it appears in
+            // full as the focal submission).
+            try {
+                const latest = rdoc._id.toHexString();
+                attempts = (await this.submissionTrajectory(this.args.domainId, this.user._id, 9))
+                    .filter((a) => a.rid !== latest)
+                    .slice(-8)
+                    .map((a) => ({
+                        statusText: a.statusText,
+                        score: a.score,
+                        lang: a.lang,
+                        accepted: a.accepted,
+                        code: (a.code || '').slice(0, 2000),
+                    }));
+                if (!attempts.length) attempts = undefined;
+            } catch (e) { /* history is best-effort context */ }
+        }
         return {
             pdoc: this.pdoc,
             rdoc,
@@ -305,6 +347,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             uiLang,
             problemKind,
             objective,
+            attempts,
         };
     }
 
@@ -313,11 +356,38 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         return psdoc?.status === STATUS.STATUS_ACCEPTED;
     }
 
+    /** Serialize a stored message for the client, keeping card metadata. */
+    static mapMsg(m: TutorMessage) {
+        return {
+            role: m.role, kind: m.kind, content: m.content, line: m.line, endLine: m.endLine, resolved: m.resolved,
+        };
+    }
+
+    /**
+     * Every judged submission gets exactly one divider in the thread. With the
+     * pop-up cards as the sole channel for programming problems, this is now
+     * shared bookkeeping: postAnnotate calls it on failures, postAccepted on
+     * successes. Returns the divider text when one was just created so the
+     * client can mirror it live.
+     */
+    async ensureAttemptMarker(domainId: string, rdoc: RecordDoc): Promise<{ thread: TutorThreadDoc, marker: string | null, accepted: boolean }> {
+        const accepted = rdoc.status === STATUS.STATUS_ACCEPTED;
+        let thread = await SelfLearningModel.ensureThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        if (thread.rid && thread.rid.toHexString() === rdoc._id.toHexString()) return { thread, marker: null, accepted };
+        const attemptCount = (thread.attemptCount || 0) + 1;
+        const content = `Attempt #${attemptCount} — verdict: ${STATUS_TEXTS[rdoc.status] || rdoc.status} (score ${rdoc.score || 0}).`;
+        await SelfLearningModel.pushMessages(thread._id, [
+            { role: 'user', kind: accepted ? 'accepted' : 'attempt', content },
+        ], { rid: rdoc._id, attemptCount });
+        thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        return { thread, marker: content, accepted };
+    }
+
     async get() {
         this.checkTutorAllowed();
         const thread = await SelfLearningModel.getThread(this.args.domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
         this.response.body = {
-            messages: (thread?.messages || []).map((m) => ({ role: m.role, kind: m.kind, content: m.content })),
+            messages: (thread?.messages || []).map(SelfLearningTutorHandler.mapMsg),
             attemptCount: thread?.attemptCount || 0,
         };
     }
@@ -340,7 +410,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         const lastMsg = thread.messages[thread.messages.length - 1];
         // Reopening the chat on the same submission: just return existing history.
         if (sameRid && lastMsg?.role === 'assistant') {
-            this.response.body = { messages: thread.messages.map((m) => ({ role: m.role, kind: m.kind, content: m.content })) };
+            this.response.body = { messages: thread.messages.map(SelfLearningTutorHandler.mapMsg) };
             return;
         }
         // First tutoring turn if the tutor has never spoken in this thread yet.
@@ -366,7 +436,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         const reply = await aiTutor.runTutorTurn(ctx, thread.messages, directive);
         await SelfLearningModel.pushMessages(thread._id, [{ role: 'assistant', kind: 'chat', content: reply }]);
         const messages = [...thread.messages, { role: 'assistant', kind: 'chat', content: reply }];
-        this.response.body = { messages: messages.map((m: any) => ({ role: m.role, kind: m.kind, content: m.content })) };
+        this.response.body = { messages: messages.map((m: any) => SelfLearningTutorHandler.mapMsg(m)) };
     }
 
     @param('rid', Types.ObjectId)
@@ -384,9 +454,19 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             if (Array.isArray(parsed)) askedList = parsed.map((q) => String(q)).slice(0, 8);
         } catch (e) { /* ignore malformed asked lists */ }
         const rdoc = await this.loadOwnRecord(domainId, rid);
-        const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        // The pop-up cards are the interaction channel for programming
+        // problems, so this endpoint owns the attempt bookkeeping and
+        // persists every card question into the thread — the red launcher
+        // replays that history read-only.
+        const { thread, marker, accepted } = await this.ensureAttemptMarker(domainId, rdoc);
         const ctx = await this.tutorCtx(rdoc, thread?.attemptCount || 1, await this.everAccepted(domainId));
-        this.response.body = { annotation: await aiTutor.runAnnotationTurn(ctx, askedList) };
+        const annotation = await aiTutor.runAnnotationTurn(ctx, askedList);
+        if (annotation && thread) {
+            await SelfLearningModel.pushMessages(thread._id, [{
+                role: 'assistant', kind: 'anno', content: annotation.question, line: annotation.line, endLine: annotation.endLine,
+            }]);
+        }
+        this.response.body = { annotation, marker, markerAccepted: accepted };
     }
 
     @param('rid', Types.ObjectId)
@@ -410,15 +490,29 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             }
         } catch (e) { /* ignore malformed history */ }
         const rdoc = await this.loadOwnRecord(domainId, rid);
-        const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        const { thread } = await this.ensureAttemptMarker(domainId, rdoc);
+        const maxMessages = +system.get('ai_tutor.max_messages') || 80;
+        if (thread.messages.length >= maxMessages) {
+            throw new BadRequestError('This tutoring conversation reached its length limit. Please reset it to continue.');
+        }
         const ctx = await this.tutorCtx(rdoc, thread?.attemptCount || 1, await this.everAccepted(domainId));
-        this.response.body = await aiTutor.runAnnotationDialogue(ctx, {
+        const result = await aiTutor.runAnnotationDialogue(ctx, {
             line,
             endLine,
             question: question.slice(0, 300),
             history: turns,
             answer: text.slice(0, 1000),
         });
+        // Persist the card exchange: this dialogue IS the tutoring history now.
+        await SelfLearningModel.pushMessages(thread._id, [
+            {
+                role: 'user', kind: 'anno', content: text.slice(0, 1000), line, endLine,
+            },
+            {
+                role: 'assistant', kind: 'anno', content: result.reply, line, endLine, resolved: result.resolved,
+            },
+        ]);
+        this.response.body = result;
     }
 
     @param('text', Types.String)
@@ -451,6 +545,14 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         await this.limitRate('ai_tutor', 60, 10, '{{user}}');
         const rdoc = await this.loadOwnRecord(domainId, rid);
         if (rdoc.status !== STATUS.STATUS_ACCEPTED) throw new BadRequestError('This submission was not accepted.');
+        if (this.problemKind === 'programming') {
+            // The card channel asks nothing on success (the student should not
+            // lose patience after winning); just record the accepted divider so
+            // the read-only history shows the milestone.
+            const { marker } = await this.ensureAttemptMarker(domainId, rdoc);
+            this.response.body = { reply: null, marker, markerAccepted: true };
+            return;
+        }
         const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
         if (!thread || !thread.messages.length) {
             this.response.body = { reply: null };

@@ -1025,3 +1025,27 @@ You've already claimed this homework.: 您已认领过该作业。
 You've already voted.: 您已经投过票。
 Your permission: 您的权限
 Your role: 您的角色
+Quizzes: 客观题
+Programming: 编程题
+Submitted code: 已提交的代码
+Attempt: 尝试
+No submissions yet.: 还没有提交记录。
+Click the red tutor button to review the conversation.: 点击红色导师按钮可回顾对话。
+Read-only history of your line-anchored tutoring. Answer the tutor inside the pop-up cards at your code.: 这里只读展示逐行辅导的历史。请在代码旁的弹出卡片中回答导师。
+No tutoring history yet. Submit your code — the tutor will pop questions right at your lines.: 还没有辅导记录。提交代码后，导师会在相应代码行旁弹出问题。
+Great reflection — you have truly mastered this problem!: 反思得很好——这道题你已真正掌握！
+Compiler: 编译器
+OK: 确定
+Close: 关闭
+Submit Result: 提交结果
+Submit At: 提交时间
+Judge At: 评测时间
+Memory Usage: 内存
+Time Usage: 耗时
+Submission Detail: 评测详情
+Submission Code: 提交代码
+Compilation Output: 编译输出
+Test Case: 测试点
+Memory(KB): 内存(KB)
+Time(ms): 耗时(ms)
+'Judging...': 评测中...

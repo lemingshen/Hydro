@@ -8,7 +8,7 @@ import { i18n, loadReactRedux, request, tpl } from 'vj/utils';
 // Direct import: pulls the rail module into the bundle through the dependency
 // graph, so the session rail never depends on the page-loader picking up a
 // newly added file.
-import { injectRailWhenReady, removeRail as removeScratchpadRail } from './auto_scratchpad.page';
+import { injectRailForPage, injectRailWhenReady } from './auto_scratchpad.page';
 import { openDB } from 'vj/utils/db';
 
 const POLL_INTERVAL = 1500;
@@ -49,6 +49,8 @@ export default new NamedPage('self_learning_solve', async () => {
   let tutorStarted = false;
   let waiting = false;
   let lastRid = null;
+  /** Assigned by initScratchpad so the reset handler can clear open cards. */
+  let clearScratchpadAnnotations = () => {};
 
   /* --------------------- objective (quiz) answer form ---------------------- */
 
@@ -207,7 +209,7 @@ export default new NamedPage('self_learning_solve', async () => {
   function fabPixelPos() {
     const iw = window.innerWidth;
     const ih = window.innerHeight;
-    if (!fabFrac) return { x: iw - FAB_SIZE - 24, y: (ih - FAB_SIZE) / 2 }; // CSS default: center right
+    if (!fabFrac) return { x: iw - FAB_SIZE - 24, y: ih - FAB_SIZE - 24 }; // CSS default: bottom right
     const minY = topBound();
     const rangeX = Math.max(0, iw - FAB_SIZE - EDGE * 2);
     const rangeY = Math.max(0, ih - FAB_SIZE - minY - EDGE);
@@ -407,28 +409,51 @@ export default new NamedPage('self_learning_solve', async () => {
     scrollChat();
   }
 
-  function appendBubble(role, content) {
+  function appendBubble(role, content, meta = null) {
     $chat.find('.sl-empty').remove();
     const $msg = $(`<div class="sl-msg ${role === 'user' ? 'user' : 'assistant'}"><div class="sl-bubble"></div></div>`);
+    const $bubble = $msg.find('.sl-bubble');
     if (role === 'user') {
-      $msg.find('.sl-bubble').html(renderUserText(content));
+      $bubble.html(renderUserText(content));
     } else {
-      $msg.find('.sl-bubble').html(md.render(String(content || '')));
+      $bubble.html(md.render(String(content || '')));
       import('vj/components/highlighter/prismjs')
         .then(({ default: prism }) => prism.highlightBlocks($msg))
         .catch(() => { /* highlighting is optional */ });
       if (!panelOpen) $fabDot.show();
     }
+    if (meta && meta.line) {
+      const loc = meta.endLine && meta.endLine !== meta.line ? `L${meta.line}–${meta.endLine}` : `L${meta.line}`;
+      $bubble.prepend(`<div class="sl-loc">📍 ${escapeHtml(loc)}</div>`);
+    }
     $chat.append($msg);
+    if (meta && meta.resolved) {
+      const note = meta.accepted
+        ? i18n('Great reflection — you have truly mastered this problem!')
+        : i18n('Now modify your code accordingly and resubmit!');
+      $chat.append(`<div class="sl-msg assistant"><div class="sl-bubble sl-bubble--note">✏️ ${escapeHtml(note)}</div></div>`);
+    }
     scrollChat();
   }
 
   function renderMessages(messages, replace = true) {
     if (replace) $chat.empty();
+    // Card turns inherit their attempt's verdict from the preceding divider,
+    // so replayed resolution notes celebrate after acceptance instead of
+    // asking for a resubmission.
+    let underAccepted = false;
     for (const m of messages || []) {
-      if (m.kind === 'attempt') appendDivider(m.content);
-      else if (m.kind === 'accepted') appendDivider(m.content, true);
-      else appendBubble(m.role, m.content);
+      if (m.kind === 'attempt') { underAccepted = false; appendDivider(m.content); } // eslint-disable-line brace-style
+      else if (m.kind === 'accepted') { underAccepted = true; appendDivider(m.content, true); } // eslint-disable-line brace-style
+      else if (m.kind === 'anno') {
+        appendBubble(m.role, m.content, {
+          line: m.line, endLine: m.endLine, resolved: m.resolved, accepted: underAccepted,
+        });
+      } else if (UiContext.slType === 'programming') {
+        // Legacy button-chat turns are retired for programming problems: the
+        // pop-up cards near the code are the only interaction channel there.
+        continue; // eslint-disable-line no-continue
+      } else appendBubble(m.role, m.content);
     }
   }
 
@@ -436,6 +461,12 @@ export default new NamedPage('self_learning_solve', async () => {
     waiting = on;
     $typing.toggle(on);
     $('#sl-send').prop('disabled', on);
+  }
+
+  function panelEmptyText() {
+    return UiContext.slType === 'programming'
+      ? i18n('No tutoring history yet. Submit your code — the tutor will pop questions right at your lines.')
+      : i18n('Submit your solution first — the tutor starts from a judged attempt.');
   }
 
   function openPanel() {
@@ -446,7 +477,7 @@ export default new NamedPage('self_learning_solve', async () => {
     $fab.hide();
     $fabDot.hide();
     if (!$chat.children().length) {
-      $chat.append(`<div class="sl-empty">${escapeHtml(i18n('Submit your solution first — the tutor starts from a judged attempt.'))}</div>`);
+      $chat.append(`<div class="sl-empty">${escapeHtml(panelEmptyText())}</div>`);
     }
     scrollChat();
     $input.trigger('focus');
@@ -455,6 +486,7 @@ export default new NamedPage('self_learning_solve', async () => {
   function closePanel() {
     panelOpen = false;
     $tutor.hide();
+    $fab.show(); // the red launcher returns so the chat history stays one click away
   }
 
   async function startTutor(rid, open = true) {
@@ -635,6 +667,192 @@ export default new NamedPage('self_learning_solve', async () => {
     let cardState = null; // the single active question card
     let editorLocked = false;
 
+    /* --------- "Submitted code" panel at the bottom of the description --------- */
+
+    const PRISM_LANG = {
+      py: 'python', cc: 'cpp', c: 'c', pas: 'pascal', java: 'java', kt: 'kotlin', js: 'javascript', ts: 'typescript', go: 'go', rs: 'rust', rb: 'ruby', cs: 'csharp', php: 'php', bash: 'bash',
+    };
+    const prismLang = (lang) => PRISM_LANG[String(lang || '').split('.')[0]] || 'none';
+
+    const ATTEMPTS_STYLE = [
+      '#sl-attempts { margin-top: 20px; border-top: 1px solid #e3e3e3; padding-top: 12px; }',
+      '#sl-attempts h3 { font-size: 15px; margin: 0 0 8px; }',
+      '.sl-attempt { margin: 8px 0; border: 1px solid #e6e6e6; border-radius: 6px; background: #fbfbfb; }',
+      '.sl-attempt summary { cursor: pointer; padding: 6px 10px; font-size: 12.5px; color: #444; user-select: none; }',
+      '.sl-attempt[open] summary { border-bottom: 1px solid #eee; }',
+      '.sl-attempt pre { margin: 0; border-radius: 0 0 6px 6px; background: #f4f4f4; padding: 8px; overflow-x: auto; }',
+      '.sl-attempt .sl-badge { display: inline-block; border-radius: 8px; padding: 0 8px; font-size: 11.5px; margin-right: 4px; background: #fbdedb; color: #c0392b; }',
+      '.sl-attempt .sl-badge.pass { background: #d3f1d3; color: #25ad40; }',
+    ].join('\n');
+
+    /**
+     * Requirement: every submitted program of this student on this problem,
+     * as collapsible cards at the bottom of the problem description. The
+     * panel lives inside .problem-content, which the Scratchpad reuses as
+     * its statement pane, so it shows both in and out of the IDE. Refreshed
+     * after every judged submission; pretest runs are excluded server-side.
+     */
+    async function refreshAttemptsPanel() {
+      let res;
+      try {
+        res = await request.get(recordUrl); // no rid -> the user's own trajectory
+      } catch (e) {
+        return; // the panel is best-effort
+      }
+      const attempts = res.attempts || [];
+      if (!document.getElementById('sl-attempts-style')) {
+        $('<style>').attr('id', 'sl-attempts-style').text(ATTEMPTS_STYLE).appendTo(document.head);
+      }
+      let $panel = $('#sl-attempts');
+      if (!$panel.length) {
+        const $content = $('.problem-content');
+        if (!$content.length) return;
+        $panel = $('<div id="sl-attempts" class="typo"></div>').appendTo($content);
+      }
+      let html = `<h3>${escapeHtml(i18n('Submitted code'))}</h3>`;
+      if (!attempts.length) {
+        html += `<p class="text-gray">${escapeHtml(i18n('No submissions yet.'))}</p>`;
+        $panel.html(html);
+        return;
+      }
+      attempts.forEach((a, idx) => {
+        const open = idx === attempts.length - 1 ? ' open' : '';
+        const when = a.at ? new Date(a.at).toLocaleString() : '';
+        html += `<details class="sl-attempt"${open}>`
+          + `<summary><span class="sl-badge${a.accepted ? ' pass' : ''}">${escapeHtml(a.statusText || '')}</span>`
+          + `${escapeHtml(i18n('Attempt'))} #${idx + 1} · ${escapeHtml(String(a.score ?? 0))} · ${escapeHtml(a.lang || '')}${when ? ` · ${escapeHtml(when)}` : ''}</summary>`
+          + `<pre><code class="language-${prismLang(a.lang)}">${escapeHtml(a.code || '')}</code></pre>`
+          + '</details>';
+      });
+      $panel.html(html);
+      import('vj/components/highlighter/prismjs')
+        .then(({ default: prism }) => prism.highlightBlocks($panel))
+        .catch(() => { /* highlighting is optional */ });
+    }
+
+    /* ---------------- PTA-style submit-result modal + judging pill ---------------- */
+
+    const MODAL_STYLE = [
+      '.slm-mask { position: fixed; inset: 0; z-index: 3200; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 20px; }',
+      '.slm { background: #fff; border-radius: 10px; width: 900px; max-width: 96vw; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.3); overflow: hidden; }',
+      '.slm__head { display: flex; align-items: center; justify-content: space-between; padding: 13px 20px; border-bottom: 2px solid #e8f1fb; flex: 0 0 auto; }',
+      '.slm__title { color: #1a73d1; font-size: 17px; font-weight: bold; }',
+      '.slm__close { border: none; background: transparent; font-size: 20px; color: #888; cursor: pointer; padding: 2px 8px; border-radius: 4px; line-height: 1; }',
+      '.slm__close:hover { background: #f0f0f0; color: #333; }',
+      '.slm__body { padding: 16px 20px; overflow-y: auto; }',
+      '.slm__summary { background: #f7f8fa; border: 1px solid #ececec; border-radius: 6px; padding: 14px 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 20px; font-size: 13px; }',
+      '.slm__k { color: #8a8a8a; margin-bottom: 3px; }',
+      '.slm__v { color: #333; word-break: break-word; }',
+      '.slm__v.pass, .slm__st.pass { color: #e03131; font-weight: bold; }',
+      '.slm__v.fail, .slm__st.fail { color: #d9480f; font-weight: bold; }',
+      '.slm__sect { margin-top: 16px; border: 1px solid #ececec; border-radius: 6px; overflow: hidden; }',
+      '.slm__secthead { background: #f7f8fa; padding: 8px 14px; font-weight: bold; font-size: 13.5px; color: #444; border-bottom: 1px solid #ececec; }',
+      '.slm__langtag { color: #888; font-weight: normal; margin-left: 8px; font-size: 12px; }',
+      '.slm__table { width: 100%; border-collapse: collapse; font-size: 13px; }',
+      '.slm__table th { background: #fff; color: #8a8a8a; font-weight: normal; text-align: left; padding: 8px 14px; border-bottom: 1px solid #f0f0f0; }',
+      '.slm__table td { padding: 9px 14px; border-bottom: 1px solid #f5f5f5; color: #333; }',
+      '.slm__table tr:last-child td { border-bottom: none; }',
+      '.slm__codearea { max-height: 360px; overflow: auto; background: #fff; }',
+      '.slm__codearea .code-toolbar { margin: 0; width: 100%; }',
+      '.slm__codearea pre.slm__code { display: block; box-sizing: border-box; width: max-content; min-width: 100%; margin: 0; border: none; border-radius: 0; background: #fff; padding: 12px 14px 12px 3.8em; font-size: 12.5px; line-height: 1.55; }',
+      '.slm__codearea pre.slm__code > code { background: none; padding: 0; white-space: pre; font-size: 12.5px; line-height: 1.55; }',
+      '.slm__codearea .line-numbers-rows { border-right: 1px solid #ececec; }',
+      '.slm__codearea .line-numbers-rows > span:before { color: #b5b5b5; }',
+      '.slm__compile { background: #2b2b2b; color: #e8e8e8; margin: 0; padding: 12px 14px; font: 12.5px/1.5 monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }',
+      '.slm__foot { padding: 12px 20px; border-top: 1px solid #eee; display: flex; justify-content: flex-end; flex: 0 0 auto; }',
+      '#sl-judging { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 3100; background: #333; color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,.3); }',
+    ].join('\n');
+
+    function ensureModalStyle() {
+      if (!document.getElementById('sl-modal-style')) {
+        $('<style>').attr('id', 'sl-modal-style').text(MODAL_STYLE).appendTo(document.head);
+      }
+    }
+
+    function showJudging() {
+      ensureModalStyle();
+      if (!document.getElementById('sl-judging')) {
+        $(`<div id="sl-judging">⏳ ${escapeHtml(i18n('Judging...'))}</div>`).appendTo(document.body);
+      }
+    }
+
+    function hideJudging() {
+      $('#sl-judging').remove();
+    }
+
+    const fmtTs = (ts) => (ts ? new Date(ts).toLocaleString() : '-');
+    const langDisplay = (l) => (window.LANGS && window.LANGS[l] && window.LANGS[l].display) || l || '-';
+
+    /**
+     * Requirement: a PTA-style "Submit Result" modal replaces the in-IDE score
+     * panel — summary grid, per-test-case detail (deliberately WITHOUT any
+     * hint column), the submitted source with line numbers, and the compiler
+     * output. The tutor flow waits until the modal is closed.
+     */
+    function showSubmitModal(data, onClose) {
+      ensureModalStyle();
+      const conf = (UiContext.pdoc && typeof UiContext.pdoc.config === 'object' && UiContext.pdoc.config) || {};
+      const timeLimit = conf.timeMax || conf.time || null;
+      const memLimitKB = conf.memoryMax ? conf.memoryMax * 1024 : null;
+      const stCls = data.accepted ? 'pass' : 'fail';
+      const problemName = `${UiContext.pdoc?.pid ?? UiContext.slPid ?? ''}. ${UiContext.pdoc?.title || ''}`;
+      const userName = (window.UserContext && (UserContext.uname || UserContext.displayName)) || `#${UserContext?._id ?? ''}`;
+      const cell = (k, v, cls = '') => `<div><div class="slm__k">${escapeHtml(i18n(k))}</div><div class="slm__v ${cls}">${v}</div></div>`;
+      let html = '<div class="slm__summary">';
+      html += cell('Problem', escapeHtml(problemName));
+      html += cell('User', escapeHtml(userName));
+      html += cell('Submit At', escapeHtml(fmtTs(data.submitAt)));
+      html += cell('Compiler', escapeHtml(langDisplay(data.lang)));
+      html += cell('Memory Usage', escapeHtml(`${data.memory}${memLimitKB ? ` / ${memLimitKB}` : ''} KB`));
+      html += cell('Time Usage', escapeHtml(`${data.time}${timeLimit ? ` / ${timeLimit}` : ''} ms`));
+      html += cell('Status', escapeHtml(data.statusText || ''), stCls);
+      html += cell('Score', escapeHtml(String(data.score ?? 0)));
+      html += cell('Judge At', escapeHtml(fmtTs(data.judgeAt)));
+      html += '</div>';
+      if (data.cases && data.cases.length) {
+        html += `<div class="slm__sect"><div class="slm__secthead">${escapeHtml(i18n('Submission Detail'))}</div>`
+          + `<table class="slm__table"><thead><tr><th>${escapeHtml(i18n('Test Case'))}</th><th>${escapeHtml(i18n('Memory(KB)'))}</th>`
+          + `<th>${escapeHtml(i18n('Time(ms)'))}</th><th>${escapeHtml(i18n('Status'))}</th><th>${escapeHtml(i18n('Score'))}</th></tr></thead><tbody>`;
+        for (const c of data.cases) {
+          const key = caseKey(c) ?? '?';
+          const cls = c.status === 1 ? 'pass' : 'fail';
+          html += `<tr><td>${escapeHtml(String(key))}</td><td>${escapeHtml(String(c.memory ?? '-'))}</td>`
+            + `<td>${escapeHtml(String(c.time ?? '-'))}</td><td class="slm__st ${cls}">${escapeHtml(c.statusText || '')}</td>`
+            + `<td>${escapeHtml(String(c.score ?? '-'))}</td></tr>`;
+        }
+        html += '</tbody></table></div>';
+      }
+      html += `<div class="slm__sect"><div class="slm__secthead">${escapeHtml(i18n('Submission Code'))}`
+        + `<span class="slm__langtag">[ ${escapeHtml(langDisplay(data.lang))} ]</span></div>`
+        + `<div class="slm__codearea"><pre class="slm__code line-numbers"><code class="language-${prismLang(data.lang)}">${escapeHtml(data.code || '')}</code></pre></div></div>`;
+      if (data.compilerTexts) {
+        html += `<div class="slm__sect"><div class="slm__secthead">${escapeHtml(i18n('Compilation Output'))}</div>`
+          + `<pre class="slm__compile">${escapeHtml(data.compilerTexts)}</pre></div>`;
+      }
+      const $mask = $('<div class="slm-mask"></div>').appendTo(document.body);
+      const $modal = $(`<div class="slm" role="dialog" aria-label="${escapeHtml(i18n('Submit Result'))}">`
+        + `<div class="slm__head"><span class="slm__title">${escapeHtml(i18n('Submit Result'))}</span>`
+        + `<button type="button" class="slm__close" title="${escapeHtml(i18n('Close'))}">×</button></div>`
+        + `<div class="slm__body">${html}</div>`
+        + `<div class="slm__foot"><button type="button" class="rounded primary button slm__ok">${escapeHtml(i18n('OK'))}</button></div>`
+        + '</div>').appendTo($mask);
+      import('vj/components/highlighter/prismjs')
+        .then(({ default: prism }) => prism.highlightBlocks($modal))
+        .catch(() => { /* highlighting is optional */ });
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        $mask.remove();
+        $(document).off('keydown.slmodal');
+        if (onClose) onClose();
+      };
+      $modal.find('.slm__close, .slm__ok').on('click', close);
+      $(document).on('keydown.slmodal', (ev) => {
+        if (ev.key === 'Escape') close();
+      });
+    }
+
     function findScratchpadEditor() {
       const m = window.monaco;
       if (!m || !m.editor || !m.editor.getEditors) return null;
@@ -671,6 +889,7 @@ export default new NamedPage('self_learning_solve', async () => {
       cardState = null;
       hideOverlay();
     }
+    clearScratchpadAnnotations = clearAnnotations;
 
     /** Keep clicks and keystrokes inside our zone DOM away from Monaco. */
     function shieldZoneDom(dom) {
@@ -738,7 +957,7 @@ export default new NamedPage('self_learning_solve', async () => {
      * full-width banner, and never at the mercy of template freshness.
      */
     const TUTOR_UI_STYLE = [
-      '.sl-anno { display: flex; align-items: flex-start; gap: 8px; box-sizing: border-box; max-width: 440px; min-width: 260px; background: #fdf3f4; border: 1px solid #e7bcc3; border-left: 4px solid #9e2335; border-radius: 6px; padding: 8px 10px; margin: 0 0 0 12px; font-size: 13px; line-height: 1.45; box-shadow: 0 3px 12px rgba(0,0,0,.28); color: #333; user-select: text; overflow: hidden; }',
+      '.sl-anno { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 8px; box-sizing: border-box; max-width: 440px; min-width: 260px; background: #fdf3f4; border: 1px solid #e7bcc3; border-left: 4px solid #9e2335; border-radius: 6px; padding: 8px 10px; margin: 0 0 0 12px; font-size: 13px; line-height: 1.45; box-shadow: 0 3px 12px rgba(0,0,0,.28); color: #333; user-select: text; overflow: hidden; }',
       '.sl-anno--chat { flex-direction: column; align-items: stretch; gap: 4px; padding: 6px 10px; }',
       '.sl-anno__head { display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 12.5px; color: #9e2335; flex: 0 0 auto; }',
       '.sl-anno__log { max-height: 148px; overflow-y: auto; overflow-x: hidden; background: #fff; border: 1px solid #f0dadd; border-radius: 4px; padding: 4px 6px; }',
@@ -846,15 +1065,20 @@ export default new NamedPage('self_learning_solve', async () => {
         + `<span class="sl-anno__q">${escapeHtml(text)}</span>`
         + `<span class="sl-anno__btns"><button type="button" class="sl-anno__close" title="${escapeHtml(i18n('Dismiss'))}">×</button></span>`;
       const entry = addZone(ed, afterLine, 44, dom, null);
-      fitZone(entry, 40, 160);
+      // Monaco sizes the zone DOM asynchronously: measuring only once (before
+      // layout settles) clips wrapped text. Re-fit after layout and once more
+      // after fonts settle.
+      fitZone(entry, 40, 200);
+      requestAnimationFrame(() => fitZone(entry, 40, 200));
+      setTimeout(() => fitZone(entry, 40, 200), 150);
       dom.querySelector('.sl-anno__close').addEventListener('click', () => removeZoneEntry(entry));
     }
 
     /** A distinct green instruction row (not a chat bubble). */
-    function appendCardNote(text) {
+    function appendCardNote(text, icon = '✏️') {
       if (!cardState) return;
       const $log = $(cardState.dom).find('.sl-anno__log');
-      $log.append(`<div class="sl-anno__note">✏️ ${escapeHtml(text)}</div>`);
+      $log.append(`<div class="sl-anno__note">${icon} ${escapeHtml(text)}</div>`);
       $log.scrollTop($log[0].scrollHeight);
       fitZone(cardState.entry, 60, 300);
     }
@@ -875,7 +1099,7 @@ export default new NamedPage('self_learning_solve', async () => {
     }
 
     /** The single interactive question card: a mini chatbox anchored at the line. */
-    function showQuestionCard(rid, ann) {
+    function showQuestionCard(rid, ann, accepted = false) {
       const ed = findScratchpadEditor();
       if (!ed || !ed.getModel()) return;
       const max = ed.getModel().getLineCount();
@@ -894,11 +1118,16 @@ export default new NamedPage('self_learning_solve', async () => {
         + '</div>';
       const entry = addZone(ed, endLine, 120, dom, { line, endLine });
       cardState = {
-        entry, dom, rid, line, endLine, question: ann.question, history: [],
+        entry, dom, rid, line, endLine, question: ann.question, history: [], accepted,
       };
+      // Combined pop-up on success: the celebration leads, the reflection follows.
+      if (accepted) appendCardNote(i18n('Accepted! Great job!'), '🎉');
       appendCardMsg('tutor', ann.question);
+      // Mirror into the launcher panel: the red button replays this dialogue.
+      appendBubble('assistant', ann.question, { line, endLine });
       fitZone(entry, 60, 300);
       requestAnimationFrame(() => fitZone(entry, 60, 300));
+      setTimeout(() => fitZone(entry, 60, 300), 150);
       dom.querySelector('.sl-anno__close').addEventListener('click', () => {
         // Dismissing ends the guided sequence for this attempt.
         removeZoneEntry(entry);
@@ -921,7 +1150,7 @@ export default new NamedPage('self_learning_solve', async () => {
     }
 
     /** Requirement flow: ONE question at a time; the editor locks while the LLM works. */
-    async function requestNextQuestion(rid, afterLine) {
+    async function requestNextQuestion(rid, afterLine, accepted = false) {
       const session = annoSession;
       const prevCard = cardState; // when a card exists, the spinner shows inside it
       showThinking();
@@ -931,17 +1160,20 @@ export default new NamedPage('self_learning_solve', async () => {
         });
         if (session !== annoSession || !extended) return;
         hideThinking();
+        if (res.marker) appendDivider(res.marker, !!res.markerAccepted); // the panel history gains the divider
         if (prevCard) {
           removeZoneEntry(prevCard.entry);
           if (cardState === prevCard) cardState = null;
         }
-        if (res.annotation) showQuestionCard(rid, res.annotation);
+        if (res.annotation) showQuestionCard(rid, res.annotation, accepted);
+        else if (accepted) showInfoCard(`🎉 ${i18n('Accepted! Great job!')}`, afterLine || 0);
         else showInfoCard(i18n('No further questions — revise your code and resubmit!'), afterLine || 0);
       } catch (e) {
         if (session !== annoSession) return;
         hideThinking();
         console.warn('[self-learning] tutor annotations unavailable:', e.message);
-        if (prevCard && cardState === prevCard) appendCardMsg('tutor', `⚠️ ${e.message}`);
+        if (accepted) showInfoCard(`🎉 ${i18n('Accepted! Great job!')}`, afterLine || 0); // success needs no error noise
+        else if (prevCard && cardState === prevCard) appendCardMsg('tutor', `⚠️ ${e.message}`);
         else showInfoCard(`⚠️ ${e.message}`, afterLine || 0);
       }
     }
@@ -969,14 +1201,21 @@ export default new NamedPage('self_learning_solve', async () => {
         cs.history.push({ role: 'tutor', content: res.reply });
         hideThinking();
         appendCardMsg('tutor', res.reply);
+        // Mirror the exchange into the launcher panel history.
+        appendBubble('user', text, { line: cs.line, endLine: cs.endLine });
+        appendBubble('assistant', res.reply, {
+          line: cs.line, endLine: cs.endLine, resolved: res.resolved, accepted: cs.accepted,
+        });
         if (res.resolved) {
           askedQuestions.push(cs.question);
           $(cs.dom).addClass('sl-anno--resolved');
           $(cs.dom).find('.sl-anno__input input, .sl-anno__input button').prop('disabled', true);
           // Resolution is terminal: no further questions are generated now.
-          // The green card sends the student back to the CODE — the next
-          // submission restarts the guidance loop from the new verdict.
-          appendCardNote(i18n('Now modify your code accordingly and resubmit!'));
+          // On a failed verdict the green card sends the student back to the
+          // CODE; on an accepted one the reflection simply closes with praise.
+          appendCardNote(cs.accepted
+            ? i18n('Great reflection — you have truly mastered this problem!')
+            : i18n('Now modify your code accordingly and resubmit!'), cs.accepted ? '🎉' : '✏️');
           fitZone(cs.entry, 60, 300);
         }
       } catch (e) {
@@ -992,28 +1231,54 @@ export default new NamedPage('self_learning_solve', async () => {
       console.debug('[self-learning] tracking scratchpad submission', rid);
       lastRid = rid;
       clearAnnotations();
+      showJudging();
       let judged = false;
+      let verdict = null;
       for (let i = 0; i < 120 && extended; i++) {
         try {
           const data = await request.get(`${recordUrl}?rid=${rid}`); // eslint-disable-line no-await-in-loop
           if (data.judged) {
             judged = true;
+            verdict = data;
             break;
           }
         } catch (e) {
+          hideJudging();
           return;
         }
         await new Promise((resolve) => { setTimeout(resolve, 1500); }); // eslint-disable-line no-await-in-loop
       }
+      hideJudging();
       if (!judged || !extended) return;
+      refreshAttemptsPanel(); // the trajectory just gained a judged attempt
+      // Requirement: the PTA-style result modal replaces the in-IDE score
+      // panel. The tutor's cards start only after the student closes it.
+      showSubmitModal(verdict, () => { afterVerdictModal(rid, verdict); });
+    }
+
+    /** The tutoring flow, resumed once the result modal is dismissed. */
+    async function afterVerdictModal(rid, verdict) {
+      if (!extended) return;
+      if (!UiContext.slTutor) return; // teachers and unconfigured sites: no tutoring flows
+      const ed = findScratchpadEditor();
+      const lastLine = (ed && ed.getModel()) ? ed.getModel().getLineCount() : 0;
+      if (verdict && verdict.accepted) {
+        // Requirement: ONE combined pop-up on success — the reflection card
+        // itself opens with the 🎉 celebration row, then the single
+        // self-reflection question. If nothing is worth reflecting on, a
+        // lone celebration card shows instead (never both).
+        askedQuestions = [];
+        await requestNextQuestion(rid, lastLine, true);
+        return;
+      }
       // In-editor guidance: ONE Socratic question card at a time, anchored at
       // the relevant lines. The student answers inside the card; once the
       // tutor deems the question resolved, the next one is generated. While
-      // the LLM works, a spinner shows and the editor is locked. The chat
-      // thread still advances silently so the record page stays coherent.
+      // the LLM works, a spinner shows and the editor is locked. Every card
+      // exchange is persisted server-side and mirrored into the launcher
+      // panel, which is a read-only history viewer.
       askedQuestions = [];
-      requestNextQuestion(rid, 0);
-      await startTutor(rid, false);
+      await requestNextQuestion(rid, lastLine);
     }
 
     async function loadReact() {
@@ -1089,10 +1354,10 @@ export default new NamedPage('self_learning_solve', async () => {
       if (busy || !extended) return;
       busy = true;
       // The tutor lives inside the IDE on this page: tidy it away on exit.
-      removeScratchpadRail();
       clearAnnotations();
       panelOpen = false;
       $tutor.hide();
+      $fab.show();
       $('#scratchpad').css('opacity', 0);
       // Hand the statement DOM back to the page before unmounting the IDE.
       $('.problem-content-container').append($('.problem-content'));
@@ -1101,6 +1366,8 @@ export default new NamedPage('self_learning_solve', async () => {
       $('body').removeClass('header--collapsed mode--scratchpad');
       $('.main > .row').show();
       $('.footer').show();
+      // Back on the normal page: keep the session rail, re-homed below the navbar.
+      injectRailForPage();
       document.body.style.overflow = 'scroll';
       extended = false;
       busy = false;
@@ -1122,6 +1389,8 @@ export default new NamedPage('self_learning_solve', async () => {
     // through the button lets the shared rail module attach the problem rail;
     // the deferral guarantees its delegated hook is bound first.
     setTimeout(() => $('#sl-open-scratchpad').trigger('click'), 0);
+    // The "Submitted code" panel renders from the start, IDE or not.
+    refreshAttemptsPanel();
   }
 
   /* ------------------------------ wiring ---------------------------------- */
@@ -1153,6 +1422,11 @@ export default new NamedPage('self_learning_solve', async () => {
     $('#sl-submit-form').on('submit', handleSubmit);
     initScratchpad();
   }
+
+  // Requirement: quiz and answer-submission problems have no IDE, but keep
+  // the same session problem rail, attached below the navbar in page mode,
+  // so learners can navigate among the session's problems from here too.
+  if (UiContext.slType !== 'programming') injectRailForPage();
 
   if ($fab.length) initFabDrag();
   $fab.on('click', () => {
@@ -1188,7 +1462,12 @@ export default new NamedPage('self_learning_solve', async () => {
         await request.post(tutorUrl, { operation: 'reset' });
         $chat.empty();
         tutorStarted = false;
-        if (lastRid) await startTutor(lastRid);
+        if (UiContext.slType === 'programming') {
+          // The card channel restarts from the next submission; the panel
+          // just returns to its empty read-only state.
+          clearScratchpadAnnotations();
+          $chat.append(`<div class="sl-empty">${escapeHtml(panelEmptyText())}</div>`);
+        } else if (lastRid) await startTutor(lastRid);
       } catch (e) {
         Notification.error(e.message);
       }
@@ -1201,7 +1480,9 @@ export default new NamedPage('self_learning_solve', async () => {
       if (res.messages && res.messages.length) {
         renderMessages(res.messages, true);
         tutorStarted = true;
-        $fabDot.show();
+        // For programming, legacy chat turns are filtered out; only light the
+        // dot when the read-only history actually has something to show.
+        if ($chat.children().length) $fabDot.show();
       }
     }).catch(() => { /* tutor unavailable; the fab still opens an empty panel */ });
   }
