@@ -1,0 +1,58 @@
+{% extends "layout/basic.html" %}
+{% block content %}
+<div class="row">
+  <div class="medium-9 columns">
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">{{ _('self_learning') }}</h1>
+      </div>
+      <div class="section__body">
+        {% if not sdocs.length %}
+          {{ nothing.render('There are no self-learning sessions yet.') }}
+        {% else %}
+        <table class="data-table">
+          <colgroup>
+            <col class="col--title">
+            <col class="col--problems">
+            <col class="col--owner">
+            <col class="col--time">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col--title">{{ _('Title') }}</th>
+              <th class="col--problems">{{ _('Problems') }}</th>
+              <th class="col--owner">{{ _('Owner') }}</th>
+              <th class="col--time">{{ _('Created') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {%- for sdoc in sdocs -%}
+            <tr>
+              <td class="col--title">
+                <a href="{{ url('self_learning_detail', ssid=sdoc.docId) }}">{{ sdoc.title }}</a>
+              </td>
+              <td class="col--problems">{{ sdoc.pids|length }}</td>
+              <td class="col--owner">
+                <a href="{{ url('user_detail', uid=sdoc.owner) }}">{{ udict[sdoc.owner].uname }}</a>
+              </td>
+              <td class="col--time">{{ datetimeSpan(sdoc._id)|safe }}</td>
+            </tr>
+            {%- endfor -%}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="medium-3 columns">
+    <div class="section side">
+      <div class="section__body">
+        <p>{{ _('Practice problems at your own pace. When a submission is not accepted, an AI Socratic tutor will guide you to find and fix the mistake yourself.') }}</p>
+        {% if canCreate %}
+        <a href="{{ url('self_learning_create') }}" class="expanded primary button">{{ _('Create Self-Learning Session') }}</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,180 @@
+{% extends "layout/basic.html" %}
+{% block content %}
+{% if problemKind == 'programming' %}
+<script>
+{{ set(UiContext, {
+  problemId: pdoc.pid|default(pdoc.docId),
+  problemNumId: pdoc.docId,
+  codeLang: handler.user.codeLang,
+  codeTemplate: handler.user.codeTemplate,
+  pdoc: pdoc,
+  canViewRecord: true
+}) }}
+{{ set(UiContext, 'postSubmitUrl', url('self_learning_solve', ssid=sdoc.docId, pid=pdoc.docId)) }}
+{{ set(UiContext, 'getSubmissionsUrl', url('record_main', query={fullStatus:'true', pid:pdoc.docId})) }}
+{{ set(UiContext, 'getRecordDetailUrl', url('record_detail', rid='{rid}')) }}
+{{ set(UiContext, 'pretestConnUrl', "record-conn?pretest=1&uidOrName=" + handler.user._id + "&pid=" + pdoc.docId + "&domainId=" + handler.args.domainId) }}
+</script>
+{% endif %}
+<style>
+  .sl-fab { position: fixed; right: 24px; top: 50%; transform: translateY(-50%); z-index: 900; width: 56px; height: 56px; border-radius: 50%; border: none; background: #9e2335; color: #fff; font-size: 26px; line-height: 56px; text-align: center; padding: 0; cursor: grab; box-shadow: 0 4px 14px rgba(0,0,0,.25); touch-action: none; user-select: none; -webkit-user-select: none; }
+  .sl-fab:hover { background: #7f1b2a; }
+  .sl-fab:active { cursor: grabbing; }
+  .sl-fab__dot { position: absolute; top: 3px; right: 3px; width: 12px; height: 12px; border-radius: 50%; background: #ffcf40; border: 2px solid #fff; }
+  .sl-float { position: fixed; right: 24px; bottom: 24px; z-index: 950; width: 400px; max-width: calc(100vw - 24px); height: min(620px, calc(100vh - 90px)); background: #fff; border: 1px solid #d5d5d5; border-radius: 10px; box-shadow: 0 10px 36px rgba(0,0,0,.22); display: flex; flex-direction: column; overflow: hidden; min-width: 300px; min-height: 360px; }
+  .sl-float__resize { position: absolute; left: 0; top: 0; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none; z-index: 2; }
+  .sl-float__resize::after { content: ''; position: absolute; left: 3px; top: 3px; width: 10px; height: 10px; border-left: 2px solid #b9b9b9; border-top: 2px solid #b9b9b9; border-radius: 2px 0 0 0; }
+  .sl-float__resize:hover::after { border-color: #666; }
+  .sl-float--expanded .sl-float__resize { display: none; }
+  .sl-float__header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #9e2335; border-bottom: 1px solid #8a1e2e; flex: 0 0 auto; }
+  .sl-float__title { font-weight: bold; font-size: 14px; color: #fff; }
+  .sl-hbtn { border: none; background: transparent; cursor: pointer; font-size: 15px; color: rgba(255,255,255,.85); padding: 2px 6px; border-radius: 4px; }
+  .sl-hbtn:hover { background: rgba(255,255,255,.18); color: #fff; }
+  .sl-float__hint { color: #999; font-size: 11px; margin: 0; padding: 4px 12px 8px; flex: 0 0 auto; }
+  .sl-empty { color: #888; text-align: center; padding: 30px 16px; font-size: 13px; }
+  .sl-chat { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; background: #fafafa; }
+  .sl-bubble p { margin: 0 0 6px; }
+  .sl-bubble p:last-child { margin-bottom: 0; }
+  .sl-bubble ul, .sl-bubble ol { margin: 4px 0 6px 18px; padding: 0; }
+  .sl-bubble li { margin: 2px 0; }
+  .sl-bubble h1, .sl-bubble h2, .sl-bubble h3, .sl-bubble h4 { font-size: 14px; margin: 8px 0 4px; }
+  .sl-bubble table { border-collapse: collapse; margin: 6px 0; }
+  .sl-bubble th, .sl-bubble td { border: 1px solid #ddd; padding: 2px 6px; font-size: 12.5px; }
+  .sl-bubble blockquote { border-left: 3px solid #ccc; margin: 6px 0; padding: 2px 8px; color: #666; }
+  .sl-bubble hr { border: none; border-top: 1px solid #ddd; margin: 8px 0; }
+  @media (max-width: 600px) {
+    .sl-float { right: 8px; left: 8px; bottom: 8px; width: auto; max-width: none; height: min(560px, calc(100vh - 60px)); }
+    .sl-fab { right: 12px; }
+    .sl-float__resize { display: none; }
+  }
+  .sl-msg { margin: 8px 0; display: flex; }
+  .sl-msg.user { justify-content: flex-end; }
+  .sl-bubble { max-width: 85%; padding: 8px 12px; border-radius: 10px; line-height: 1.5; word-break: break-word; white-space: normal; }
+  .sl-msg.assistant .sl-bubble { background: #fff; border: 1px solid #d8d8d8; border-top-left-radius: 2px; }
+  .sl-msg.user .sl-bubble { background: #f6dde2; border-top-right-radius: 2px; }
+  .sl-bubble pre { background: #f3f3f3; border: 1px solid #e2e2e2; border-radius: 4px; padding: 6px 8px; overflow-x: auto; margin: 6px 0; }
+  .sl-bubble code { background: #f3f3f3; padding: 0 3px; border-radius: 3px; }
+  .sl-bubble pre code { background: none; padding: 0; }
+  .sl-divider { text-align: center; color: #888; font-size: 12px; margin: 12px 0; }
+  .sl-divider span { background: #eee; border-radius: 10px; padding: 2px 10px; }
+  .sl-divider.accepted span { background: #d9f2d9; color: #25ad40; }
+  .sl-input-row { display: flex; margin: 0; padding: 8px; border-top: 1px solid #e6e6e6; flex: 0 0 auto; background: #fff; }
+  .sl-input-row textarea { flex: 1; resize: none; height: 56px; }
+  .sl-input-row button { margin-left: 8px; align-self: flex-end; }
+  .sl-float .sl-input-row .button.primary { background: #9e2335; border-color: #9e2335; }
+  .sl-float .sl-input-row .button.primary:hover { background: #7f1b2a; border-color: #7f1b2a; }
+  .sl-typing { color: #888; font-style: italic; font-size: 13px; margin: 0; padding: 4px 12px; display: none; flex: 0 0 auto; }
+  .sl-verdict { margin-top: 12px; padding: 10px 12px; border-radius: 4px; border: 1px solid #e0e0e0; display: none; }
+  .sl-verdict.pass { background: #ecf9ec; border-color: #bde5bd; }
+  .sl-verdict.fail { background: #fdf1f0; border-color: #f5c8c4; }
+  .sl-verdict.pending { background: #f6f6f6; }
+  .sl-cases { margin-top: 6px; font-size: 12px; }
+  .sl-cases span { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 6px; border-radius: 3px; background: #eee; }
+  .sl-cases span.pass { background: #d9f2d9; color: #25ad40; }
+  .sl-cases span.fail { background: #fbdedb; color: #fb6157; }
+  .sl-cases span.partial { background: #fdf0d3; color: #b8860b; }
+  .sl-q-pass { outline: 2px solid #7fce7f; outline-offset: 2px; border-radius: 3px; }
+  .sl-q-fail { outline: 2px solid #f5a09a; outline-offset: 2px; border-radius: 3px; }
+  .sl-q-partial { outline: 2px solid #f6c344; outline-offset: 2px; border-radius: 3px; }
+</style>
+<div class="row">
+  <div class="medium-7 columns">
+    <div class="section">
+      <div class="problem-content-container"><div class="problem-content" data-marker-enabled>
+        <div class="section__header non-scratchpad--hide">
+          <h1 class="section__title">{{ pdoc.pid|default(pdoc.docId) }}. {{ pdoc.title }}{% if problemKind == 'objective' %} <small class="text-gray">({{ _('Quiz') }})</small>{% endif %}</h1>
+          <div class="section__tools">
+            <a href="{{ url('self_learning_detail', ssid=sdoc.docId) }}" class="typo-a">&laquo; {{ _('Back to session') }}</a>
+          </div>
+        </div>
+        {% include "partials/problem_description.html" %}
+      </div></div>
+    </div>
+  </div>
+  <div class="medium-5 columns">
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">{% if problemKind == 'objective' %}{{ _('Submit your answers') }}{% else %}{{ _('Submit your solution') }}{% endif %}</h1>
+      </div>
+      <div class="section__body">
+        {% if problemKind == 'objective' %}
+        <blockquote class="note typo">
+          <p>{{ _('This is a quiz problem. Answer the questions directly inside the problem statement on the left, then press Submit.') }}</p>
+        </blockquote>
+        <div class="row"><div class="columns">
+          <button type="button" id="sl-submit" class="rounded primary button">{{ _('Submit') }}</button>
+          <button type="button" id="sl-clear-answers" class="rounded button">{{ _('Clear answers') }}</button>
+          <span id="sl-submit-hint" class="text-gray" style="margin-left:8px"></span>
+        </div></div>
+        {% elif problemKind == 'programming' %}
+        <blockquote class="note typo">
+          <p>{{ _('Programming problems open directly in the Scratchpad IDE. Solve and submit there — the AI tutor will guide you at your code lines.') }}</p>
+        </blockquote>
+        <div class="row"><div class="columns">
+          <button type="button" id="sl-open-scratchpad" class="rounded primary button">{{ _('Open Scratchpad') }}</button>
+        </div></div>
+        {% else %}
+        <form id="sl-submit-form" method="post">
+          {{ form.form_textarea({
+              label:'Answer',
+              columns:12,
+              name:'code',
+              extra_class:'monospace',
+              extra_style:'height: 420px',
+              nospellcheck:true
+          }) }}
+          <div class="row"><div class="columns">
+            <button type="submit" id="sl-submit" class="rounded primary button">{{ _('Submit') }}</button>
+            <span id="sl-submit-hint" class="text-gray" style="margin-left:8px"></span>
+          </div></div>
+        </form>
+        {% endif %}
+        <div id="sl-verdict" class="sl-verdict"></div>
+      </div>
+    </div>
+
+    {% if isStudent and tutorConfigured and (problemKind == 'objective' or problemKind == 'programming') %}
+    <div id="sl-tutor" class="sl-float" style="display:none" role="dialog" aria-label="{{ _('AI Socratic Tutor') }}">
+      <div id="sl-tutor-resize" class="sl-float__resize" title="{{ _('Drag to resize') }}"></div>
+      <div class="sl-float__header">
+        <span class="sl-float__title">🤖 {{ _('AI Socratic Tutor') }}</span>
+        <span class="sl-float__actions">
+          <button id="sl-tutor-expand" type="button" class="sl-hbtn" title="{{ _('Expand') }}">⤢</button>
+          <button id="sl-tutor-reset" type="button" class="sl-hbtn" title="{{ _('Reset conversation') }}">↺</button>
+          <button id="sl-tutor-close" type="button" class="sl-hbtn" title="{{ _('Minimize') }}">–</button>
+        </span>
+      </div>
+      <div class="sl-chat" id="sl-chat"></div>
+      <div class="sl-typing" id="sl-typing">{{ _('The tutor is thinking...') }}</div>
+      <div class="sl-input-row">
+        <textarea id="sl-input" class="textbox" placeholder="{{ _('Explain your thinking, answer the tutor, or ask for guidance... (Enter to send)') }}"></textarea>
+        <button id="sl-send" class="rounded primary button" type="button">{{ _('Send') }}</button>
+      </div>
+      <p class="sl-float__hint">{{ _('The tutor guides you with questions and will never hand you the final answer. Take your time to think!') }}</p>
+    </div>
+    {% elif isStudent and not tutorConfigured %}
+    <div class="section side">
+      <div class="section__body typo">
+        <blockquote class="note"><p>{{ _('The AI tutor is not configured on this site yet, so failed submissions will not open the tutoring chat.') }}</p></blockquote>
+      </div>
+    </div>
+    {% elif not isStudent %}
+    <div class="section side">
+      <div class="section__body typo">
+        <blockquote class="note">
+          <p>{{ _('You are browsing with a teacher or administrator account. The AI Socratic tutor is only shown to student accounts.') }}</p>
+          {% if tutorConfigured %}<p>{{ _('Current AI provider') }}: <b>{{ providerInfo.provider }}</b> ({{ providerInfo.model }})</p>{% endif %}
+        </blockquote>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% if problemKind == 'programming' %}
+<div style="display:none" class="outer-loader-container"><div class="loader"></div></div>
+<div class="scratchpad-container" style="display:none">
+  <div style="display:none" class="loader-container"><div class="loader"></div></div>
+  <div id="scratchpad" style="opacity:0"></div>
+</div>
+{% endif %}
+{% endblock %}

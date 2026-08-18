@@ -2,6 +2,15 @@ __flag: 🇨🇳
 __id: zh
 __interface: yes
 __langname: 简体中文
+ai_tutor.api_key: API 密钥
+ai_tutor.base_url: API 地址（可选）
+ai_tutor.enabled: 启用 AI 辅导员
+ai_tutor.max_messages: 每个对话最大消息数
+ai_tutor.max_tokens: 单次回复最大 Token 数
+ai_tutor.model: 模型名称
+ai_tutor.provider: AI 提供商
+ai_tutor.temperature: 采样温度
+ai_tutor.timeout: 请求超时（秒）
 '"{data}" copied to clipboard!': “{data}”已复制到剪贴板！
 '{0} {1} delete your discussion reply {2} in "{3}"({4}).': '{0} {1} 从讨论 {3}({4}) 删除了你的回复 {2}。'
 '{0} comments': '{0} 条评论'
@@ -718,6 +727,79 @@ Select User: 选择用户
 Selected categories: 已选标签
 Selected roles have been deleted.: 所选角色已删除。
 Selected users have been removed from the domain.: 所选用户已从此域中移除。
+self_learning: 自主学习
+self_learning_create: 创建自主学习
+self_learning_detail: 自主学习详情
+self_learning_edit: 编辑自主学习
+self_learning_solve: 练习
+# --- Self-Learning module strings ---
+Programming problems open directly in the Scratchpad IDE. Solve and submit there — the AI tutor will guide you at your code lines.: 编程题会直接在 Scratchpad IDE 中打开。请在其中编写并提交代码——AI 导师会在代码行旁引导你。
+Now modify your code accordingly and resubmit!: 现在请据此修改你的代码并重新提交！
+Type your answer... (Enter to send): 输入你的回答…（回车发送）
+No further questions — revise your code and resubmit!: 没有更多问题了——修改代码后重新提交吧！
+Discuss with the tutor: 与导师讨论
+Dismiss: 忽略
+Submitted code: 提交的代码
+Attempt: 尝试
+Loading problem statement...: 正在加载题面…
+Waiting for the judge...: 正在等待评测…
+Collapse: 收起
+Full screen: 全屏
+Exit full screen: 退出全屏
+Drag to resize: 拖动调整大小
+Expand: 展开
+Minimize: 最小化
+Quiz: 客观题
+Programming: 编程题
+Submit Answer: 提交答案
+Submit your answers: 提交你的答案
+This is a quiz problem. Answer the questions directly inside the problem statement on the left, then press Submit.: 这是一道客观题。请直接在左侧题面中作答，然后点击提交。
+Please answer at least one question before submitting.: 请至少回答一道题再提交。
+Judge messages: 评测消息
+AI provider: AI 提供商
+API base URL or full endpoint (optional, for proxies / compatible gateways). A base like https://api.deepseek.com works, and the chat path is appended automatically.: API 基础地址或完整端点（可选，用于代理或兼容网关）。可直接填写形如 https://api.deepseek.com 的基础地址，聊天路径会自动补全。
+API key of the selected provider. For security the saved key is never displayed, so this field always looks blank. Leave it blank to keep the current key.: 所选提供商的 API 密钥。出于安全考虑，已保存的密钥不会回显，输入框始终显示为空；留空则保持当前密钥不变。
+Create Self-Learning Session: 创建自主学习任务
+Edit Self-Learning Session: 编辑自主学习任务
+Enable the AI Socratic tutor: 启用 AI 苏格拉底式辅导员
+Max stored messages per tutoring thread: 每个辅导对话保存的最大消息数
+Max tokens per tutor reply: 辅导员单次回复的最大 Token 数
+Model name (leave blank for the provider default): 模型名称（留空使用提供商默认模型）
+Provider request timeout (seconds): 请求提供商的超时时间（秒）
+Sampling temperature: 采样温度
+Waiting: 等待中
+Accepted!: 通过了！
+Accepted! Great job!: 通过了！干得漂亮！
+AI Socratic Tutor: AI 苏格拉底式辅导员
+Back to session: 返回任务
+Compiler output: 编译输出
+Confirm deleting this self-learning session? Tutoring conversations will be deleted as well.: 确认删除这个自主学习任务？相关的辅导对话也会被删除。
+Created: 创建时间
+Current AI provider: 当前 AI 提供商
+Describe the goal of this session for your students.: 向学生说明本次自主学习的目标。
+Explain your thinking, answer the tutor, or ask for guidance... (Enter to send): 说说你的思路、回答辅导员的问题，或请求引导……（Enter 发送）
+How it works: 使用说明
+Judging is taking longer than expected. Please check the record list.: 评测时间比预期更长，请前往评测记录页面查看。
+Not started: 未开始
+Open a problem, write your code and submit right on the page. If the verdict is not Accepted, an AI Socratic tutor will pop up and guide you with questions until you can fix it yourself.: 打开题目后即可在页面上编写并提交代码。如果结果不是“通过”，AI 苏格拉底式辅导员会自动弹出，用提问的方式引导你自己修正错误。
+Please write your code first.: 请先编写你的代码。
+Practice: 练习
+Practice problems at your own pace. When a submission is not accepted, an AI Socratic tutor will guide you to find and fix the mistake yourself.: 按照自己的节奏练习题目。当提交未通过时，AI 苏格拉底式辅导员会引导你自己发现并修正错误。
+Problem unavailable: 题目不可用
+Reset conversation: 重置对话
+Reset this tutoring conversation? The tutor will forget everything discussed so far.: 重置本次辅导对话？辅导员将忘记之前讨论过的所有内容。
+Search and pick problems from the problem set; entries are separated with ",". Both programming problems and quiz problems (true/false, multiple choice, fill-in-the-blank) are supported.: 从题库中搜索并选择题目，多个题目以 "," 分隔。支持编程题与客观题（判断、选择、填空）。
+Students will solve the selected problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them — without giving away the answer.: 学生将在本任务内完成所选题目。每次未通过的提交都会自动打开 AI 苏格拉底式辅导员进行引导——但不会直接给出答案。
+Submit your solution: 提交你的解答
+Submit your solution first — the tutor starts from a judged attempt.: 请先提交你的解答——辅导员会从一次已评测的提交开始。
+Submitting...: 正在提交……
+The AI tutor is not configured on this site yet, so failed submissions will not open the tutoring chat.: 本站尚未配置 AI 辅导员，未通过的提交暂时不会打开辅导对话。
+The tutor guides you with questions and will never hand you the final answer. Take your time to think!: 辅导员会通过提问来引导你，绝不会直接给出最终答案。慢慢思考吧！
+The tutor is thinking...: 辅导员正在思考……
+There are no self-learning sessions yet.: 还没有自主学习任务。
+Tried: 已尝试
+You are browsing with a teacher or administrator account. The AI Socratic tutor is only shown to student accounts.: 您正在使用教师或管理员账号浏览。AI 苏格拉底式辅导员仅对学生账号显示。
+# --- End Self-Learning module strings ---
 Send Broadcast Message: 发送公告
 Send Clarification Request: 提问
 Send Code after acceptance: 通过题目后发送源代码
@@ -731,6 +813,7 @@ Set Role: 设置角色
 Set Roles for Selected User: 设置所选用户的角色
 Set Roles for selected users: 为所选用户设置角色
 setting_basic: 基础设置
+setting_ai_tutor: AI 辅导
 setting_customize: 个性化
 setting_display: 显示偏好
 setting_domain: 域设置
@@ -802,6 +885,7 @@ The homework's deadline is due but in extension. You can still submit for this p
 The invitation code to enter to successfully join the domain. You can only use letters and numbers in the code and it should not be longer than 64 characters.: 加入此域的邀请码。您只能使用字母和数字，并且不能长于 64 个字符。
 The invitation code you provided is invalid.: 您提供的邀请码无效。
 The link is either invalid or expired.: 加域链接无效或已过期。
+The Self-Learning module is under construction.: 自主学习模块正在建设中。
 The link will be expired at {0}: 链接将于 {0} 过期
 The role to assign when user joining the domain.: 用户加入此域时分配的角色。
 The uploaded file is too long.: 上传的文件太长。

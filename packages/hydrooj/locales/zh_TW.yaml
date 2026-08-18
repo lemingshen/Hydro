@@ -2,6 +2,15 @@ __flag: 🇹🇼
 __id: zh_TW
 __interface: yes
 __langname: 正體中文
+ai_tutor.api_key: API 金鑰
+ai_tutor.base_url: API 位址（可選）
+ai_tutor.enabled: 啟用 AI 輔導員
+ai_tutor.max_messages: 每個對話最大訊息數
+ai_tutor.max_tokens: 單次回覆最大 Token 數
+ai_tutor.model: 模型名稱
+ai_tutor.provider: AI 供應商
+ai_tutor.temperature: 取樣溫度
+ai_tutor.timeout: 請求逾時（秒）
 '"{data}" copied to clipboard!': '“{data}”已複製到剪貼簿！'
 '{0} {1} delete your discussion reply {2} in "{3}"({4}).': '{0} {1} 從討論 {3}({4}) 刪除了你的回覆 {2}。'
 '{0} comments': '{0} 條評論'
@@ -715,6 +724,79 @@ Select User: 選擇使用者
 Selected categories: 已選標籤
 Selected roles have been deleted.: 所選角色已刪除。
 Selected users have been removed from the domain.: 所選使用者已從此域中移除。
+self_learning: 自主學習
+self_learning_create: 建立自主學習
+self_learning_detail: 自主學習詳情
+self_learning_edit: 編輯自主學習
+self_learning_solve: 練習
+# --- Self-Learning module strings ---
+Programming problems open directly in the Scratchpad IDE. Solve and submit there — the AI tutor will guide you at your code lines.: 編程題會直接在 Scratchpad IDE 中開啟。請在其中編寫並提交程式碼——AI 導師會在程式碼行旁引導你。
+Now modify your code accordingly and resubmit!: 現在請據此修改你的程式碼並重新提交！
+Type your answer... (Enter to send): 輸入你的回答…（Enter 傳送）
+No further questions — revise your code and resubmit!: 沒有更多問題了——修改程式碼後重新提交吧！
+Discuss with the tutor: 與導師討論
+Dismiss: 忽略
+Submitted code: 提交的程式碼
+Attempt: 嘗試
+Loading problem statement...: 正在載入題面…
+Waiting for the judge...: 正在等待評測…
+Collapse: 收起
+Full screen: 全螢幕
+Exit full screen: 退出全螢幕
+Drag to resize: 拖曳調整大小
+Expand: 展開
+Minimize: 最小化
+Quiz: 客觀題
+Programming: 編程題
+Submit Answer: 提交答案
+Submit your answers: 提交你的答案
+This is a quiz problem. Answer the questions directly inside the problem statement on the left, then press Submit.: 這是一道客觀題。請直接在左側題面中作答，然後點選提交。
+Please answer at least one question before submitting.: 請至少回答一題再提交。
+Judge messages: 評測訊息
+AI provider: AI 供應商
+API base URL or full endpoint (optional, for proxies / compatible gateways). A base like https://api.deepseek.com works, and the chat path is appended automatically.: API 基礎位址或完整端點（可選，用於代理或相容閘道）。可直接填寫形如 https://api.deepseek.com 的基礎位址，聊天路徑會自動補全。
+API key of the selected provider. For security the saved key is never displayed, so this field always looks blank. Leave it blank to keep the current key.: 所選供應商的 API 金鑰。基於安全考量，已儲存的金鑰不會回顯，輸入框始終顯示為空；留空則保持目前金鑰不變。
+Create Self-Learning Session: 建立自主學習任務
+Edit Self-Learning Session: 編輯自主學習任務
+Enable the AI Socratic tutor: 啟用 AI 蘇格拉底式輔導員
+Max stored messages per tutoring thread: 每個輔導對話保存的最大訊息數
+Max tokens per tutor reply: 輔導員單次回覆的最大 Token 數
+Model name (leave blank for the provider default): 模型名稱（留空使用供應商預設模型）
+Provider request timeout (seconds): 請求供應商的逾時時間（秒）
+Sampling temperature: 取樣溫度
+Waiting: 等待中
+Accepted!: 通過了！
+Accepted! Great job!: 通過了！幹得漂亮！
+AI Socratic Tutor: AI 蘇格拉底式輔導員
+Back to session: 返回任務
+Compiler output: 編譯輸出
+Confirm deleting this self-learning session? Tutoring conversations will be deleted as well.: 確認刪除這個自主學習任務？相關的輔導對話也會被刪除。
+Created: 建立時間
+Current AI provider: 目前 AI 供應商
+Describe the goal of this session for your students.: 向學生說明本次自主學習的目標。
+Explain your thinking, answer the tutor, or ask for guidance... (Enter to send): 說說你的思路、回答輔導員的問題，或請求引導……（Enter 傳送）
+How it works: 使用說明
+Judging is taking longer than expected. Please check the record list.: 評測時間比預期更長，請前往評測記錄頁面查看。
+Not started: 未開始
+Open a problem, write your code and submit right on the page. If the verdict is not Accepted, an AI Socratic tutor will pop up and guide you with questions until you can fix it yourself.: 打開題目後即可在頁面上編寫並提交程式碼。如果結果不是「通過」，AI 蘇格拉底式輔導員會自動彈出，用提問的方式引導你自己修正錯誤。
+Please write your code first.: 請先編寫你的程式碼。
+Practice: 練習
+Practice problems at your own pace. When a submission is not accepted, an AI Socratic tutor will guide you to find and fix the mistake yourself.: 按照自己的節奏練習題目。當提交未通過時，AI 蘇格拉底式輔導員會引導你自己發現並修正錯誤。
+Problem unavailable: 題目不可用
+Reset conversation: 重置對話
+Reset this tutoring conversation? The tutor will forget everything discussed so far.: 重置本次輔導對話？輔導員將忘記之前討論過的所有內容。
+Search and pick problems from the problem set; entries are separated with ",". Both programming problems and quiz problems (true/false, multiple choice, fill-in-the-blank) are supported.: 從題庫中搜尋並選擇題目，多個題目以 "," 分隔。支援編程題與客觀題（判斷、選擇、填空）。
+Students will solve the selected problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them — without giving away the answer.: 學生將在本任務內完成所選題目。每次未通過的提交都會自動打開 AI 蘇格拉底式輔導員進行引導——但不會直接給出答案。
+Submit your solution: 提交你的解答
+Submit your solution first — the tutor starts from a judged attempt.: 請先提交你的解答——輔導員會從一次已評測的提交開始。
+Submitting...: 正在提交……
+The AI tutor is not configured on this site yet, so failed submissions will not open the tutoring chat.: 本站尚未設定 AI 輔導員，未通過的提交暫時不會打開輔導對話。
+The tutor guides you with questions and will never hand you the final answer. Take your time to think!: 輔導員會透過提問來引導你，絕不會直接給出最終答案。慢慢思考吧！
+The tutor is thinking...: 輔導員正在思考……
+There are no self-learning sessions yet.: 還沒有自主學習任務。
+Tried: 已嘗試
+You are browsing with a teacher or administrator account. The AI Socratic tutor is only shown to student accounts.: 您正在使用教師或管理員帳號瀏覽。AI 蘇格拉底式輔導員僅對學生帳號顯示。
+# --- End Self-Learning module strings ---
 Send Broadcast Message: 傳送公告
 Send Clarification Request: 提問
 Send Code after acceptance: 通過題目後傳送原始碼
@@ -728,6 +810,7 @@ Set Role: 設定角色
 Set Roles for Selected User: 設定所選使用者的角色
 Set Roles for selected users: 為所選使用者設定角色
 setting_basic: 基礎設定
+setting_ai_tutor: AI 輔導
 setting_customize: 自訂
 setting_display: 顯示偏好
 setting_domain: 域設定
@@ -799,6 +882,7 @@ The homework's deadline is due but in extension. You can still submit for this p
 The invitation code to enter to successfully join the domain. You can only use letters and numbers in the code and it should not be longer than 64 characters.: 加入此域的邀請碼。您只能使用字母和數字，並且不能長於 64 個字元。
 The invitation code you provided is invalid.: 您提供的邀請碼無效。
 The link is either invalid or expired.: 加域連結無效或已過期。
+The Self-Learning module is under construction.: 自主學習模組正在建設中。
 The link will be expired at {0}: 連結將於 {0} 過期
 The role to assign when user joining the domain.: 使用者加入此域時分配的角色。
 The uploaded file is too long.: 上傳的檔案太長。

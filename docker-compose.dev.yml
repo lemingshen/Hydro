@@ -1,0 +1,32 @@
+services:
+  mongo:
+    image: mongo:8            # needs a CPU with AVX; switch to mongo:4.4 on very old CPUs/VMs
+    restart: unless-stopped
+    volumes:
+      - mongodb-data:/data/db
+    # intentionally NOT published to the host — only other containers can reach it
+
+  hydro:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    privileged: true          # required by the go-judge sandbox
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    working_dir: /workspace
+    ports:
+      - "2333:2333"           # Hydro backend        (yarn debug)
+      - "8000:8000"           # frontend dev server  (yarn build:ui:dev, with HMR)
+    volumes:
+      - .:/workspace:cached             # your source checkout
+      - node_modules:/workspace/node_modules
+      - hydro-home:/root/.hydro         # Hydro config + state
+      - testdata:/data/file             # uploaded problem/test files
+    command: go-judge
+
+volumes:
+  mongodb-data:
+  node_modules:
+  hydro-home:
+  testdata:

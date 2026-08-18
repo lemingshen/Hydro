@@ -1,15 +1,72 @@
+__flag: 🇬🇧
+__id: en
+__interface: yes
 __langname: English
-'File IO: {0}': 'File IO: {0}'
-'Tip: You are entering sudo mode.': 'Tip: You are entering <a href="https://docs.github.com/articles/sudo-mode">sudo mode</a>.'
+ai_tutor.api_key: API Key
+ai_tutor.base_url: API Base URL
+ai_tutor.enabled: Enable AI Tutor
+ai_tutor.max_messages: Max Messages per Conversation
+ai_tutor.max_tokens: Max Tokens per Reply
+ai_tutor.model: Model Name
+ai_tutor.provider: AI Provider
+ai_tutor.temperature: Sampling Temperature
+ai_tutor.timeout: Request Timeout (seconds)
 Can be Extended For: Extension
-Current Status: Status
-Handled Requests: Req
-Hint::icon::difficulty: The difficulty of the problems in Hydro will be calculated by algorithm, depending on current submission, sometimes the difficulty may not so exact.
-Hint::icon::switch_account: As a superadmin, you can switch to anyone's account.
+contest_create: Contest Create
+contest_detail_problem_submit: Submit Contest Problem
+contest_detail_problem: Problem Detail
+contest_detail: Contest Detail
+contest_edit: Contest Edit
+contest_main: Contest
+contest_manage: Contest Management
+contest_print: Print
+contest_problemlist: Problem List
+contest_scoreboard: Scoreboard
+contest_user: Attendee Manage
+discussion_create: Create Discussion
+discussion_detail: Discussion Detail
+discussion_edit: Discussion Edit
+discussion_main: Discussion
+discussion_node: Discussion
+display_name: Display Name
+domain_create: Create Domain
+domain_dashboard: Dashboard
+domain_discussion: Discussion Nodes
+domain_edit: Edit Info
+domain_group: Manage Groups
+domain_join_applications: Join Applications
+domain_main: Main
+domain_permission: System Permission
+domain_role: System Role
+domain_user: System User
+fs_upload: File Upload
+home_account: Account Settings
+home_domain_account: Profile @ Domain
+home_domain_create: Create Domain
+home_domain: My Domains
+home_messages: Messages
+home_preference: Preference
+home_security: Security
+homepage: Home
+homework_create: Homework Create
+homework_detail_problem_submit: Submit Homework Problem
+homework_edit: Homework Edit
+homework_main: Homework
+homework_scoreboard: Scoreboard
+judge_playground: Judge Playground
+main: Home
+manage_config: System Configurations
+manage_dashboard: System
+manage_module: Module Management
+manage_script: Scripts
+manage_setting: System Settings
+manage_user_import: Import Users
+manage_user_priv: User Privilege
 manage: System Manage
 no_translation_warn: <blockquote class="warn">This part of content is under translation.</blockquote>
 page.problem_detail.sidebar.show_category: Click to Show
 page.training_detail.invalid_when_not_enrolled: You cannot view problem details unless enrolled.
+page.training_detail.see_other_user_detail: You are viewing user {0} training details.
 pager_first: « First
 pager_last: Last »
 pager_next: Next ›
@@ -17,23 +74,22 @@ pager_previous: ‹ Previous
 perm_contest: Contests
 perm_discussion: Discussions
 perm_general: General
+perm_homework: Homework
 perm_problem_solution: Problem Solutions
 perm_problem: Problems
+perm_ranking: Ranking
 perm_record: Records
 perm_training: Trainings
-preferredPrefix_hint: This is used for re-organizing problem IDs. For example, if the ID of the problem in the problemset are P1001, P1002, P1003, and you set "T" in this option, those problem will be imported with ID T1001, T1002 and T1003.
 problem_create: Problem Create
+problem_detail: Problem Detail
 problem_edit: Problem Edit
+problem_files: Problem Files
+problem_hack: Hack
 problem_import: Import Problem
 problem_main: Problem Set
 problem_solution: Problem Solution
+problem_statistics: Problem Statistics
 problem_submit: Problem Submit
-problem_type.communication: 'Type: Communication'
-problem_type.default: 'Type: Default'
-problem_type.interactive: 'Type: Interactive'
-problem_type.objective: 'Type: Objective'
-problem_type.remote_judge: 'Type: RemoteJudge'
-problem_type.submit_answer: 'Type: SubmitAnswer'
 problem-category-delim: '|'
 problem-subcategory-delim: ', '
 problem.import.additional_file: '## Additional Files'
@@ -45,8 +101,12 @@ problem.import.problem_description: '## Description'
 ranking: Ranking
 record_detail: Record Detail
 record_main: Record
-rpDetailText_contest: Contest
-rpDetailText_problem: Problem
+self_learning: Self-Learning
+self_learning_create: Create Self-Learning Session
+self_learning_detail: Self-Learning Session
+self_learning_edit: Edit Self-Learning Session
+self_learning_solve: Practice
+setting_ai_tutor: AI Tutor
 setting_customize: Customize
 setting_display: Display Preference
 setting_function: Function
@@ -54,12 +114,13 @@ setting_info_domain: Personal Info
 setting_info: Personal Info
 setting_preference: Preference
 setting_privacy: Privacy
+setting_server: Server Settings
+setting_session: Session Settings
+setting_smtp: SMTP Settings
 setting_usage: Usage Preference
-sort::default: Default
-sort::recent: Recent
-tasks_list: Task list
 timeago_locale: en_US
 training_create: Training Create
+training_detail: Training Detail
 training_edit: Training Edit
 training_main: Training
 user_detail: User Detail
@@ -67,5 +128,6 @@ user_login: Login
 user_logout: Logout
 user_lostpass: Lost Password
 user_register: Register
+user_sudo: Entering Sudo Mode
+wiki_about: About
 wiki_help: Help
-You can also upload your avatar to Gravatar and it will be automatically updated here.: You can also upload your avatar to <a href="https://gravatar.com/">Gravatar</a> and it will be automatically updated here.

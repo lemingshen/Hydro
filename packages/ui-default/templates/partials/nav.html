@@ -1,5 +1,5 @@
 {%- macro nav_item(item) -%}
-<li class="nav__list-item">
+<li class="nav__list-item{% if item.args.more %} nav__list-item--more{% endif %}">
   <a href="{{ url(item.name, item.args, query=item.args.query(handler) if typeof(item.args.query) == 'function' else item.args.query or {}) }}" class="nav__item{% if page_name.startsWith(item.args.prefix) %} nav--active{% endif %}">
     {{ _(item.displayName or item.name) }}
   </a>

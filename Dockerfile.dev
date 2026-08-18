@@ -1,0 +1,34 @@
+# Development image for HydroOJ — the source checkout gets mounted at /workspace
+FROM node:22-bookworm
+
+# Compilers used by node-gyp during `yarn install` and by the judge for C/C++ submissions
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc g++ python3 && \
+    rm -rf /var/lib/apt/lists/* && \
+    # hydrojudge looks for node at /usr/bin/node when judging JS submissions
+    ln -sf /usr/local/bin/node /usr/bin/node
+
+# go-judge: the sandbox used by hydrojudge (v1.9.4 = same version this repo's
+# own install/docker uses). amd64v2 runs on any x86-64 CPU from ~2010 onward;
+# build with --build-arg GO_JUDGE_ARCH=arm64 on ARM hosts.
+ARG GO_JUDGE_VERSION=1.9.4
+ARG GO_JUDGE_ARCH=amd64v2
+RUN curl -fsSL -o /usr/local/bin/go-judge \
+      "https://github.com/criyle/go-judge/releases/download/v${GO_JUDGE_VERSION}/go-judge_${GO_JUDGE_VERSION}_linux_${GO_JUDGE_ARCH}" && \
+    chmod +x /usr/local/bin/go-judge
+
+# Yarn 4.13.0 — the version Hydro's CI pins (the repo uses Yarn Berry features)
+RUN corepack enable && corepack install -g yarn@4.13.0
+
+# Pre-seed Hydro's config: where MongoDB is, and which addons to load in dev
+RUN mkdir -p /root/.hydro /data/file && \
+    echo '{"uri":"mongodb://mongo:27017/hydro"}' > /root/.hydro/config.json && \
+    echo '["@hydrooj/ui-default","@hydrooj/hydrojudge"]' > /root/.hydro/addon.json && \
+    git config --global --add safe.directory /workspace
+
+WORKDIR /workspace
+
+# The sandbox is the container's long-running process (listens on localhost:5050,
+# which is exactly where hydrojudge expects it by default).
+# Hydro itself is started manually via `docker compose exec`.
+CMD ["go-judge"]

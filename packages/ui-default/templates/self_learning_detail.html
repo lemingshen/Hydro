@@ -1,0 +1,100 @@
+{% extends "layout/basic.html" %}
+{% block content %}
+<div class="row">
+  <div class="medium-9 columns">
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">{{ sdoc.title }}</h1>
+      </div>
+      {% if sdoc.content %}
+      <div class="section__body typo richmedia">
+        {{ sdoc.content|markdown|safe }}
+      </div>
+      {% endif %}
+    </div>
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">{{ _('Problems') }}</h1>
+      </div>
+      <div class="section__body no-padding">
+        <table class="data-table">
+          <colgroup>
+            <col class="col--status">
+            <col class="col--name">
+            <col class="col--kind">
+            <col class="col--action">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col--status">{{ _('Status') }}</th>
+              <th class="col--name">{{ _('Problem') }}</th>
+              <th class="col--kind">{{ _('Type') }}</th>
+              <th class="col--action">{{ _('Action') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {%- for pid in sdoc.pids -%}
+            {%- set pdoc = pdict[pid] -%}
+            <tr>
+              <td class="col--status record-status--border {% if psdict[pid] and psdict[pid]['status'] == 1 %}pass{% endif %}">
+                {% if psdict[pid] and psdict[pid]['status'] == 1 %}
+                  <span class="record-status--text pass"><span class="icon record-status--icon pass"></span> {{ _('Accepted') }}</span>
+                {% elif psdict[pid] and psdict[pid]['status'] %}
+                  <span class="record-status--text fail">{{ _('Tried') }}</span>
+                {% else %}
+                  <span class="record-status--text">{{ _('Not started') }}</span>
+                {% endif %}
+              </td>
+              <td class="col--name">
+                {% if pdoc %}
+                  <b>{{ pdoc.pid|default(pid) }}</b>
+                  <a href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ pdoc.title }}</a>
+                {% else %}
+                  <span class="text-gray">#{{ pid }} ({{ _('Problem unavailable') }})</span>
+                {% endif %}
+              </td>
+              <td class="col--kind">
+                {% if pdoc %}
+                  {% if pdoc.config and pdoc.config.type == 'objective' %}
+                    <span class="tag">{{ _('Quiz') }}</span>
+                  {% elif pdoc.config and pdoc.config.type == 'submit_answer' %}
+                    <span class="tag">{{ _('Submit Answer') }}</span>
+                  {% else %}
+                    <span class="tag">{{ _('Programming') }}</span>
+                  {% endif %}
+                {% endif %}
+              </td>
+              <td class="col--action">
+                {% if pdoc %}
+                <a href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}" class="typo-a">{{ _('Practice') }}</a>
+                {% endif %}
+              </td>
+            </tr>
+            {%- endfor -%}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="medium-3 columns">
+    <div class="section side">
+      <div class="section__body typo">
+        <p>
+          {{ _('Owner') }}:
+          <a href="{{ url('user_detail', uid=sdoc.owner) }}">{{ udict[sdoc.owner].uname }}</a>
+        </p>
+        <p>{{ _('Created') }}: {{ datetimeSpan(sdoc._id)|safe }}</p>
+        {% if canEdit %}
+        <a href="{{ url('self_learning_edit', ssid=sdoc.docId) }}" class="expanded button">{{ _('Edit') }}</a>
+        {% endif %}
+      </div>
+    </div>
+    <div class="section side">
+      <div class="section__header"><h1 class="section__title">{{ _('How it works') }}</h1></div>
+      <div class="section__body typo">
+        <p>{{ _('Open a problem, write your code and submit right on the page. If the verdict is not Accepted, an AI Socratic tutor will pop up and guide you with questions until you can fix it yourself.') }}</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

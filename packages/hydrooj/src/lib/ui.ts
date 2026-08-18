@@ -48,7 +48,8 @@ inject('Nav', 'problem_main', { prefix: 'problem' }, PERM.PERM_VIEW_PROBLEM);
 inject('Nav', 'training_main', { prefix: 'training' }, PERM.PERM_VIEW_TRAINING);
 inject('Nav', 'contest_main', { prefix: 'contest' }, PERM.PERM_VIEW_CONTEST);
 inject('Nav', 'homework_main', { prefix: 'homework' }, PERM.PERM_VIEW_HOMEWORK);
-inject('Nav', 'discussion_main', { prefix: 'discussion' }, PERM.PERM_VIEW_DISCUSSION);
+inject('Nav', 'self_learning', { prefix: 'self_learning' });
+inject('Nav', 'discussion_main', { prefix: 'discussion', more: true }, PERM.PERM_VIEW_DISCUSSION);
 inject('Nav', 'record_main', {
     prefix: 'record',
     query: (handler) => (handler.user.hasPriv(PRIV.PRIV_USER_PROFILE)

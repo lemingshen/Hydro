@@ -1,0 +1,56 @@
+{% extends "layout/basic.html" %}
+{% block content %}
+<div class="row">
+  <div class="medium-9 columns">
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">{% if sdoc %}{{ _('Edit Self-Learning Session') }}{% else %}{{ _('Create Self-Learning Session') }}{% endif %}</h1>
+      </div>
+      <div class="section__body">
+        <form method="post">
+          {{ form.form_text({
+              columns:12,
+              label:'Title',
+              name:'title',
+              placeholder:_('title'),
+              value:sdoc['title']|default(''),
+              autofocus:true,
+              row:true
+          }) }}
+          {{ form.form_text({
+              columns:null,
+              label:'Problems',
+              name:'pids',
+              value:pids,
+              help_text:_('Search and pick problems from the problem set; entries are separated with ",". Both programming problems and quiz problems (true/false, multiple choice, fill-in-the-blank) are supported.')
+          }) }}
+          {{ form.form_textarea({
+              columns:null,
+              label:'Content',
+              name:'content',
+              value:sdoc['content']|default(''),
+              markdown:true,
+              help_text:_('Describe the goal of this session for your students.')
+          }) }}
+          <div class="row"><div class="columns">
+          {% if sdoc %}
+            <button name="operation" value="update" type="submit" class="rounded primary button">{{ _('Update') }}</button>
+            <button name="operation" value="delete" type="button" class="rounded button">{{ _('Delete') }}</button>
+          {% else %}
+            <button name="operation" value="update" type="submit" class="rounded primary button">{{ _('Create') }}</button>
+          {% endif %}
+            <button type="button" class="rounded button" onclick="window.history.go(-1)">{{ _('Cancel') }}</button>
+          </div></div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="medium-3 columns">
+    <div class="section side">
+      <div class="section__body typo">
+        <p>{{ _('Students will solve the selected problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them — without giving away the answer.') }}</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -43,6 +43,14 @@ function handleNavbar() {
   }
   $trigger.show();
 
+  // Items flagged as "more-only" (e.g. Discussion) always stay inside the More dropdown on desktop
+  $('.nav__list--main > .nav__list-item--more').each(function () {
+    const $ele = $(this);
+    $ele.removeClass('nav__list-item').addClass('menu__item');
+    $ele.children('a').removeClass('nav__item').addClass('menu__link');
+    $menu.append($ele);
+  });
+
   const base = 70;
 
   let navItems = $('.nav__list--main > .nav__list-item');
@@ -57,9 +65,9 @@ function handleNavbar() {
     fromHide = true;
   }
 
-  if (!fromHide && $menu.children().length) {
-    while ($('#menu').children('div').height() <= base && $menu.children().length) {
-      const $ele = $menu.children().first();
+  if (!fromHide && $menu.children().not('.nav__list-item--more').length) {
+    while ($('#menu').children('div').height() <= base && $menu.children().not('.nav__list-item--more').length) {
+      const $ele = $menu.children().not('.nav__list-item--more').first();
       $ele.addClass('nav__list-item').removeClass('menu__item');
       $ele.children('a').addClass('nav__item').removeClass('menu__link');
       $ele.insertBefore($trigger, null);
