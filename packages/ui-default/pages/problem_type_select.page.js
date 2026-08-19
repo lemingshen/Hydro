@@ -13,15 +13,15 @@ import { getTheme, i18n } from 'vj/utils';
 
 const TYPES = [
   {
-    key: 'P', color: '#1c7ed6', tint: '#e8f2fd', name: 'Programming',
+    key: 'P', color: '#1c7ed6', tint: '#e8f2fd', darkTint: '#152a40', name: 'Programming',
     desc: 'Judged by the OJ: students code in the online IDE and submit for automatic testing.',
   },
   {
-    key: 'O', color: '#0ca678', tint: '#e6f7f1', name: 'Objective',
+    key: 'O', color: '#0ca678', tint: '#e6f7f1', darkTint: '#0f2f26', name: 'Objective',
     desc: 'True/false, multiple choice, fill-in-the-blank — auto-graded from the objective config.',
   },
   {
-    key: 'S', color: '#845ef7', tint: '#f3edff', name: 'Subjective',
+    key: 'S', color: '#845ef7', tint: '#f3edff', darkTint: '#251d3d', name: 'Subjective',
     desc: 'Project-level task: students submit files and a Markdown report; graded by the teacher, no OJ judging.',
   },
 ];
@@ -52,6 +52,10 @@ const STYLE = [
   '.pta-dark .ptsc:hover .ptsc__body { border-color: #4a525b; box-shadow: 0 2px 10px rgba(0,0,0,.35); }',
   '.pta-dark .ptsc__name { color: #d5dade; }',
   '.pta-dark .ptsc__desc { color: #98a2ac; }',
+  // Selection is pure CSS per type and per theme — no inline styles, so the
+  // cards follow whichever theme the page is in.
+  ...TYPES.map((t) => `.ptsc input[value="${t.key}"]:checked + .ptsc__body { border-color: ${t.color}; background: ${t.tint}; }`),
+  ...TYPES.map((t) => `.pta-dark .ptsc input[value="${t.key}"]:checked + .ptsc__body { background: ${t.darkTint}; }`),
 ].join('\n');
 
 export default new NamedPage(['problem_create', 'problem_edit'], () => {
@@ -88,20 +92,8 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
   if ($row.length) $row.before($sel);
   else $pid.parent().before($sel);
 
-  const paint = () => {
-    const picked = String($sel.find('input[name="pts-type"]:checked').val() || 'P');
-    for (const t of TYPES) {
-      const on = t.key === picked;
-      $sel.find(`input[value="${t.key}"]`).next('.ptsc__body').css({
-        'border-color': on ? t.color : '',
-        background: on ? t.tint : '',
-      });
-    }
-  };
-
   const init = currentKey() || 'P';
   $sel.find(`input[value="${init}"]`).prop('checked', true);
-  paint();
 
   const applyPrefix = (key) => {
     const v = String($pid.val() || '');
@@ -117,15 +109,11 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
 
   $sel.find('input[name="pts-type"]').on('change', function onPick() {
     applyPrefix(String($(this).val()));
-    paint();
   });
 
   $pid.on('input blur', () => {
     const k = currentKey();
-    if (k) {
-      $sel.find(`input[value="${k}"]`).prop('checked', true);
-      paint();
-    }
+    if (k) $sel.find(`input[value="${k}"]`).prop('checked', true);
   });
 
   $pid.closest('form').on('submit', (ev) => {
