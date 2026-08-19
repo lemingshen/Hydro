@@ -1,6 +1,19 @@
+{% if handler.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM) %}
+{# Root only: the Hitokoto card becomes the bulk user-import entry point. #}
+<div class="section side">
+  <div class="section__header">
+    <h1 class="section__title">{{ _('User Management') }}</h1>
+  </div>
+  <div class="section__body typo">
+    <p>{{ _('Bulk-create accounts from a spreadsheet (CSV / XLS / XLSX) and grant them access to one or more domains.') }}</p>
+    <button id="bulk-add-users-btn" class="expanded rounded primary button">{{ _('Add Users') }}</button>
+  </div>
+</div>
+{% else %}
 <div class="section side nojs--hide">
   <div class="section__header">
     <h1 class="section__title">{{ _('Hitokoto') }}</h1>
   </div>
   <div class="section__body typo" name="hitokoto"></div>
 </div>
+{% endif %}

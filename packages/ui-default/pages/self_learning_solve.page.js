@@ -4,7 +4,7 @@ import MarkdownIt from 'markdown-it';
 import { ConfirmDialog } from 'vj/components/dialog';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
-import { i18n, loadReactRedux, request, tpl } from 'vj/utils';
+import { getTheme, i18n, loadReactRedux, request, tpl } from 'vj/utils';
 // Direct import: pulls the rail module into the bundle through the dependency
 // graph, so the session rail never depends on the page-loader picking up a
 // newly added file.
@@ -35,6 +35,7 @@ function caseKey(c) {
 }
 
 export default new NamedPage('self_learning_solve', async () => {
+  if (getTheme() === 'dark') document.documentElement.classList.add('pta-dark'); // panel styles are template-side
   const tutorUrl = `${window.location.pathname}/tutor`;
   const recordUrl = `${window.location.pathname}/record`;
   const isObjective = UiContext.slType === 'objective';
@@ -430,7 +431,7 @@ export default new NamedPage('self_learning_solve', async () => {
     if (meta && meta.resolved) {
       const note = meta.accepted
         ? i18n('Great reflection — you have truly mastered this problem!')
-        : i18n('Now modify your code accordingly and resubmit!');
+        : i18n('Great — now FIX this line in the editor.');
       $chat.append(`<div class="sl-msg assistant"><div class="sl-bubble sl-bubble--note">✏️ ${escapeHtml(note)}</div></div>`);
     }
     scrollChat();
@@ -733,6 +734,12 @@ export default new NamedPage('self_learning_solve', async () => {
     /* ---------------- PTA-style submit-result modal + judging pill ---------------- */
 
     const MODAL_STYLE = [
+      '@keyframes slmMaskIn { from { opacity: 0; } }',
+      '@keyframes slmPopIn { from { opacity: 0; transform: translateY(16px) scale(.95); } 70% { transform: translateY(-2px) scale(1.005); } to { opacity: 1; transform: none; } }',
+      '.slm-mask { animation: slmMaskIn .2s ease-out; }',
+      '.slm { animation: slmPopIn .3s cubic-bezier(.2,.8,.3,1); }',
+      '.slm-mask--closing { transition: opacity .18s ease; opacity: 0; pointer-events: none; }',
+      '.slm-mask--closing .slm { transition: transform .18s ease, opacity .18s ease; transform: translateY(12px) scale(.97); opacity: 0; }',
       '.slm-mask { position: fixed; inset: 0; z-index: 3200; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 20px; }',
       '.slm { background: #fff; border-radius: 10px; width: 900px; max-width: 96vw; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.3); overflow: hidden; }',
       '.slm__head { display: flex; align-items: center; justify-content: space-between; padding: 13px 20px; border-bottom: 2px solid #e8f1fb; flex: 0 0 auto; }',
@@ -743,8 +750,49 @@ export default new NamedPage('self_learning_solve', async () => {
       '.slm__summary { background: #f7f8fa; border: 1px solid #ececec; border-radius: 6px; padding: 14px 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 20px; font-size: 13px; }',
       '.slm__k { color: #8a8a8a; margin-bottom: 3px; }',
       '.slm__v { color: #333; word-break: break-word; }',
-      '.slm__v.pass, .slm__st.pass { color: #e03131; font-weight: bold; }',
-      '.slm__v.fail, .slm__st.fail { color: #d9480f; font-weight: bold; }',
+      '.slm__st { font-weight: bold; }',
+      '.slm__msg { color: #8a8a8a; font: 11.5px/1.45 monospace; font-weight: normal; margin-top: 2px; white-space: pre-wrap; word-break: break-word; max-width: 430px; }',
+      '.pta-dark .slm { background: #23272c; color: #d5dade; }',
+      '.pta-dark .slm__head { border-bottom-color: #2f3941; }',
+      '.pta-dark .slm__title { color: #4dabf7; }',
+      '.pta-dark .slm__close { color: #9aa4ad; }',
+      '.pta-dark .slm__close:hover { background: #2e343a; color: #e2e7ec; }',
+      '.pta-dark .slm__summary { background: #262b31; border-color: #333a41; }',
+      '.pta-dark .slm__k { color: #8b97a3; }',
+      '.pta-dark .slm__v { color: #e2e7ec; }',
+      '.pta-dark .slm__sect { border-color: #333a41; }',
+      '.pta-dark .slm__secthead { background: #2a3036; color: #c2c9d1; border-bottom-color: #333a41; }',
+      '.pta-dark .slm__table th { background: #2a3036; color: #8b97a3; border-bottom-color: #333a41; }',
+      '.pta-dark .slm__table td { border-bottom-color: #2c3238; color: #cfd6dd; }',
+      '.pta-dark .slm__msg { color: #98a2ac; }',
+      '.pta-dark .slm__foot { border-top-color: #2f3941; }',
+      '.pta-dark .slm__genwrap .slm__gentext { color: #c4cbd2; }',
+      '.pta-dark .slm__spinner { border-color: #3a4a63; border-top-color: #4dabf7; }',
+      '.pta-dark .slm__sect--ai { border-color: #6741d9; box-shadow: 0 4px 18px rgba(132,94,247,.28); }',
+      '.pta-dark .slm__ai { background: #241f2e; color: #d6d0e6; }',
+      '.pta-dark .slm__ai h1, .pta-dark .slm__ai h2, .pta-dark .slm__ai h3 { color: #b197fc; }',
+      '.pta-dark .slm__ai h2 { border-bottom-color: #3a3350; }',
+      '.pta-dark .slm__ai code { background: #322a44; color: #d0bdfb; }',
+      '.pta-dark .slm__ai blockquote { background: #2a2440; border-left-color: #845ef7; color: #b9b0d6; }',
+      '.pta-dark .slm__ai hr { border-top-color: #3a3350; }',
+      '.pta-dark .slm__ai td, .pta-dark .slm__ai th { border-color: #3a3350; }',
+      '.pta-dark .slm__codearea { background: #1b1f24; }',
+      '.pta-dark .slm pre, .pta-dark .sl-attempt pre { background: #1b1f24 !important; border-color: #30363d !important; }',
+      '.pta-dark .slm pre > code, .pta-dark .sl-attempt pre > code { color: #d4d4d4; text-shadow: none; }',
+      '.pta-dark .slm .token.comment, .pta-dark .sl-attempt .token.comment { color: #6a9955; }',
+      '.pta-dark .slm .token.keyword, .pta-dark .slm .token.boolean, .pta-dark .slm .token.constant, .pta-dark .sl-attempt .token.keyword, .pta-dark .sl-attempt .token.boolean, .pta-dark .sl-attempt .token.constant { color: #569cd6; }',
+      '.pta-dark .slm .token.string, .pta-dark .slm .token.char, .pta-dark .slm .token.attr-value, .pta-dark .sl-attempt .token.string, .pta-dark .sl-attempt .token.char { color: #ce9178; }',
+      '.pta-dark .slm .token.number, .pta-dark .sl-attempt .token.number { color: #b5cea8; }',
+      '.pta-dark .slm .token.function, .pta-dark .sl-attempt .token.function { color: #dcdcaa; }',
+      '.pta-dark .slm .token.class-name, .pta-dark .slm .token.builtin, .pta-dark .sl-attempt .token.class-name, .pta-dark .sl-attempt .token.builtin { color: #4ec9b0; }',
+      '.pta-dark .slm .token.operator, .pta-dark .slm .token.punctuation, .pta-dark .sl-attempt .token.operator, .pta-dark .sl-attempt .token.punctuation { color: #c8ccd0; background: none; }',
+      '.pta-dark .slm .token.property, .pta-dark .slm .token.variable, .pta-dark .slm .token.attr-name, .pta-dark .sl-attempt .token.property, .pta-dark .sl-attempt .token.variable { color: #9cdcfe; }',
+      '.pta-dark .slm .token.tag, .pta-dark .sl-attempt .token.tag { color: #569cd6; }',
+      '.pta-dark .slm .line-numbers-rows, .pta-dark .sl-attempt .line-numbers-rows { border-right-color: #30363d !important; }',
+      '.pta-dark .slm .line-numbers-rows > span:before, .pta-dark .sl-attempt .line-numbers-rows > span:before { color: #6e7681 !important; }',
+      '.pta-dark .slm div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn, .pta-dark .sl-attempt div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn { background: #2d333b !important; border-color: #444c56; color: #adbac7 !important; }',
+      '.pta-dark .slm div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn:hover, .pta-dark .sl-attempt div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn:hover { background: #39414a !important; color: #cdd9e5 !important; border-color: #545d68; }',
+      '.pta-dark .slm div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn.code-copy-btn--ok, .pta-dark .sl-attempt div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn.code-copy-btn--ok { background: #1e3524 !important; border-color: #347d39; color: #69db7c !important; }',
       '.slm__sect { margin-top: 16px; border: 1px solid #ececec; border-radius: 6px; overflow: hidden; }',
       '.slm__secthead { background: #f7f8fa; padding: 8px 14px; font-weight: bold; font-size: 13.5px; color: #444; border-bottom: 1px solid #ececec; }',
       '.slm__langtag { color: #888; font-weight: normal; margin-left: 8px; font-size: 12px; }',
@@ -764,6 +812,7 @@ export default new NamedPage('self_learning_solve', async () => {
     ].join('\n');
 
     function ensureModalStyle() {
+      if (getTheme() === 'dark') document.documentElement.classList.add('pta-dark');
       if (!document.getElementById('sl-modal-style')) {
         $('<style>').attr('id', 'sl-modal-style').text(MODAL_STYLE).appendTo(document.head);
       }
@@ -780,6 +829,24 @@ export default new NamedPage('self_learning_solve', async () => {
       $('#sl-judging').remove();
     }
 
+    /** The live editor content — the ground truth once fixes begin mid-session. */
+    function currentEditorCode() {
+      const ed = findScratchpadEditor();
+      return (ed && ed.getModel()) ? String(ed.getModel().getValue()).slice(0, 8000) : '';
+    }
+
+    const STATUS_COLORS = {
+      0: '#1c7ed6', 1: '#2f9e44', 2: '#e03131', 3: '#e8590c', 4: '#9c36b5',
+      5: '#e8590c', 6: '#c2255c', 7: '#5f3dc4', 8: '#495057', 9: '#868e96',
+      11: '#e03131', 20: '#1c7ed6', 21: '#1c7ed6',
+    };
+    const DARK_STATUS_OVERRIDES = { 8: '#9aa4ad', 9: '#9aa4ad' };
+    const statusColor = (st, accepted) => {
+      if (accepted) return STATUS_COLORS[1];
+      if (getTheme() === 'dark' && DARK_STATUS_OVERRIDES[st]) return DARK_STATUS_OVERRIDES[st];
+      return STATUS_COLORS[st] || '#d9480f';
+    };
+
     const fmtTs = (ts) => (ts ? new Date(ts).toLocaleString() : '-');
     const langDisplay = (l) => (window.LANGS && window.LANGS[l] && window.LANGS[l].display) || l || '-';
 
@@ -794,7 +861,7 @@ export default new NamedPage('self_learning_solve', async () => {
       const conf = (UiContext.pdoc && typeof UiContext.pdoc.config === 'object' && UiContext.pdoc.config) || {};
       const timeLimit = conf.timeMax || conf.time || null;
       const memLimitKB = conf.memoryMax ? conf.memoryMax * 1024 : null;
-      const stCls = data.accepted ? 'pass' : 'fail';
+      const stColor = statusColor(data.status, data.accepted);
       const problemName = `${UiContext.pdoc?.pid ?? UiContext.slPid ?? ''}. ${UiContext.pdoc?.title || ''}`;
       const userName = (window.UserContext && (UserContext.uname || UserContext.displayName)) || `#${UserContext?._id ?? ''}`;
       const cell = (k, v, cls = '') => `<div><div class="slm__k">${escapeHtml(i18n(k))}</div><div class="slm__v ${cls}">${v}</div></div>`;
@@ -805,7 +872,7 @@ export default new NamedPage('self_learning_solve', async () => {
       html += cell('Compiler', escapeHtml(langDisplay(data.lang)));
       html += cell('Memory Usage', escapeHtml(`${data.memory}${memLimitKB ? ` / ${memLimitKB}` : ''} KB`));
       html += cell('Time Usage', escapeHtml(`${data.time}${timeLimit ? ` / ${timeLimit}` : ''} ms`));
-      html += cell('Status', escapeHtml(data.statusText || ''), stCls);
+      html += `<div><div class="slm__k">${escapeHtml(i18n('Status'))}</div><div class="slm__v" style="color:${stColor};font-weight:bold">${escapeHtml(data.statusText || '')}</div></div>`;
       html += cell('Score', escapeHtml(String(data.score ?? 0)));
       html += cell('Judge At', escapeHtml(fmtTs(data.judgeAt)));
       html += '</div>';
@@ -815,10 +882,11 @@ export default new NamedPage('self_learning_solve', async () => {
           + `<th>${escapeHtml(i18n('Time(ms)'))}</th><th>${escapeHtml(i18n('Status'))}</th><th>${escapeHtml(i18n('Score'))}</th></tr></thead><tbody>`;
         for (const c of data.cases) {
           const key = caseKey(c) ?? '?';
-          const cls = c.status === 1 ? 'pass' : 'fail';
           html += `<tr><td>${escapeHtml(String(key))}</td><td>${escapeHtml(String(c.memory ?? '-'))}</td>`
-            + `<td>${escapeHtml(String(c.time ?? '-'))}</td><td class="slm__st ${cls}">${escapeHtml(c.statusText || '')}</td>`
-            + `<td>${escapeHtml(String(c.score ?? '-'))}</td></tr>`;
+            + `<td>${escapeHtml(String(c.time ?? '-'))}</td>`
+            + `<td class="slm__st" style="color:${statusColor(c.status)}">${escapeHtml(c.statusText || '')}`
+            + (c.message ? `<div class="slm__msg">${escapeHtml(c.message)}</div>` : '')
+            + `</td><td>${escapeHtml(String(c.score ?? '-'))}</td></tr>`;
         }
         html += '</tbody></table></div>';
       }
@@ -843,9 +911,13 @@ export default new NamedPage('self_learning_solve', async () => {
       const close = () => {
         if (closed) return;
         closed = true;
-        $mask.remove();
         $(document).off('keydown.slmodal');
-        if (onClose) onClose();
+        // Smooth disappear: fade the mask, sink the dialog, then remove.
+        $mask.addClass('slm-mask--closing');
+        setTimeout(() => {
+          $mask.remove();
+          if (onClose) onClose();
+        }, 190);
       };
       $modal.find('.slm__close, .slm__ok').on('click', close);
       $(document).on('keydown.slmodal', (ev) => {
@@ -943,6 +1015,19 @@ export default new NamedPage('self_learning_solve', async () => {
       } catch (e) { /* sizing is cosmetic */ }
     }
 
+    /** Viewport-responsive height budget for the tutor pop-up cards. */
+    function cardMaxPx() {
+      const vh = window.innerHeight || 800;
+      return Math.max(200, Math.min(Math.round(vh * 0.5), 480));
+    }
+
+    function syncCardHeights() {
+      if (!cardState) return;
+      cardState.dom.style.setProperty('--sl-log-max', `${Math.max(110, cardMaxPx() - 118)}px`);
+      fitZone(cardState.entry, 60, cardMaxPx());
+    }
+    $(window).on('resize.slcard', syncCardHeights);
+
     function removeZoneEntry(entry) {
       try {
         entry.editor.changeViewZones((acc) => acc.removeZone(entry.zoneId));
@@ -960,7 +1045,7 @@ export default new NamedPage('self_learning_solve', async () => {
       '.sl-anno { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 8px; box-sizing: border-box; max-width: 440px; min-width: 260px; background: #fdf3f4; border: 1px solid #e7bcc3; border-left: 4px solid #9e2335; border-radius: 6px; padding: 8px 10px; margin: 0 0 0 12px; font-size: 13px; line-height: 1.45; box-shadow: 0 3px 12px rgba(0,0,0,.28); color: #333; user-select: text; overflow: hidden; }',
       '.sl-anno--chat { flex-direction: column; align-items: stretch; gap: 4px; padding: 6px 10px; }',
       '.sl-anno__head { display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 12.5px; color: #9e2335; flex: 0 0 auto; }',
-      '.sl-anno__log { max-height: 148px; overflow-y: auto; overflow-x: hidden; background: #fff; border: 1px solid #f0dadd; border-radius: 4px; padding: 4px 6px; }',
+      '.sl-anno__log { max-height: var(--sl-log-max, 148px); overflow-y: auto; overflow-x: hidden; background: #fff; border: 1px solid #f0dadd; border-radius: 4px; padding: 4px 6px; }',
       '.sl-anno__msg { margin: 3px 0; padding: 3px 8px; border-radius: 8px; font-size: 12.5px; line-height: 1.4; width: fit-content; max-width: 95%; box-sizing: border-box; color: #333; word-break: break-word; }',
       '.sl-anno__msg.tutor { background: #fdf3f4; border: 1px solid #eccdd2; }',
       '.sl-anno__msg.student { background: #ececec; margin-left: auto; }',
@@ -970,6 +1055,36 @@ export default new NamedPage('self_learning_solve', async () => {
       '.sl-anno__msg pre { background: #f4f4f4; padding: 6px; border-radius: 4px; overflow-x: auto; margin: 4px 0; }',
       '.sl-anno__msg pre code { background: none; padding: 0; }',
       '.sl-anno__msg ul, .sl-anno__msg ol { margin: 2px 0 4px 16px; padding: 0; }',
+      '@keyframes slAnnoIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }',
+      '.sl-anno--enter { animation: slAnnoIn .3s ease; }',
+      '.sl-anno-ghost { position: fixed; z-index: 3600; pointer-events: none; overflow: hidden; border-radius: 8px; background: #fdf3f4; border: 1px solid #e7bcc3; border-left: 4px solid #9e2335; box-shadow: 0 8px 24px rgba(0,0,0,.32); display: flex; align-items: center; justify-content: center; }',
+      '.sl-anno-ghost--fly { transition: left .38s cubic-bezier(.25,.8,.25,1), top .38s cubic-bezier(.25,.8,.25,1), width .38s cubic-bezier(.25,.8,.25,1), height .38s cubic-bezier(.25,.8,.25,1); }',
+      '.sl-anno-ghost--out { transition: opacity .24s ease; opacity: 0; }',
+      '.sl-anno-ghost__chip { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: #7a2733; white-space: nowrap; padding: 0 12px; transition: opacity .2s ease; }',
+      '.sl-anno-ghost--fly .sl-anno-ghost__chip { opacity: 0; }',
+      '@keyframes slGhostPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }',
+      '.sl-anno-ghost--pulse { animation: slGhostPulse 1.4s ease-in-out infinite; }',
+      '.pta-dark .sl-anno { background: #2b2024; border-color: #4a3238; border-left-color: #e35d6a; color: #ddd6d8; box-shadow: 0 6px 20px rgba(0,0,0,.5); }',
+      '.pta-dark .sl-anno__head { color: #ff8a99; }',
+      '.pta-dark .sl-anno__close { color: #9aa4ad; }',
+      '.pta-dark .sl-anno__close:hover { color: #e2e7ec; }',
+      '.pta-dark .sl-anno__q { color: #ead9dc; }',
+      '.pta-dark .sl-anno__log { background: #23272c; border-color: #3a2c30; }',
+      '.pta-dark .sl-anno__msg.tutor { background: #33272b; color: #e6d9db; }',
+      '.pta-dark .sl-anno__msg.student { background: #46242c; color: #f2d9de; }',
+      '.pta-dark .sl-anno code { background: #1f2327; color: #ffb3bc; }',
+      '.pta-dark .sl-anno__note { background: #1e3524; border-color: #2f5e3a; color: #69db7c; }',
+      '.pta-dark .sl-anno__thinking { color: #98a2ac; }',
+      '.pta-dark .sl-anno__input input { background: #1e2227; border-color: #4a3238; color: #e6dfe1; }',
+      '.pta-dark .sl-anno__input .sl-anno__skip { background: #2b2024; border-color: #7a4a54; color: #ff8a99; }',
+      '.pta-dark .sl-anno__input .sl-anno__skip:hover { background: #3a2a2f; color: #ffb3bc; }',
+      '.pta-dark .sl-anno--info { background: #23282e; border-left-color: #4dabf7; color: #cfd6dd; }',
+      '.pta-dark .sl-anno-ghost { background: #2b2024; border-color: #4a3238; border-left-color: #e35d6a; }',
+      '.pta-dark .sl-anno-ghost__chip { color: #e8b8bf; }',
+      '.pta-dark .sl-overlay__box { background: #23272c; color: #d5dade; border: 1px solid #333a41; }',
+      '.sl-anno__nextwrap { padding: 6px 4px 2px; text-align: right; }',
+      '.sl-anno__next { background: #9e2335; color: #fff; border: none; border-radius: 13px; padding: 5px 16px; font-size: 12.5px; cursor: pointer; box-shadow: 0 2px 8px rgba(158,35,53,.3); }',
+      '.sl-anno__next:hover { background: #7f1d2b; }',
       '.sl-anno__note { margin: 4px 0 2px; padding: 3px 8px; border-radius: 8px; background: #e9f7ec; border: 1px solid #bfe6c8; color: #2f9e44; font-size: 12.5px; width: fit-content; font-weight: bold; }',
       '.sl-anno__q { flex: 1 1 auto; color: #333; overflow: hidden; }',
       '.sl-anno__btns { display: flex; gap: 2px; flex: 0 0 auto; }',
@@ -981,6 +1096,9 @@ export default new NamedPage('self_learning_solve', async () => {
       '.sl-anno__input button { border: 1px solid #9e2335; background: #9e2335; color: #fff; }',
       '.sl-anno__input button:hover { background: #7f1b2a; }',
       '.sl-anno__input button:disabled { opacity: .5; cursor: default; }',
+      '.sl-anno__input .sl-anno__skip { background: #fff; color: #9e2335; border: 1px solid #d9a5ae; border-radius: 12px; padding: 3px 10px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; }',
+      '.sl-anno__input .sl-anno__skip:hover { background: #fbeef0; color: #7f1b2a; }',
+      '.sl-anno__input .sl-anno__skip:disabled { opacity: .5; cursor: default; background: #fff; }',
       '.sl-anno--resolved { border-left-color: #2f9e44; }',
       '.sl-anno--resolved .sl-anno__head { color: #2f9e44; }',
       '.sl-anno--info { align-items: center; min-height: 40px; }',
@@ -1026,9 +1144,10 @@ export default new NamedPage('self_learning_solve', async () => {
      * submission, before any card exists; once the pop-up card is on screen,
      * the thinking animation lives INSIDE it.
      */
-    function showThinking() {
+    function showThinking(mode) {
       ensureTutorUiStyle();
       lockEditor();
+      if (mode === 'ghost') return; // the flying ghost carries its own spinner
       if (cardState) {
         const $log = $(cardState.dom).find('.sl-anno__log');
         if (!thinkingRow) {
@@ -1038,7 +1157,7 @@ export default new NamedPage('self_learning_solve', async () => {
         $log.append(thinkingRow);
         $log.scrollTop($log[0].scrollHeight);
         $(cardState.dom).find('.sl-anno__input input, .sl-anno__input button').prop('disabled', true);
-        fitZone(cardState.entry, 60, 300);
+        fitZone(cardState.entry, 60, cardMaxPx());
         return;
       }
       showOverlay();
@@ -1051,8 +1170,10 @@ export default new NamedPage('self_learning_solve', async () => {
       if (cardState) {
         if (!$(cardState.dom).hasClass('sl-anno--resolved')) {
           $(cardState.dom).find('.sl-anno__input input, .sl-anno__input button').prop('disabled', false);
+        } else {
+          $(cardState.dom).find('.sl-anno__skip').prop('disabled', false);
         }
-        fitZone(cardState.entry, 60, 300);
+        fitZone(cardState.entry, 60, cardMaxPx());
       }
     }
 
@@ -1068,9 +1189,9 @@ export default new NamedPage('self_learning_solve', async () => {
       // Monaco sizes the zone DOM asynchronously: measuring only once (before
       // layout settles) clips wrapped text. Re-fit after layout and once more
       // after fonts settle.
-      fitZone(entry, 40, 200);
-      requestAnimationFrame(() => fitZone(entry, 40, 200));
-      setTimeout(() => fitZone(entry, 40, 200), 150);
+      fitZone(entry, 40, Math.min(260, cardMaxPx()));
+      requestAnimationFrame(() => fitZone(entry, 40, Math.min(260, cardMaxPx())));
+      setTimeout(() => fitZone(entry, 40, Math.min(260, cardMaxPx())), 150);
       dom.querySelector('.sl-anno__close').addEventListener('click', () => removeZoneEntry(entry));
     }
 
@@ -1080,7 +1201,7 @@ export default new NamedPage('self_learning_solve', async () => {
       const $log = $(cardState.dom).find('.sl-anno__log');
       $log.append(`<div class="sl-anno__note">${icon} ${escapeHtml(text)}</div>`);
       $log.scrollTop($log[0].scrollHeight);
-      fitZone(cardState.entry, 60, 300);
+      fitZone(cardState.entry, 60, cardMaxPx());
     }
 
     function appendCardMsg(role, content) {
@@ -1095,11 +1216,11 @@ export default new NamedPage('self_learning_solve', async () => {
       }
       $log.append($msg);
       $log.scrollTop($log[0].scrollHeight);
-      fitZone(cardState.entry, 60, 300);
+      fitZone(cardState.entry, 60, cardMaxPx());
     }
 
     /** The single interactive question card: a mini chatbox anchored at the line. */
-    function showQuestionCard(rid, ann, accepted = false) {
+    function showQuestionCard(rid, ann, accepted = false, opts = {}) {
       const ed = findScratchpadEditor();
       if (!ed || !ed.getModel()) return;
       const max = ed.getModel().getLineCount();
@@ -1107,6 +1228,8 @@ export default new NamedPage('self_learning_solve', async () => {
       const endLine = Math.min(Math.max(line, Math.floor(ann.endLine) || line), max);
       const dom = document.createElement('div');
       dom.className = 'sl-anno sl-anno--chat';
+      dom.style.setProperty('--sl-log-max', `${Math.max(110, cardMaxPx() - 118)}px`);
+      if (opts.hiddenEnter) dom.style.visibility = 'hidden'; // the flight reveals it
       dom.innerHTML = '<div class="sl-anno__head">'
         + `<span>🤖 ${escapeHtml(i18n('AI Socratic Tutor'))}</span>`
         + `<span class="sl-anno__btns"><button type="button" class="sl-anno__close" title="${escapeHtml(i18n('Dismiss'))}">×</button></span>`
@@ -1114,7 +1237,8 @@ export default new NamedPage('self_learning_solve', async () => {
         + '<div class="sl-anno__log"></div>'
         + '<div class="sl-anno__input">'
         + `<input type="text" maxlength="1000" placeholder="${escapeHtml(i18n('Type your answer... (Enter to send)'))}">`
-        + `<button type="button" title="${escapeHtml(i18n('Send'))}">➤</button>`
+        + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))}">➤</button>`
+        + (accepted ? '' : `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Already fixed it? Jump straight to the next issue.'))}">${escapeHtml(i18n('Next issue'))} ➜</button>`)
         + '</div>';
       const entry = addZone(ed, endLine, 120, dom, { line, endLine });
       cardState = {
@@ -1125,20 +1249,28 @@ export default new NamedPage('self_learning_solve', async () => {
       appendCardMsg('tutor', ann.question);
       // Mirror into the launcher panel: the red button replays this dialogue.
       appendBubble('assistant', ann.question, { line, endLine });
-      fitZone(entry, 60, 300);
-      requestAnimationFrame(() => fitZone(entry, 60, 300));
-      setTimeout(() => fitZone(entry, 60, 300), 150);
+      fitZone(entry, 60, cardMaxPx());
+      requestAnimationFrame(() => fitZone(entry, 60, cardMaxPx()));
+      setTimeout(() => fitZone(entry, 60, cardMaxPx()), 150);
       dom.querySelector('.sl-anno__close').addEventListener('click', () => {
         // Dismissing ends the guided sequence for this attempt.
         removeZoneEntry(entry);
         cardState = null;
+      });
+      $(dom).find('.sl-anno__skip').on('click', () => {
+        const cs = cardState;
+        if (!cs || cs.dom !== dom) return;
+        // Fast-student path: fixed without answering. Record the question as
+        // asked and advance immediately with the current editor code.
+        if (!askedQuestions.includes(cs.question)) askedQuestions.push(cs.question);
+        requestNextQuestion(cs.rid, cs.endLine);
       });
       const input = dom.querySelector('.sl-anno__input input');
       const send = () => {
         const text = (input.value || '').trim();
         if (text) submitCardAnswer(text);
       };
-      dom.querySelector('.sl-anno__input button').addEventListener('click', send);
+      dom.querySelector('.sl-anno__send').addEventListener('click', send);
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
         if (e.key === 'Enter') {
@@ -1149,26 +1281,134 @@ export default new NamedPage('self_learning_solve', async () => {
       setTimeout(() => input.focus(), 50);
     }
 
+    function revealCurrentCard() {
+      if (!cardState) return;
+      cardState.dom.style.visibility = '';
+      $(cardState.dom).addClass('sl-anno--enter');
+      setTimeout(() => { if (cardState) $(cardState.dom).removeClass('sl-anno--enter'); }, 360);
+    }
+
+    /**
+     * FLIP flight: mount the next card hidden, smooth-scroll it into view,
+     * then animate the fixed ghost from the old rect to the new one and
+     * cross-fade into the live card.
+     */
+    function flyGhostToNewCard(ghost, mountFn) {
+      return new Promise((resolve) => {
+        mountFn();
+        const target = cardState && cardState.dom;
+        if (!target) {
+          ghost.remove();
+          resolve();
+          return;
+        }
+        const ed = findScratchpadEditor();
+        if (ed && cardState) {
+          try {
+            ed.revealLineInCenterIfOutsideViewport(cardState.endLine, 0); // ScrollType.Smooth
+          } catch (e) { /* best-effort */ }
+        }
+        const settle = () => {
+          const r = target.getBoundingClientRect();
+          if (!r.width && !r.height) {
+            requestAnimationFrame(settle);
+            return;
+          }
+          ghost.classList.remove('sl-anno-ghost--pulse');
+          ghost.getBoundingClientRect(); // flush layout before enabling the transition
+          ghost.classList.add('sl-anno-ghost--fly');
+          ghost.style.left = `${r.left}px`;
+          ghost.style.top = `${r.top}px`;
+          ghost.style.width = `${r.width}px`;
+          ghost.style.height = `${r.height}px`;
+          setTimeout(() => {
+            ghost.remove();
+            revealCurrentCard();
+            resolve();
+          }, 430);
+        };
+        // let Monaco lay the new zone out and the smooth scroll progress
+        requestAnimationFrame(() => setTimeout(settle, 260));
+      });
+    }
+
     /** Requirement flow: ONE question at a time; the editor locks while the LLM works. */
     async function requestNextQuestion(rid, afterLine, accepted = false) {
       const session = annoSession;
-      const prevCard = cardState; // when a card exists, the spinner shows inside it
-      showThinking();
+      const prevCard = cardState;
+      const useGhost = !!prevCard && !accepted;
+      let ghost = null;
+      if (useGhost) {
+        // The resolved card lifts off as a fixed ghost carrying a thinking
+        // strip; once the next question arrives it FLIES to the new anchor.
+        const rect = prevCard.dom.getBoundingClientRect();
+        ghost = document.createElement('div');
+        ghost.className = 'sl-anno-ghost';
+        ghost.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;`;
+        ghost.innerHTML = '<div class="sl-anno-ghost__chip"><span class="sl-spin--sm"></span>'
+          + `<span>${escapeHtml(i18n('Finding the next issue...'))}</span></div>`;
+        document.body.appendChild(ghost);
+        removeZoneEntry(prevCard.entry);
+        if (cardState === prevCard) cardState = null;
+        showThinking('ghost'); // lock only — the ghost shows the spinner
+        // Instant feedback: the resolved card CONDENSES into a compact
+        // thinking chip right away, pulsing while the LLM works, so the
+        // wait never looks like a frozen full-size card.
+        const g0 = ghost;
+        requestAnimationFrame(() => {
+          if (!g0.isConnected) return;
+          g0.getBoundingClientRect(); // flush layout before transitioning
+          g0.classList.add('sl-anno-ghost--fly');
+          g0.style.width = '250px';
+          g0.style.height = '44px';
+          setTimeout(() => {
+            if (g0.isConnected) {
+              g0.classList.remove('sl-anno-ghost--fly');
+              g0.classList.add('sl-anno-ghost--pulse');
+            }
+          }, 400);
+        });
+      } else {
+        showThinking(); // in-card spinner or full overlay, as before
+      }
+      const dropGhost = (fade = true) => {
+        if (!ghost) return;
+        const g = ghost;
+        ghost = null;
+        if (fade) {
+          g.classList.add('sl-anno-ghost--out');
+          setTimeout(() => g.remove(), 260);
+        } else g.remove();
+      };
       try {
         const res = await request.post(tutorUrl, {
-          operation: 'annotate', rid, asked: JSON.stringify(askedQuestions.slice(-8)),
+          operation: 'annotate', rid, asked: JSON.stringify(askedQuestions.slice(-12)), code: currentEditorCode(),
         });
-        if (session !== annoSession || !extended) return;
+        if (session !== annoSession || !extended) {
+          dropGhost(false);
+          return;
+        }
         hideThinking();
         if (res.marker) appendDivider(res.marker, !!res.markerAccepted); // the panel history gains the divider
-        if (prevCard) {
-          removeZoneEntry(prevCard.entry);
-          if (cardState === prevCard) cardState = null;
+        if (prevCard && cardState === prevCard) {
+          removeZoneEntry(prevCard.entry); // non-ghost path only
+          cardState = null;
         }
-        if (res.annotation) showQuestionCard(rid, res.annotation, accepted);
-        else if (accepted) showInfoCard(`🎉 ${i18n('Accepted! Great job!')}`, afterLine || 0);
-        else showInfoCard(i18n('No further questions — revise your code and resubmit!'), afterLine || 0);
+        if (res.annotation) {
+          if (ghost) {
+            const g = ghost;
+            ghost = null;
+            await flyGhostToNewCard(g, () => showQuestionCard(rid, res.annotation, accepted, { hiddenEnter: true }));
+          } else {
+            showQuestionCard(rid, res.annotation, accepted);
+          }
+        } else {
+          dropGhost();
+          if (accepted) showInfoCard(`🎉 ${i18n('Accepted! Great job!')}`, afterLine || 0);
+          else showInfoCard(i18n('All issues covered — apply your fixes and submit once to verify!'), afterLine || 0);
+        }
       } catch (e) {
+        dropGhost();
         if (session !== annoSession) return;
         hideThinking();
         console.warn('[self-learning] tutor annotations unavailable:', e.message);
@@ -1195,6 +1435,7 @@ export default new NamedPage('self_learning_solve', async () => {
           question: cs.question,
           history: JSON.stringify(priorHistory.slice(-10)),
           text,
+          code: currentEditorCode(),
         });
         if (session !== annoSession) return;
         cs.history.push({ role: 'student', content: text });
@@ -1209,14 +1450,19 @@ export default new NamedPage('self_learning_solve', async () => {
         if (res.resolved) {
           askedQuestions.push(cs.question);
           $(cs.dom).addClass('sl-anno--resolved');
-          $(cs.dom).find('.sl-anno__input input, .sl-anno__input button').prop('disabled', true);
-          // Resolution is terminal: no further questions are generated now.
-          // On a failed verdict the green card sends the student back to the
-          // CODE; on an accepted one the reflection simply closes with praise.
-          appendCardNote(cs.accepted
-            ? i18n('Great reflection — you have truly mastered this problem!')
-            : i18n('Now modify your code accordingly and resubmit!'), cs.accepted ? '🎉' : '✏️');
-          fitZone(cs.entry, 60, 300);
+          $(cs.dom).find('.sl-anno__input input, .sl-anno__send').prop('disabled', true);
+          if (cs.accepted) {
+            // Post-success reflection stays terminal: close with praise.
+            appendCardNote(i18n('Great reflection — you have truly mastered this problem!'), '🎉');
+          } else {
+            // Guided session: the student FIXES this spot in the editor, then
+            // clicks the (always-visible) Next-issue button — the next
+            // question is generated against the CURRENT code, so fixed flaws
+            // are skipped and anchors match the editor. One submission at the
+            // very end verifies the whole walkthrough.
+            appendCardNote(i18n('Great — now FIX this line in the editor.'), '✏️');
+          }
+          fitZone(cs.entry, 60, cardMaxPx());
         }
       } catch (e) {
         if (session !== annoSession) return;
@@ -1302,20 +1548,36 @@ export default new NamedPage('self_learning_solve', async () => {
       // The IDE dispatches SCRATCHPAD_POST_SUBMIT with the submit request
       // promise as its payload. The *_FULFILLED action is emitted deep inside
       // the middleware chain and never crosses store.dispatch, so the reliable
-      // hook is the original action: attach to its promise directly. Pretest
-      // runs dispatch a different action and are deliberately ignored.
+      // hook is the original action: attach to its promise directly.
+      // Rejections (e.g. submitting EMPTY code fails the server's `code`
+      // validation) must be caught on BOTH promises — the raw request payload
+      // and the promise the middleware returns from dispatch — otherwise they
+      // surface as uncaught runtime errors. Translate them into a toast.
+      const submitErrorToast = (e) => {
+        const msg = String((e && e.message) || e || '');
+        Notification.error(/Field code|\bcode\b.*validation|validation.*\bcode\b/i.test(msg)
+          ? i18n('Please write some code before submitting.')
+          : (msg || i18n('Submit failed.')));
+      };
+      const HOOKED_ACTIONS = ['SCRATCHPAD_POST_SUBMIT', 'SCRATCHPAD_POST_PRETEST'];
       const rawDispatch = store.dispatch.bind(store);
       store.dispatch = (action) => {
+        const hooked = action && HOOKED_ACTIONS.includes(action.type)
+          && action.payload && typeof action.payload.then === 'function';
         try {
-          if (action && action.type === 'SCRATCHPAD_POST_SUBMIT' && action.payload && typeof action.payload.then === 'function') {
+          if (hooked) {
             action.payload.then((res) => {
-              if (res && res.rid) trackScratchpadSubmission(res.rid);
-            }).catch(() => { /* submit failures already surface in the IDE */ });
+              if (action.type === 'SCRATCHPAD_POST_SUBMIT' && res && res.rid) trackScratchpadSubmission(res.rid);
+            }).catch(submitErrorToast);
           } else if (action && action.type === 'SCRATCHPAD_POST_SUBMIT_FULFILLED' && action.payload && action.payload.rid) {
             trackScratchpadSubmission(action.payload.rid); // fallback, in case the middleware ever routes it here
           }
         } catch (e) { /* the tutor hook is best-effort */ }
-        return rawDispatch(action);
+        const result = rawDispatch(action);
+        // The toast already fired via the payload catch; this catch only
+        // marks the middleware's returned promise as handled.
+        if (hooked && result && typeof result.catch === 'function') result.catch(() => {});
+        return result;
       };
       const sock = new SockJs(UiContext.ws_prefix + UiContext.pretestConnUrl);
       sock.onmessage = (message) => {
@@ -1374,7 +1636,7 @@ export default new NamedPage('self_learning_solve', async () => {
     }
 
     $(window).on('resize', () => {
-      if (cardState) fitZone(cardState.entry, 60, 300);
+      if (cardState) fitZone(cardState.entry, 60, cardMaxPx());
     });
     $(document).on('click', '#sl-open-scratchpad', (ev) => {
       ev.preventDefault();

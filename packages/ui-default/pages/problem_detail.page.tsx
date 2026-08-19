@@ -10,6 +10,7 @@ import {
   delay, i18n, loadReactRedux, pjax, request, tpl,
 } from 'vj/utils';
 import { openDB } from 'vj/utils/db';
+import { hookScratchpadStore, trackSubmission } from './auto_scratchpad.page';
 
 class ProblemPageExtender {
   isExtended = false;
@@ -145,6 +146,10 @@ const page = new NamedPage(['problem_detail', 'contest_detail_problem', 'homewor
 
     // @ts-ignore
     window.store = store;
+    // PTA UI: wrap store.dispatch NOW, before the React tree mounts below —
+    // react-redux captures the dispatch reference at mount time, so a wrapper
+    // installed any later is invisible to the toolbar's submit action.
+    hookScratchpadStore();
     const sock = new WebSocket(UiContext.ws_prefix + UiContext.pretestConnUrl);
     sock.onmessage = (message) => {
       const msg = JSON.parse(message.data);
@@ -332,7 +337,13 @@ const page = new NamedPage(['problem_detail', 'contest_detail_problem', 'homewor
             code: yaml.dump(ans),
           })
           .then((res) => {
-            window.location.href = res.url;
+            // Site-wide PTA UI: stay on the page and pop the result modal
+            // instead of bouncing to the record page, so the learner can
+            // revise the answers and resubmit in place.
+            let rid = res.rid;
+            if (!rid && res.url) rid = String(res.url).split('/record/')[1];
+            if (rid) trackSubmission(String(rid).split(/[/?#]/)[0]);
+            else window.location.href = res.url;
           })
           .catch((err) => {
             Notification.error(err.message);

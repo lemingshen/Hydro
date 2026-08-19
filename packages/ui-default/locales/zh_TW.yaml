@@ -1047,3 +1047,40 @@ Test Case: 測試點
 Memory(KB): 記憶體(KB)
 Time(ms): 耗時(ms)
 'Judging...': 評測中...
+Please write some code before submitting.: 提交前請先編寫程式碼。
+Submit failed.: 提交失敗。
+Subjectives: 主觀題
+User Management: 用戶管理
+Add Users: 批次新增用戶
+Bulk-create accounts from a spreadsheet (CSV / XLS / XLSX) and grant them access to one or more domains.: 透過表格檔案（CSV / XLS / XLSX）批次建立帳號，並授予一個或多個域的存取權限。
+Upload the user list: 上傳用戶名單
+Domain access and role: 域存取與角色
+Every listed user will be added to every domain below with the chosen role. Add more rows for multi-domain access.: 名單中的每位用戶都將以所選角色加入以下每個域。如需多域存取，請新增更多列。
+Add domain: 新增域
+Cancel: 取消
+'Parsing...': 解析中...
+Result: 結果
+Created: 已建立
+Already existed (added to domains): 已存在（已加入域）
+Skipped (unavailable): 已跳過（不可用）
+Errors: 錯誤
+New accounts use the password format: 新帳號的密碼格式為
+Please ask users to change their password after the first login.: 請提醒用戶首次登入後修改密碼。
+'Working...': 處理中...
+Bulk user import finished.: 批次匯入用戶完成。
+'The first four columns of the header row must be exactly:': 表頭前四欄必須嚴格為：
+'The first five columns of the header row must be exactly:': 表頭前五欄必須嚴格為：
+'The first five columns must be:': 前五欄必須為：
+AI Suggestions: 智能建議
+"Generating suggestions...": 正在生成建議...
+Download PDF: 下載 PDF
+"The AI is generating your report...": AI 正在生成報告...
+"This usually takes 10-30 seconds. Please keep this window open and do not quit.": 通常需要 10-30 秒，請保持視窗開啟，不要退出。
+Copied!: 已複製！
+Next issue: 下一個問題
+"Great — now FIX this line in the editor.": 很好——現在請在編輯器中修改這一行。
+"All issues covered — apply your fixes and submit once to verify!": 所有問題已講解完畢——請完成修改後提交一次進行驗證！
+"Finding the next issue...": 正在尋找下一個問題...
+"Already fixed it? Jump straight to the next issue.": 已經修好了？直接跳到下一個問題。
+View Last Submission: 查看上次提交
+"Loading...": 載入中...

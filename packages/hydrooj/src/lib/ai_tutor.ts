@@ -18,7 +18,6 @@ SystemSetting(
     Setting('setting_ai_tutor', 'ai_tutor.model', '', 'text', 'ai_tutor.model', 'Model name (leave blank for the provider default)'),
     Setting('setting_ai_tutor', 'ai_tutor.api_key', '', 'password', 'ai_tutor.api_key', 'API key of the selected provider. For security the saved key is never displayed, so this field always looks blank. Leave it blank to keep the current key.', FLAG_SECRET),
     Setting('setting_ai_tutor', 'ai_tutor.base_url', '', 'text', 'ai_tutor.base_url', 'API base URL or full endpoint (optional, for proxies / compatible gateways). A base like https://api.deepseek.com works, and the chat path is appended automatically.'),
-    Setting('setting_ai_tutor', 'ai_tutor.max_tokens', 1024, 'number', 'ai_tutor.max_tokens', 'Max tokens per tutor reply'),
     Setting('setting_ai_tutor', 'ai_tutor.temperature', 0.6, 'float', 'ai_tutor.temperature', 'Sampling temperature'),
     Setting('setting_ai_tutor', 'ai_tutor.timeout', 60, 'number', 'ai_tutor.timeout', 'Provider request timeout (seconds)'),
     Setting('setting_ai_tutor', 'ai_tutor.max_messages', 80, 'number', 'ai_tutor.max_messages', 'Max stored messages per tutoring thread'),
@@ -90,7 +89,10 @@ function mergeAlternating(messages: ChatMessage[]): ChatMessage[] {
     return out;
 }
 
-export async function callProvider(systemPrompt: string, messages: ChatMessage[]): Promise<string> {
+export async function callProvider(
+    systemPrompt: string, messages: ChatMessage[],
+    opts: { temperature?: number, timeoutMs?: number } = {},
+): Promise<string> {
     if (!tutorEnabled()) throw new Error('The AI tutor is disabled by the administrator.');
     const apiKey = String(system.get('ai_tutor.api_key') || '').trim();
     if (!apiKey) throw new Error('The AI tutor is not configured yet (missing API key). Please contact the administrator.');
@@ -98,50 +100,65 @@ export async function callProvider(systemPrompt: string, messages: ChatMessage[]
     const preset = PROVIDERS[provider] || PROVIDERS.claude;
     const model = String(system.get('ai_tutor.model') || preset.defaultModel).trim();
     const url = resolveEndpoint(preset.style, system.get('ai_tutor.base_url'), preset.url);
-    const maxTokens = +system.get('ai_tutor.max_tokens') || 1024;
-    const temperature = Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.6;
-    const timeout = (+system.get('ai_tutor.timeout') || 60) * 1000;
+    const temperature = opts.temperature
+        ?? (Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.6);
+    const timeout = opts.timeoutMs ?? ((+system.get('ai_tutor.timeout') || 60) * 1000);
 
     const msgs = mergeAlternating(messages);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    let resp: Response;
-    try {
-        if (preset.style === 'anthropic') {
-            resp = await fetch(url, {
+    const doFetch = async (body: any): Promise<Response> => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        try {
+            return await fetch(url, {
                 method: 'POST',
                 signal: controller.signal,
-                headers: {
-                    'content-type': 'application/json',
-                    'x-api-key': apiKey,
-                    'anthropic-version': '2023-06-01',
-                },
-                body: JSON.stringify({
-                    model, max_tokens: maxTokens, temperature, system: systemPrompt, messages: msgs,
-                }),
+                headers: preset.style === 'anthropic'
+                    ? {
+                        'content-type': 'application/json',
+                        'x-api-key': apiKey,
+                        'anthropic-version': '2023-06-01',
+                    }
+                    : {
+                        'content-type': 'application/json',
+                        authorization: `Bearer ${apiKey}`,
+                    },
+                body: JSON.stringify(body),
             });
-        } else {
-            resp = await fetch(url, {
-                method: 'POST',
-                signal: controller.signal,
-                headers: {
-                    'content-type': 'application/json',
-                    authorization: `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify({
-                    model,
-                    temperature,
-                    max_tokens: maxTokens,
-                    messages: [{ role: 'system', content: systemPrompt }, ...msgs],
-                }),
+        } catch (e) {
+            if (e.name === 'AbortError') throw new Error('The AI provider timed out. Please try again.');
+            throw new Error(`Cannot reach the AI provider at ${url}: ${e.message}`);
+        } finally {
+            clearTimeout(timer);
+        }
+    };
+    let resp: Response;
+    if (preset.style === 'anthropic') {
+        // Site policy: never impose a token limit. Anthropic REQUIRES the
+        // max_tokens field though, so "unlimited" means the model's own
+        // output ceiling — which differs per model. Walk a ladder of
+        // ceilings and fall back automatically when the API says the value
+        // exceeds this model's cap.
+        const LADDER = [64000, 32000, 8192, 4096];
+        resp = await doFetch({
+            model, max_tokens: LADDER[0], temperature, system: systemPrompt, messages: msgs,
+        });
+        for (let i = 1; i < LADDER.length && !resp.ok && resp.status === 400; i++) {
+            const detail = await resp.clone().text().catch(() => '');
+            if (!/max_tokens/i.test(detail)) break;
+            logger.info('anthropic rejected max_tokens=%d for %s; retrying with %d', LADDER[i - 1], model, LADDER[i]);
+            resp = await doFetch({
+                model, max_tokens: LADDER[i], temperature, system: systemPrompt, messages: msgs,
             });
         }
-    } catch (e) {
-        clearTimeout(timer);
-        if (e.name === 'AbortError') throw new Error('The AI provider timed out. Please try again.');
-        throw new Error(`Cannot reach the AI provider at ${url}: ${e.message}`);
+    } else {
+        // OpenAI-compatible: omitting max_tokens imposes no limit — the
+        // provider/model's own default ceiling applies.
+        resp = await doFetch({
+            model,
+            temperature,
+            messages: [{ role: 'system', content: systemPrompt }, ...msgs],
+        });
     }
-    clearTimeout(timer);
     if (!resp.ok) {
         let detail = '';
         try {
@@ -151,14 +168,44 @@ export async function callProvider(systemPrompt: string, messages: ChatMessage[]
         throw new Error(`AI provider returned HTTP ${resp.status} from ${url}. ${detail}`);
     }
     const data: any = await resp.json();
+    // Robust text extraction: strings, arrays of parts, {type:'text'|'output_text'}.
+    const collectText = (v: any): string => {
+        if (v == null) return '';
+        if (typeof v === 'string') return v;
+        if (Array.isArray(v)) return v.map(collectText).filter((x) => x).join('\n');
+        if (typeof v === 'object') {
+            if (typeof v.text === 'string' && (!v.type || v.type === 'text' || v.type === 'output_text')) return v.text;
+            return '';
+        }
+        return '';
+    };
     let text = '';
+    let finishReason = '';
     if (preset.style === 'anthropic') {
-        text = (data.content || []).filter((i) => i.type === 'text').map((i) => i.text).join('\n');
+        text = collectText(data.content);
+        finishReason = data.stop_reason || '';
+        if (!text.trim() && finishReason === 'max_tokens'
+            && Array.isArray(data.content) && data.content.some((c: any) => c?.type === 'thinking')) {
+            logger.warn('provider %s/%s spent the whole budget on thinking blocks (stop_reason=max_tokens)', provider, model);
+            throw new Error('The AI model spent its entire token budget "thinking" and produced no final answer. Please switch to a non-reasoning model, or ask the administrator to check the provider limits.');
+        }
     } else {
-        text = data.choices?.[0]?.message?.content || '';
+        const choice = data.choices?.[0] || {};
+        text = collectText(choice.message?.content) || collectText(choice.text);
+        finishReason = choice.finish_reason || '';
+        if (!text.trim() && typeof choice.message?.reasoning_content === 'string' && choice.message.reasoning_content.trim()) {
+            logger.warn('provider %s/%s returned only reasoning_content (finish_reason=%s)', provider, model, finishReason || 'n/a');
+            throw new Error(`The AI model spent its entire token budget "thinking" (finish reason: ${finishReason || 'unknown'}) and produced no final answer. Please switch to a non-reasoning model, or ask the administrator to check the provider limits.`);
+        }
     }
     text = (text || '').trim();
-    if (!text) throw new Error('The AI provider returned an empty response.');
+    if (!text) {
+        logger.warn(
+            'empty AI response from %s/%s (finish/stop reason: %s), raw payload: %s',
+            provider, model, finishReason || 'n/a', JSON.stringify(data).slice(0, 600),
+        );
+        throw new Error(`The AI provider returned an empty response${finishReason ? ` (finish reason: ${finishReason})` : ''}. The backend log has the raw payload.`);
+    }
     return text;
 }
 
@@ -525,6 +572,8 @@ export interface TutorTurnContext {
     objective?: ObjectiveAnalysis | null;
     /** Every earlier judged (non-pretest) submission, oldest first, EXCLUDING the latest rdoc. */
     attempts?: TutorAttempt[];
+    /** The student's CURRENT editor code during a guided session (fixes applied between questions). */
+    liveCode?: string;
 }
 
 export function problemKindOf(config: any): ProblemKind {
@@ -645,23 +694,23 @@ export interface AnnotationDialogueResult {
 
 const logger = new Logger('ai-tutor');
 
-const ANNOTATION_SYSTEM_PROMPT = `You are the line-annotation engine of a Socratic programming tutor. You receive a problem, a judge verdict briefing, and the student's submitted code with line numbers — possibly with a list of questions already asked.
+const ANNOTATION_SYSTEM_PROMPT = `You are the line-annotation engine of a Socratic programming tutor. You are guiding ONE student through EVERY distinct flaw of a FAILED submission within a single session, one anchored question at a time: a flaw is discussed, the student fixes it in the editor, and then you move to the NEXT remaining flaw — the student submits again only once, at the very end. You receive the problem, the judge verdict briefing of the submitted attempt, the SUBMITTED code, possibly the student's CURRENT editor code (with their in-progress fixes applied), and the list of questions already asked.
 Respond with STRICT JSON only — a single object shaped {"line": <int>, "endLine": <int>, "question": "<string>"}, or the literal null — and nothing else: no prose, no markdown fences.
 Rules:
 - Write in English ONLY, regardless of the language of the problem statement, the student's code comments, or anything else in the context.
-- Produce exactly ONE question: the single most instructive one for THIS verdict right now. It must make the student THINK about their own code: point at what to examine, never state the fix, never write code, never reveal hidden test data.
-- line and endLine refer to the numbered code exactly, anchored where the issue most likely lives (the likely cause of the first failure, the limit being exceeded, a fragile assumption).
+- Produce exactly ONE question about the NEXT most important flaw that is STILL PRESENT in the current code and NOT yet covered by the already-asked list. Skip anything the student has already fixed. It must make the student THINK about their own code: point at what to examine, never state the fix, never write code, never reveal hidden test data.
+- When CURRENT editor code is provided, line and endLine MUST refer to the CURRENT code's numbering — that is what the student sees in the editor. Otherwise they refer to the submitted code.
 - One sentence, under 160 characters, ending with a question mark.
 - The question is rendered as markdown: wrap EVERY code identifier, expression, value, or operator you mention in inline code using backtick characters (for example variable names, function calls, operators such as the plus sign). Never use fenced code blocks.
 - Never repeat or trivially rephrase any question in the already-asked list; ask the next most instructive one instead.
 - If the verdict is Accepted, switch to SELF-REFLECTION: ask exactly ONE short reflection question — the root cause of an earlier failed attempt (when the prior-attempt trail shows failures), why a specific line is correct or necessary, the solution's time or space complexity, or the general lesson learned — anchored to the most relevant line, still without writing code. If the prior-attempt trail shows this problem was already Accepted before this attempt, pick a fresh angle or respond with null.
-- If nothing genuinely useful remains to ask, respond with null.`;
+- If the current code appears to contain NO remaining flaw that would explain the failed verdict — every issue is either fixed or already covered — respond with null: the walkthrough is complete.`;
 
 const ANNOTATION_DIALOGUE_PROMPT = `You are conducting a focused Socratic mini-dialogue anchored to specific lines of the student's code. You asked the question shown; the student has now answered. Evaluate their REASONING, not their wording.
 Respond with STRICT JSON only — a single object shaped {"reply": "<string>", "resolved": <true|false>} — and nothing else: no prose, no markdown fences.
 Rules:
 - Write in English ONLY, even when the student answers in another language: understand them, but reply in English.
-- If the reasoning is correct and complete for this question, set resolved to true. The reply then depends on the overall verdict shown in the context: if it is NOT Accepted, confirm their reasoning in one warm sentence and explicitly ask them to NOW MODIFY the code on the anchored lines according to that understanding and resubmit — without stating the exact edit. If the overall verdict IS Accepted, this is a post-success self-reflection: confirm their reasoning warmly, celebrate the insight in one sentence, and close — do NOT tell them to modify or resubmit anything.
+- If the reasoning is correct and complete for this question, set resolved to true. The reply then depends on the overall verdict shown in the context: if it is NOT Accepted, confirm their reasoning in one warm sentence and explicitly ask them to APPLY the fix on the anchored lines NOW, in the editor, according to that understanding — without stating the exact edit — and tell them that once fixed they can continue to the next issue. Do NOT tell them to resubmit yet: more issues may remain, and one final submission at the end of the walkthrough verifies everything. If the overall verdict IS Accepted, this is a post-success self-reflection: confirm their reasoning warmly, celebrate the insight in one sentence, and close — do NOT tell them to modify or resubmit anything.
 - Otherwise set resolved to false and let the reply probe the gap with exactly one short follow-up question.
 - The reply is one or two short sentences, under 300 characters, rendered as markdown: wrap EVERY code identifier, expression, value, or operator you mention in inline code using backtick characters, and use **bold** for emphasis where helpful. Never use fenced code blocks, never give the fix, never reveal hidden test data.
 - Do not accept a bare guess as understanding: an answer without a reason gets a follow-up asking for the reason.`;
@@ -738,7 +787,12 @@ function parseAnnotationObject(raw: string, codeLineCount: number, asked: string
  */
 export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = []): Promise<TutorAnnotation | null> {
     if (!c.rdoc || (c.problemKind || 'programming') !== 'programming') return null;
-    const codeLineCount = String(c.rdoc.code || '').split('\n').length;
+    const submitted = String(c.rdoc.code || '');
+    const live = String(c.liveCode || '');
+    const liveDiffers = !!live.trim() && live !== submitted;
+    // Anchors must match what the student SEES: the current editor code once
+    // they start applying fixes mid-session.
+    const codeLineCount = (liveDiffers ? live : submitted).split('\n').length;
     const user = [
         `Write the question in ${annotationLanguage(c.uiLang)}.`,
         `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
@@ -749,9 +803,11 @@ export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = [
             : '',
         '--- Judge verdict briefing (LATEST attempt) ---',
         buildVerdictBriefing(c.rdoc),
-        '--- Student code (line-numbered) ---',
-        numberedCode(c.rdoc.code || ''),
-        asked.length ? `--- Questions already asked (do NOT repeat or rephrase) ---\n${asked.map((q) => `- ${q}`).join('\n')}` : '',
+        '--- SUBMITTED code of the judged attempt (line-numbered) ---',
+        numberedCode(submitted),
+        liveDiffers ? '--- CURRENT editor code (fixes in progress; anchor line/endLine HERE) ---' : '',
+        liveDiffers ? numberedCode(live) : '',
+        asked.length ? `--- Questions already asked and resolved (do NOT repeat or rephrase; their flaws should be fixed) ---\n${asked.map((q) => `- ${q}`).join('\n')}` : '',
         '--- End ---',
         'Respond with the JSON object (or null) only.',
     ].filter((x) => x).join('\n');
@@ -784,7 +840,7 @@ export interface AnnotationDialogueInput {
  * output degrades to an unresolved plain-text reply.
  */
 export async function runAnnotationDialogue(c: TutorTurnContext, input: AnnotationDialogueInput): Promise<AnnotationDialogueResult> {
-    const code = c.rdoc?.code || '';
+    const code = c.liveCode || c.rdoc?.code || '';
     const codeLines = String(code).split('\n');
     const line = Math.min(Math.max(1, input.line), codeLines.length);
     const endLine = Math.min(Math.max(line, input.endLine || line), codeLines.length);
@@ -829,3 +885,77 @@ export const OPENING_DIRECTIVE = '[SYSTEM DIRECTIVE] Compose your OPENING messag
 export const ACCEPTED_DIRECTIVE = '[SYSTEM DIRECTIVE] The student\'s latest submission was ACCEPTED. Congratulate them genuinely and briefly (reference something real that improved). Ask AT MOST ONE short, clearly optional question — the one-sentence root cause of the earlier failure — and make clear they are done and free to stop here. Do not chain further questions unless they explicitly ask to continue; if they do, follow section 4-C under its hard cap.';
 export const ACCEPTED_OPENING_DIRECTIVE = '[SYSTEM DIRECTIVE] The latest submission is ACCEPTED and this is your first message in this conversation. Congratulate the student specifically (reference something real in their code) and keep it SHORT. Pose AT MOST ONE light, clearly optional question from section 4-C — or none at all — and tell them they can simply stop here. Never open with multiple questions; the victory lap is optional and runs under the section 4-C hard cap.';
 export const RESUBMIT_DIRECTIVE = '[SYSTEM DIRECTIVE] The student submitted a NEW attempt (see the latest [NEW SUBMISSION] block and updated context). Privately re-diagnose. If they made progress, acknowledge exactly what improved. Then continue tutoring with one aimed question from the appropriate stage.';
+
+/* ---------------------- post-acceptance AI Suggestions ---------------------- */
+
+export interface SuggestionAttempt {
+    at: number;
+    lang: string;
+    statusText: string;
+    score: number;
+    accepted: boolean;
+    code: string;
+}
+
+export interface SuggestionsContext {
+    pdoc: ProblemDoc;
+    attempts: SuggestionAttempt[];
+    uiLang: string;
+}
+
+export const SUGGESTIONS_SYSTEM_PROMPT = `You are an experienced programming instructor writing a post-acceptance code review for ONE student who has just gotten this problem Accepted.
+
+OUTPUT CONTRACT:
+- Write the ENTIRE report in English, in pure Markdown (headings, lists, fenced code blocks). No preamble and no closing pleasantries — start directly with the title line "# AI Suggestions Report".
+- Never reveal hidden test data. Never invent facts: every behavioral claim must follow from the submission timestamps and code differences you are given; when evidence is thin, say so plainly.
+- The idiom/static-analysis outline below is written for C++; APPLY THE EQUIVALENT ANALYSIS FOR THE STUDENT'S ACTUAL SUBMISSION LANGUAGE (e.g. Pythonic idioms for Python), keeping the same section structure.
+- Quote the student's own code freely, keeping each quoted block focused (15 lines or fewer).
+
+COVER AT LEAST THESE SECTIONS (add more when genuinely useful):
+
+## Debugging Behavior (The "Thrash Factor")
+- **Attempt Frequency:** use the submission timestamps to judge whether the student used the auto-grader as a compiler (rapid-fire submissions) versus testing methodically; cite the actual time gaps.
+- **Modification Size:** compare consecutive submissions — meaningful logic fixes versus random "guess-and-check" edits (e.g. arbitrarily adding +1 to variables).
+
+## The Error Trajectory
+- **Syntax Struggles:** whether the student spent multiple attempts fighting basic syntax or compiler errors before reaching a compilable state.
+- **Logic vs. Edge Cases:** whether early failures were core-logic flaws or only specific boundary cases (negative numbers, empty inputs, limits).
+
+## Modern Idioms & Static Analysis (adapted to the actual language)
+- **Outdated vs. modern constructs** (for C++: raw arrays over std::vector, printf over std::cout, raw pointers over smart pointers; for Python: manual index loops over iteration/comprehensions, string concatenation in loops, and so on).
+- **Pass-by-Reference:** large objects passed by value causing unnecessary copying, where the language makes this relevant.
+- **Variable Scoping & Naming:** globally scoped state, opaque names (a, temp), declarations far from first use.
+- **Code Duplication:** repeated blocks that deserve a helper function (DRY principle).
+
+## Algorithmic Efficiency
+- **Big-O Complexity:** explicitly state the time AND space complexity of the final accepted solution.
+- **Redundant Computations:** expensive calls inside loop conditions (e.g. recomputing a size every iteration) and repeated work that could be hoisted or cached.
+
+## Constructive Refactoring
+- For each key snippet, show a "Student version" fenced code block immediately followed by a "Refactored version" fenced code block in idiomatic style, each pair with a one-line rationale.
+- End with **"The single most critical concept to review before the next assignment"** — exactly one concept, justified in two sentences.
+
+Target length: 600-1100 words plus code blocks. Be specific, kind, and honest.`;
+
+/** One comprehensive Markdown report over the full submission trajectory. */
+export async function runSuggestionsReport(c: SuggestionsContext): Promise<string> {
+    const finalAccepted = c.attempts.map((a) => a.accepted).lastIndexOf(true);
+    const lines: string[] = [
+        '--- Problem statement (may be truncated) ---',
+        truncate(resolveStatement(c.pdoc, c.uiLang), 3000),
+        `--- Submission history (${c.attempts.length} attempt(s), oldest first; timestamps are ISO-8601) ---`,
+    ];
+    c.attempts.forEach((a, i) => {
+        const isFinal = i === finalAccepted;
+        lines.push(`Attempt ${i + 1} @ ${new Date(a.at).toISOString()} — ${a.statusText} (score ${a.score})${a.lang ? ` [${a.lang}]` : ''}${isFinal ? ' — FINAL ACCEPTED VERSION' : ''}`);
+        lines.push('```');
+        lines.push(truncate(a.code || '(code unavailable)', isFinal ? 6000 : 1500));
+        lines.push('```');
+    });
+    lines.push('--- End of context. Write the report now. ---');
+    return await callProvider(
+        SUGGESTIONS_SYSTEM_PROMPT,
+        [{ role: 'user', content: lines.join('\n') }],
+        { temperature: 0.4, timeoutMs: 180000 },
+    );
+}

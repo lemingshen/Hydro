@@ -78,6 +78,37 @@
   .sl-q-pass { outline: 2px solid #7fce7f; outline-offset: 2px; border-radius: 3px; }
   .sl-q-fail { outline: 2px solid #f5a09a; outline-offset: 2px; border-radius: 3px; }
   .sl-q-partial { outline: 2px solid #f6c344; outline-offset: 2px; border-radius: 3px; }
+  /* Dark theme (html gains .pta-dark from the page script) */
+  .pta-dark .sl-float { background: #23272c; border-color: #333a41; }
+  .pta-dark .sl-float__resize::after { border-color: #5a6470; }
+  .pta-dark .sl-float__resize:hover::after { border-color: #9aa4ad; }
+  .pta-dark .sl-float__hint { color: #8b97a3; }
+  .pta-dark .sl-empty { color: #98a2ac; }
+  .pta-dark .sl-chat { background: #1e2227; }
+  .pta-dark .sl-msg.assistant .sl-bubble { background: #2a3036; border-color: #3a424b; color: #d5dade; }
+  .pta-dark .sl-msg.user .sl-bubble { background: #46242c; color: #f2d9de; }
+  .pta-dark .sl-bubble th, .pta-dark .sl-bubble td { border-color: #3a424b; }
+  .pta-dark .sl-bubble blockquote { border-left-color: #5a6470; color: #aab4be; }
+  .pta-dark .sl-bubble hr { border-top-color: #3a424b; }
+  .pta-dark .sl-bubble pre { background: #1b1f24; border-color: #30363d; color: #d4d4d4; }
+  .pta-dark .sl-bubble code { background: #32383f; color: #e6bfc5; }
+  .pta-dark .sl-bubble pre code { background: none; color: inherit; }
+  .pta-dark .sl-divider { color: #98a2ac; }
+  .pta-dark .sl-divider span { background: #2a3036; color: #aab4be; }
+  .pta-dark .sl-divider.accepted span { background: #1e3524; color: #69db7c; }
+  .pta-dark .sl-loc { color: #ff8a99; }
+  .pta-dark .sl-bubble--note { background: #1e3524 !important; border-color: #2f5e3a !important; color: #69db7c; }
+  .pta-dark .sl-input-row { background: #23272c; border-top-color: #333a41; }
+  .pta-dark .sl-input-row textarea { background: #1e2227; border-color: #3a424b; color: #d5dade; }
+  .pta-dark .sl-typing { color: #98a2ac; }
+  .pta-dark .sl-verdict { border-color: #3a424b; color: #cfd6dd; }
+  .pta-dark .sl-verdict.pass { background: #1e3524; border-color: #2f5e3a; }
+  .pta-dark .sl-verdict.fail { background: #3a2225; border-color: #5c3a41; }
+  .pta-dark .sl-verdict.pending { background: #262b31; }
+  .pta-dark .sl-cases span { background: #2a3036; color: #aab4be; }
+  .pta-dark .sl-cases span.pass { background: #1e3524; color: #69db7c; }
+  .pta-dark .sl-cases span.fail { background: #3a2225; color: #ff8787; }
+  .pta-dark .sl-cases span.partial { background: #3a3320; color: #e0b64c; }
 </style>
 <div class="row">
   <div class="medium-7 columns">

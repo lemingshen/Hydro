@@ -41,21 +41,68 @@ code
 
 .toolbar
   position: absolute
-  white-space: no-wrap
-  right: 0 !important
-  top: 0 !important
-  padding: rem(5px) 0
-  opacity: 1 !important
-  background: rgba($syntax-hl-bg-color, 0.8)
+  white-space: nowrap
+  right: rem(8px) !important
+  top: rem(8px) !important
+  padding: 0
+  opacity: 0.55 !important
+  transition: opacity .15s ease
   font-family: $primary-font-family
   pointer-events: all
   user-select: none
 
+pre:hover > .toolbar,
+.code-toolbar:hover .toolbar,
+.toolbar:focus-within
+  opacity: 1 !important
+
 .toolbar-item
   a
-    font-size: large !important
-    border-radius: 0px !important
+    font-size: rem(12px) !important
+    border-radius: rem(6px) !important
     background: none !important
+    box-shadow: none !important
+    padding: rem(3px) rem(8px) !important
+
+// The copy button: GitHub-style icon-only square. The high-specificity
+// selector (and !important on the contested properties) beats Prism's own
+// toolbar.css, whose rgba background, .5em radius, 0 .5em padding, and hard
+// bottom box-shadow otherwise bleed through and double the outline.
+div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn,
+.toolbar-item a.code-copy-btn
+  display: inline-flex
+  align-items: center
+  justify-content: center
+  width: rem(26px)
+  height: rem(26px)
+  padding: 0 !important
+  color: #57606a !important
+  background: #ffffff !important
+  border: 1px solid #d0d7de
+  border-radius: rem(6px) !important
+  box-shadow: none !important
+  text-decoration: none
+  cursor: pointer
+  transition: background .12s ease, color .12s ease, border-color .12s ease
+  &:hover,
+  &:focus
+    color: #1f2328 !important
+    background: #f3f4f6 !important
+    border-color: #b6bec7
+    text-decoration: none
+  .code-copy-btn__icon
+    display: block
+    flex: 0 0 auto
+  .code-copy-btn__icon--check
+    display: none
+  &.code-copy-btn--ok
+    color: #1a7f37 !important
+    border-color: #86d29b
+    background: #ecfdf0 !important
+    .code-copy-btn__icon--copy
+      display: none
+    .code-copy-btn__icon--check
+      display: block
 
 .scratchpad-fill-button
   display: none

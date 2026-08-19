@@ -10,12 +10,14 @@ import {
 import type { ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
 import { PERM, PRIV } from '../model/builtin';
+import * as contest from '../model/contest';
 import domain from '../model/domain';
 import problem from '../model/problem';
 import record from '../model/record';
 import SelfLearningModel, { SelfLearningDoc, TutorMessage, TutorThreadDoc } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
+import * as training from '../model/training';
 import user from '../model/user';
 import { Handler, param, Types } from '../service/server';
 
@@ -275,7 +277,7 @@ class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
                 id: c.id,
                 subtaskId: c.subtaskId,
                 status: c.status,
-                statusText: STATUS_SHORT_TEXTS[c.status] || STATUS_TEXTS[c.status] || `${c.status}`,
+                statusText: STATUS_TEXTS[c.status] || STATUS_SHORT_TEXTS[c.status] || `${c.status}`,
                 message: (typeof c.message === 'string' ? c.message : (c.message?.message || '')).slice(0, 200),
                 score: c.score,
                 time: c.time,
@@ -451,7 +453,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         let askedList: string[] = [];
         try {
             const parsed = JSON.parse(asked || '[]');
-            if (Array.isArray(parsed)) askedList = parsed.map((q) => String(q)).slice(0, 8);
+            if (Array.isArray(parsed)) askedList = parsed.map((q) => String(q)).slice(0, 12);
         } catch (e) { /* ignore malformed asked lists */ }
         const rdoc = await this.loadOwnRecord(domainId, rid);
         // The pop-up cards are the interaction channel for programming
@@ -460,6 +462,12 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         // replays that history read-only.
         const { thread, marker, accepted } = await this.ensureAttemptMarker(domainId, rdoc);
         const ctx = await this.tutorCtx(rdoc, thread?.attemptCount || 1, await this.everAccepted(domainId));
+        // Guided-session chaining: the client sends the CURRENT editor code so
+        // the next question targets what the student sees (fixed flaws are
+        // skipped, anchors match the live line numbers).
+        if (typeof this.args.code === 'string' && this.args.code.trim()) {
+            ctx.liveCode = String(this.args.code).slice(0, 8000);
+        }
         const annotation = await aiTutor.runAnnotationTurn(ctx, askedList);
         if (annotation && thread) {
             await SelfLearningModel.pushMessages(thread._id, [{
@@ -496,6 +504,9 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             throw new BadRequestError('This tutoring conversation reached its length limit. Please reset it to continue.');
         }
         const ctx = await this.tutorCtx(rdoc, thread?.attemptCount || 1, await this.everAccepted(domainId));
+        if (typeof this.args.code === 'string' && this.args.code.trim()) {
+            ctx.liveCode = String(this.args.code).slice(0, 8000);
+        }
         const result = await aiTutor.runAnnotationDialogue(ctx, {
             line,
             endLine,
@@ -574,6 +585,236 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
 
 const logger = new Logger('self-learning');
 
+/* ------------------------------------------------------------------------ */
+/* Site-wide PTA UI backend — migrated here from problem_trajectory.ts.     */
+/* Some dev-mode watchers hot-reload MODIFIED handler files but never       */
+/* discover files CREATED after boot, so anything defined only in a brand-  */
+/* new file was unreachable on such deployments. This file is proven live.  */
+/* ------------------------------------------------------------------------ */
+
+/** Kind + title for each listed problem (config arrives as a raw YAML string). */
+async function activityKinds(domainId: string, pids: number[]) {
+    const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'title', 'config'], true);
+    return pids.map((pid) => {
+        const p: any = pdict[pid] || {};
+        let conf: any = p.config;
+        if (typeof conf === 'string') {
+            try {
+                conf = yamlLoad(conf) || {};
+            } catch (e) {
+                conf = {};
+            }
+        }
+        return { pid, kind: aiTutor.problemKindOf(conf), title: p.title || String(pid) };
+    });
+}
+
+/**
+ * Site-wide submission trajectory for the PTA-style problem UI: the
+ * requester's OWN judged, non-pretest submissions (no rid), or one
+ * submission's full verdict payload for the result modal (rid given).
+ */
+class ProblemTrajectoryHandler extends Handler {
+    @param('pid', Types.PositiveInt)
+    @param('rid', Types.ObjectId, true)
+    async get({ domainId }, pid: number, rid?: ObjectId) {
+        if (rid) {
+            const rdoc = await record.get(domainId, rid);
+            if (!rdoc || rdoc.uid !== this.user._id || rdoc.pid !== pid) throw new NotFoundError(rid);
+            const judged = !JUDGING.includes(rdoc.status);
+            this.response.body = {
+                rid: rid.toHexString(),
+                status: rdoc.status,
+                statusText: STATUS_TEXTS[rdoc.status] || `${rdoc.status}`,
+                shortText: STATUS_SHORT_TEXTS[rdoc.status] || '',
+                accepted: rdoc.status === STATUS.STATUS_ACCEPTED,
+                judged,
+                score: rdoc.score || 0,
+                time: rdoc.time || 0,
+                memory: rdoc.memory || 0,
+                lang: rdoc.lang || '',
+                code: typeof rdoc.code === 'string' ? rdoc.code.slice(0, 8000) : '',
+                submitAt: rdoc._id.getTimestamp().getTime(),
+                judgeAt: rdoc.judgeAt ? new Date(rdoc.judgeAt).getTime() : null,
+                compilerTexts: (rdoc.compilerTexts || []).join('\n').slice(0, 4000),
+                judgeTexts: (rdoc.judgeTexts || [])
+                    .map((t: any) => (typeof t === 'string' ? t : t?.message || ''))
+                    .filter((t: string) => t).join('\n').slice(0, 2000),
+                cases: (rdoc.testCases || []).slice(0, 60).map((c: any) => ({
+                    id: c.id,
+                    subtaskId: c.subtaskId,
+                    status: c.status,
+                    statusText: STATUS_TEXTS[c.status] || STATUS_SHORT_TEXTS[c.status] || `${c.status}`,
+                    message: (typeof c.message === 'string' ? c.message : (c.message?.message || '')).slice(0, 200),
+                    score: c.score,
+                    time: c.time,
+                    memory: c.memory,
+                })),
+            };
+            return;
+        }
+        const history = await record.getMulti(domainId, {
+            pid, uid: this.user._id, contest: { $ne: record.RECORD_PRETEST },
+        }).sort({ _id: -1 }).limit(10)
+            .project({ code: 1, lang: 1, status: 1, score: 1 })
+            .toArray();
+        this.response.body = {
+            attempts: history.reverse().map((r: any) => ({
+                rid: r._id.toHexString(),
+                lang: r.lang || '',
+                status: r.status,
+                statusText: STATUS_TEXTS[r.status] || `${r.status}`,
+                accepted: r.status === STATUS.STATUS_ACCEPTED,
+                score: r.score || 0,
+                at: r._id.getTimestamp().getTime(),
+                code: typeof r.code === 'string' ? r.code.slice(0, 8000) : '',
+            })),
+        };
+    }
+}
+
+/** Kinds+titles of a contest/homework's problems (they share TYPE_CONTEST). */
+class ActivityProblemKindsHandler extends Handler {
+    @param('tid', Types.ObjectId)
+    async get({ domainId }, tid: ObjectId) {
+        const tdoc = await contest.get(domainId, tid);
+        if (!tdoc) throw new NotFoundError(tid);
+        this.response.body = { pids: await activityKinds(domainId, tdoc.pids || []) };
+    }
+}
+
+const FALSY_AVAILABILITY = ['', '0', 'false', 'no', 'n', 'unavailable', 'inactive', 'off'];
+
+/**
+ * Post-acceptance "AI Suggestions": one comprehensive Markdown code review
+ * over the problem statement plus the requester's FULL submission trajectory
+ * (timestamps included, so debugging behavior can be analyzed). Requires at
+ * least one accepted attempt — the button only appears on accepted modals.
+ */
+class AiSuggestionsHandler extends Handler {
+    @param('pid', Types.PositiveInt)
+    async post({ domainId }, pid: number) {
+        if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
+        await this.limitRate('ai_suggestions', 60, 3, '{{user}}');
+        const history = await record.getMulti(domainId, {
+            pid, uid: this.user._id, contest: { $ne: record.RECORD_PRETEST },
+        }).sort({ _id: -1 }).limit(12)
+            .project({ code: 1, lang: 1, status: 1, score: 1 })
+            .toArray();
+        const attempts: aiTutor.SuggestionAttempt[] = history.reverse().map((r: any) => ({
+            at: r._id.getTimestamp().getTime(),
+            lang: r.lang || '',
+            statusText: STATUS_TEXTS[r.status] || `${r.status}`,
+            score: r.score || 0,
+            accepted: r.status === STATUS.STATUS_ACCEPTED,
+            code: typeof r.code === 'string' ? r.code.slice(0, 8000) : '',
+        }));
+        if (!attempts.some((a) => a.accepted)) {
+            throw new BadRequestError('AI Suggestions are available after an accepted submission.');
+        }
+        const pdoc = await problem.get(domainId, pid);
+        if (!pdoc) throw new NotFoundError(pid);
+        const uiLang = this.user.viewLang || this.session.viewLang || system.get('server.language') || 'en';
+        const report = await aiTutor.runSuggestionsReport({ pdoc, attempts, uiLang });
+        this.response.body = { report };
+        logger.info('[pta-ui] AI Suggestions generated for uid=%d pid=%d over %d attempt(s)', this.user._id, pid, attempts.length);
+    }
+}
+
+/**
+ * Root-only bulk user import (the homepage "Add Users" modal).
+ * GET  -> every domain with its assignable roles, for the pickers.
+ * POST -> { users: [{lastName, firstName, uname, availability}],
+ *           assignments: [{domainId, role}] }
+ *         Creates missing accounts (password `Username_LastName_FirstName`),
+ *         then joins every listed user into every listed domain with the
+ *         chosen role. Existing accounts are never modified — they are only
+ *         added to the domains.
+ */
+class BulkAddUsersHandler extends Handler {
+    async get() {
+        const ddocs = await domain.getMulti().limit(200).toArray();
+        this.response.body = {
+            domains: ddocs.map((d: any) => ({
+                _id: d._id,
+                name: d.name || d._id,
+                roles: Array.from(new Set(['default', 'root', ...Object.keys(d.roles || {})]))
+                    .filter((r) => r !== 'guest'),
+            })),
+        };
+    }
+
+    async post() {
+        const parse = (v: any) => (typeof v === 'string' ? JSON.parse(v) : v);
+        let users: any[] = [];
+        let assignments: any[] = [];
+        try {
+            users = parse(this.args.users) || [];
+            assignments = parse(this.args.assignments) || [];
+        } catch (e) {
+            throw new BadRequestError('Malformed payload.');
+        }
+        if (!Array.isArray(users) || !users.length || users.length > 500) {
+            throw new BadRequestError('Provide between 1 and 500 users.');
+        }
+        if (!Array.isArray(assignments) || !assignments.length || assignments.length > 20) {
+            throw new BadRequestError('Provide between 1 and 20 domain assignments.');
+        }
+        // Validate every assignment up front: unknown domains abort the run.
+        for (const a of assignments) {
+            const ddoc = await domain.get(String(a.domainId));
+            if (!ddoc) throw new NotFoundError(String(a.domainId));
+            a.domainId = String(a.domainId);
+            a.role = String(a.role || 'default') || 'default';
+        }
+        const created: string[] = [];
+        const existed: string[] = [];
+        const skipped: string[] = [];
+        const errors: { uname: string, error: string }[] = [];
+        for (const row of users) {
+            const uname = String(row?.uname ?? '').trim();
+            const lastName = String(row?.lastName ?? '').trim();
+            const firstName = String(row?.firstName ?? '').trim();
+            const availability = String(row?.availability ?? '').trim().toLowerCase();
+            if (!uname) {
+                errors.push({ uname: '(empty)', error: 'Missing Username' });
+                continue;
+            }
+            if (FALSY_AVAILABILITY.includes(availability)) {
+                skipped.push(uname);
+                continue;
+            }
+            let uid: number;
+            let isNew = false;
+            try {
+                const udoc = await user.getByUname('system', uname);
+                if (udoc) {
+                    uid = udoc._id;
+                } else {
+                    const password = `${uname}_${lastName}_${firstName}`;
+                    const mailLocal = uname.toLowerCase().replace(/[^a-z0-9._-]/g, '') || `u${Date.now()}`;
+                    uid = await user.create(`${mailLocal}@bulk-import.invalid`, uname, password);
+                    isNew = true;
+                }
+                for (const a of assignments) {
+                    await domain.setUserRole(a.domainId, uid, a.role, true); // autojoin: membership + role
+                }
+                (isNew ? created : existed).push(uname);
+            } catch (e) {
+                errors.push({ uname, error: e.message || `${e}` });
+            }
+        }
+        logger.info(
+            '[pta-ui] bulk user import by %s: %d created, %d existed, %d skipped, %d errors -> domains %s',
+            this.user.uname, created.length, existed.length, skipped.length, errors.length,
+            assignments.map((a) => `${a.domainId}:${a.role}`).join(', '),
+        );
+        this.response.body = {
+            created, existed, skipped, errors,
+        };
+    }
+}
+
 export async function apply(ctx: Context) {
     ctx.Route('self_learning', '/self-learning', SelfLearningMainHandler);
     ctx.Route('self_learning_create', '/self-learning/create', SelfLearningEditHandler, PRIV.PRIV_USER_PROFILE);
@@ -582,6 +823,133 @@ export async function apply(ctx: Context) {
     ctx.Route('self_learning_solve', '/self-learning/:ssid/p/:pid', SelfLearningSolveHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('self_learning_record', '/self-learning/:ssid/p/:pid/record', SelfLearningRecordHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('self_learning_tutor', '/self-learning/:ssid/p/:pid/tutor', SelfLearningTutorHandler, PRIV.PRIV_USER_PROFILE);
+
+    // ---- Site-wide PTA UI backend (migrated from problem_trajectory.ts) ----
+    ctx.Route('problem_trajectory', '/p/:pid/trajectory', ProblemTrajectoryHandler, PRIV.PRIV_USER_PROFILE);
+    ctx.Route('activity_problem_kinds', '/activity/:tid/problem-kinds', ActivityProblemKindsHandler, PRIV.PRIV_USER_PROFILE);
+    // Root-only bulk user import behind the homepage "Add Users" button.
+    ctx.Route('bulk_add_users', '/bulk-add-users', BulkAddUsersHandler, PRIV.PRIV_EDIT_SYSTEM);
+    // Post-acceptance AI report behind the result modal's "AI Suggestions" button.
+    ctx.Route('ai_suggestions', '/p/:pid/ai-suggestions', AiSuggestionsHandler, PRIV.PRIV_USER_PROFILE);
+    const setKinds = async (h: any, source: string) => {
+        if (!h?.UiContext || h.UiContext.tdocKinds || h.UiContext.trainingRail || h.UiContext.psetRail) return;
+        let tdoc = h.tdoc || h.response?.body?.tdoc;
+        if (!tdoc && h.args?.tid) tdoc = await contest.get(h.args.domainId, h.args.tid).catch(() => null);
+        if (tdoc && Array.isArray(tdoc.pids) && tdoc.pids.length > 1) {
+            try {
+                h.UiContext.tdocKinds = await activityKinds(h.args.domainId, tdoc.pids);
+                logger.info('[pta-ui] rail kinds injected via %s: %d problem(s) for tid=%s', source, tdoc.pids.length, tdoc.docId);
+            } catch (e) {
+                logger.warn('[pta-ui] rail kinds failed via %s: %s', source, e.message);
+            }
+            return;
+        }
+        // Training context: its problems link to the plain problem page, so
+        // the frontend carries the training id along as ?trid=... — resolve
+        // the training's DAG into a flat, ordered problem list here.
+        const trid = h.args?.trid;
+        if (trid && /^[0-9a-f]{24}$/i.test(String(trid))) {
+            try {
+                const ttdoc = await training.get(h.args.domainId, new ObjectId(String(trid)));
+                const pids: number[] = ttdoc ? training.getPids(ttdoc.dag || []) : [];
+                if (pids.length >= 2) {
+                    h.UiContext.trainingRail = {
+                        trid: String(trid),
+                        title: ttdoc.title || '',
+                        kinds: await activityKinds(h.args.domainId, pids),
+                    };
+                    logger.info('[pta-ui] rail kinds injected via %s (training): %d problem(s) for trid=%s', source, pids.length, trid);
+                    return;
+                }
+            } catch (e) {
+                logger.warn('[pta-ui] training rail kinds failed via %s: %s', source, e.message);
+            }
+        }
+        // Problem set: plain problem pages (no contest tid) get the same left
+        // sidebar — a window of the problem list around the current problem,
+        // in docId order, honoring hidden-problem visibility.
+        if (h.args?.tid) return;
+        try {
+            const cur = h.pdoc?.docId ?? h.response?.body?.pdoc?.docId;
+            if (typeof cur !== 'number') return;
+            const canViewHidden = h.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN);
+            const vis: any = canViewHidden ? {} : { hidden: false };
+            const [before, after] = await Promise.all([
+                problem.getMulti(h.args.domainId, { ...vis, docId: { $lt: cur } })
+                    .sort({ docId: -1 }).limit(12).project({ docId: 1 }).toArray(),
+                problem.getMulti(h.args.domainId, { ...vis, docId: { $gte: cur } })
+                    .sort({ docId: 1 }).limit(13).project({ docId: 1 }).toArray(),
+            ]);
+            const pids = [...before.reverse(), ...after].map((p: any) => p.docId);
+            if (pids.length < 2) return;
+            h.UiContext.psetRail = { kinds: await activityKinds(h.args.domainId, pids) };
+            logger.info('[pta-ui] rail kinds injected via %s (problem set): %d problem(s) around #%d', source, pids.length, cur);
+        } catch (e) {
+            logger.warn('[pta-ui] problem-set rail kinds failed via %s: %s', source, e.message);
+        }
+    };
+    // ProblemDetailHandler serves problem_detail, contest_detail_problem AND
+    // homework_detail_problem (page_name is just switched on tdoc.rule), so
+    // one class-named hook covers all three surfaces.
+    ctx.on('handler/after/ProblemDetail#get' as any, (h: any) => setKinds(h, 'ProblemDetail#get'));
+    // Safety net: the generic handler/after fires for every request; the
+    // template guard makes it a no-op elsewhere, and the tdocKinds check
+    // dedupes when both hooks run.
+    ctx.on('handler/after' as any, (h: any) => {
+        if (!String(h?.response?.template || '').startsWith('problem_detail')) return null;
+        return setKinds(h, 'generic-after');
+    });
+    // Core's ProblemSubmitHandler deliberately omits the rid for contest and
+    // homework submissions when the activity hides self-records
+    // (canShowSelfRecord is false): body is { tid } and the redirect points
+    // at the activity page, not /record/:rid. This site's requirement is a
+    // result modal on EVERY surface, so restore the rid for JSON callers —
+    // the record was just created by this very request, so the newest
+    // non-pretest record of this user on this problem is it.
+    ctx.on('handler/after/ProblemSubmit#post' as any, async (h: any) => {
+        try {
+            if (!h?.response?.body || h.response.body.rid) return;
+            const latest = await record.getMulti(h.args.domainId, {
+                pid: h.pdoc.docId, uid: h.user._id, contest: { $ne: record.RECORD_PRETEST },
+            }).sort({ _id: -1 }).limit(1).project({ _id: 1 }).toArray();
+            if (!latest[0]) return;
+            h.response.body.rid = latest[0]._id.toHexString();
+            logger.info('[pta-ui] rid restored on submit response (self-record-hidden activity): %s', h.response.body.rid);
+        } catch (e) {
+            logger.warn('[pta-ui] rid restore failed: %s', e.message);
+        }
+    });
+    // Nav domain dropdown: the stock list renders handler.user.domains, a
+    // denormalized udoc field that misses memberships granted via
+    // setUserRole (e.g. our bulk user import) and goes stale. On every HTML
+    // page render, replace it with the user's TRUE membership — current
+    // domain first, then by display name — so hovering the domain menu
+    // (dropdowns open on hover by default) lists every domain the user is
+    // in, each linking to that domain's homepage ("visit").
+    ctx.on('handler/after' as any, async (h: any) => {
+        try {
+            if (!h?.response?.template) return; // JSON/API responses render no nav
+            // Problem authors keep the ORIGINAL problem page: the client skips
+            // the scratchpad auto-enter for domain roots and super-admins.
+            if (h.UiContext) {
+                h.UiContext.isDomainRoot = h.user?.role === 'root' || !!h.user?.hasPriv?.(PRIV.PRIV_EDIT_SYSTEM);
+            }
+            if (!h.user?.hasPriv?.(PRIV.PRIV_USER_PROFILE)) return;
+            const dudict = await domain.getDictUserByDomainId(h.user._id);
+            const dids = Object.keys(dudict);
+            if (!dids.length) return;
+            const ddocs = await domain.getMulti({ _id: { $in: dids } }).toArray();
+            const cur = h.args?.domainId;
+            const label = (d: any) => String(d.name || d._id).toLowerCase();
+            ddocs.sort((a: any, b: any) => {
+                if (a._id === cur) return -1;
+                if (b._id === cur) return 1;
+                return label(a) < label(b) ? -1 : 1;
+            });
+            h.user.domains = ddocs.slice(0, 30);
+        } catch (e) { /* the nav falls back to the stock list */ }
+    });
+    logger.info('[pta-ui] trajectory + activity-kinds routes, ProblemDetail rail hooks, and nav-domains hook registered (via self_learning.ts)');
 
     // Self-healing guard for /manage/config: if the stored config source
     // (system collection, _id 'config') is not valid YAML, the built-in
