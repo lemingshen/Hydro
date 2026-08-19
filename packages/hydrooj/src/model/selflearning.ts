@@ -132,4 +132,141 @@ export class SelfLearningModel {
     }
 }
 
+/* ------------------ persisted AI Suggestions reports ------------------ */
+
+export interface AiSuggestionDoc {
+    _id: string; // `${domainId}/${pid}/${uid}` — one latest report per user per problem
+    domainId: string;
+    pid: number;
+    uid: number;
+    report: string;
+    attempts: number;
+    updateAt: Date;
+}
+
+const collSuggestion = db.collection('ai.suggestion' as any);
+
+export async function getSuggestionReport(domainId: string, pid: number, uid: number): Promise<AiSuggestionDoc | null> {
+    return await collSuggestion.findOne({ _id: `${domainId}/${pid}/${uid}` as any }) as any;
+}
+
+export async function setSuggestionReport(domainId: string, pid: number, uid: number, report: string, attempts: number): Promise<Date> {
+    const updateAt = new Date();
+    await collSuggestion.updateOne(
+        { _id: `${domainId}/${pid}/${uid}` as any },
+        {
+            $set: {
+                domainId, pid, uid, report, attempts, updateAt,
+            },
+        },
+        { upsert: true },
+    );
+    return updateAt;
+}
+
+export async function getSuggestionReportsIn(domainId: string, pids: number[], uids: number[]): Promise<AiSuggestionDoc[]> {
+    if (!pids.length || !uids.length) return [];
+    return await collSuggestion.find({ domainId, pid: { $in: pids }, uid: { $in: uids } })
+        .limit(200).toArray() as any;
+}
+
+export async function getTutorThreadsIn(domainId: string, ssid: ObjectId, pids: number[], uids: number[]) {
+    if (!pids.length || !uids.length) return [];
+    return await collTutor.find({
+        domainId, ssid, pid: { $in: pids }, uid: { $in: uids },
+    }).project({ pid: 1, uid: 1, messages: 1, attemptCount: 1 }).limit(500).toArray();
+}
+
+/* ------------------- persisted AI class reports (teachers) ------------------- */
+
+export interface AiClassReportDoc {
+    _id: string; // `${domainId}/${tid}` — one latest report per activity
+    domainId: string;
+    tid: string;
+    reportAnon: string;
+    reportNamed: string;
+    sidMap: { s: string, uid: number, uname: string }[];
+    /** AI-classified knowledge points: name -> per-problem affected-student counts. */
+    concepts: { name: string, problems: Record<string, number>, students: string[] }[];
+    statsSnapshot: any;
+    participants: number;
+    generatedBy: number;
+    generatedAt: Date;
+}
+
+const collClassReport = db.collection('ai.class_report' as any);
+
+export async function getClassReport(domainId: string, tid: string): Promise<AiClassReportDoc | null> {
+    return await collClassReport.findOne({ _id: `${domainId}/${tid}` as any }) as any;
+}
+
+export async function setClassReport(doc: Omit<AiClassReportDoc, '_id' | 'generatedAt'>): Promise<Date> {
+    const generatedAt = new Date();
+    await collClassReport.updateOne(
+        { _id: `${doc.domainId}/${doc.tid}` as any },
+        { $set: { ...doc, generatedAt } },
+        { upsert: true },
+    );
+    return generatedAt;
+}
+
+/* ---------------- subjective (project-level, teacher-graded) tasks ---------------- */
+
+export interface SubjectiveFile {
+    name: string;
+    size: number;
+    target: string; // storage key
+    uploadAt: Date;
+}
+
+export interface SubjectiveSubmissionDoc {
+    _id: string; // `${domainId}/${pid}/${uid}` — the latest submission wins
+    domainId: string;
+    pid: number;
+    uid: number;
+    report: string; // markdown
+    files: SubjectiveFile[];
+    updateAt: Date;
+}
+
+const collSubjective = db.collection('subjective.submission' as any);
+
+const subjectiveId = (domainId: string, pid: number, uid: number) => `${domainId}/${pid}/${uid}`;
+
+export async function getSubjective(domainId: string, pid: number, uid: number): Promise<SubjectiveSubmissionDoc | null> {
+    return await collSubjective.findOne({ _id: subjectiveId(domainId, pid, uid) as any }) as any;
+}
+
+export async function setSubjectiveReport(domainId: string, pid: number, uid: number, report: string): Promise<Date> {
+    const updateAt = new Date();
+    await collSubjective.updateOne(
+        { _id: subjectiveId(domainId, pid, uid) as any },
+        { $set: { domainId, pid, uid, report, updateAt }, $setOnInsert: { files: [] } },
+        { upsert: true },
+    );
+    return updateAt;
+}
+
+export async function upsertSubjectiveFile(domainId: string, pid: number, uid: number, file: SubjectiveFile): Promise<void> {
+    const _id = subjectiveId(domainId, pid, uid) as any;
+    await collSubjective.updateOne(
+        { _id },
+        { $setOnInsert: { domainId, pid, uid, report: '' }, $set: { updateAt: new Date() } },
+        { upsert: true },
+    );
+    await collSubjective.updateOne({ _id }, { $pull: { files: { name: file.name } } as any });
+    await collSubjective.updateOne({ _id }, { $push: { files: file } as any });
+}
+
+export async function removeSubjectiveFile(domainId: string, pid: number, uid: number, name: string): Promise<void> {
+    await collSubjective.updateOne(
+        { _id: subjectiveId(domainId, pid, uid) as any },
+        { $pull: { files: { name } } as any, $set: { updateAt: new Date() } },
+    );
+}
+
+export async function listSubjective(domainId: string, pid: number): Promise<SubjectiveSubmissionDoc[]> {
+    return await collSubjective.find({ domainId, pid }).sort({ updateAt: -1 }).limit(500).toArray() as any;
+}
+
 export default SelfLearningModel;

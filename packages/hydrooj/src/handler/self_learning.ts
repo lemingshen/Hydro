@@ -14,7 +14,8 @@ import * as contest from '../model/contest';
 import domain from '../model/domain';
 import problem from '../model/problem';
 import record from '../model/record';
-import SelfLearningModel, { SelfLearningDoc, TutorMessage, TutorThreadDoc } from '../model/selflearning';
+import storage from '../model/storage';
+import SelfLearningModel, { getClassReport, getSubjective, getSuggestionReportsIn, getTutorThreadsIn, listSubjective, removeSubjectiveFile, setClassReport, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import * as training from '../model/training';
@@ -594,7 +595,7 @@ const logger = new Logger('self-learning');
 
 /** Kind + title for each listed problem (config arrives as a raw YAML string). */
 async function activityKinds(domainId: string, pids: number[]) {
-    const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'title', 'config'], true);
+    const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'pid', 'title', 'config'], true);
     return pids.map((pid) => {
         const p: any = pdict[pid] || {};
         let conf: any = p.config;
@@ -605,7 +606,15 @@ async function activityKinds(domainId: string, pids: number[]) {
                 conf = {};
             }
         }
-        return { pid, kind: aiTutor.problemKindOf(conf), title: p.title || String(pid) };
+        // Site convention: the display pid's first letter is authoritative —
+        // P=programming, O=objective, S=subjective — with the config as the
+        // fallback for legacy problems.
+        const disp = String(p.pid || '');
+        let kind: string = aiTutor.problemKindOf(conf);
+        if (/^s/i.test(disp)) kind = 'subjective';
+        else if (/^o/i.test(disp)) kind = 'objective';
+        else if (/^p/i.test(disp)) kind = 'programming';
+        return { pid, kind, title: p.title || String(pid) };
     });
 }
 
@@ -693,6 +702,16 @@ const FALSY_AVAILABILITY = ['', '0', 'false', 'no', 'n', 'unavailable', 'inactiv
  */
 class AiSuggestionsHandler extends Handler {
     @param('pid', Types.PositiveInt)
+    async get({ domainId }, pid: number) {
+        // Saved-report lookup: lets the modal show the last generated report
+        // instantly (and token-free) instead of regenerating every time.
+        const doc = await getSuggestionReport(domainId, pid, this.user._id);
+        this.response.body = doc
+            ? { report: doc.report, updateAt: doc.updateAt, attempts: doc.attempts }
+            : { report: null };
+    }
+
+    @param('pid', Types.PositiveInt)
     async post({ domainId }, pid: number) {
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
         await this.limitRate('ai_suggestions', 60, 3, '{{user}}');
@@ -716,8 +735,9 @@ class AiSuggestionsHandler extends Handler {
         if (!pdoc) throw new NotFoundError(pid);
         const uiLang = this.user.viewLang || this.session.viewLang || system.get('server.language') || 'en';
         const report = await aiTutor.runSuggestionsReport({ pdoc, attempts, uiLang });
-        this.response.body = { report };
-        logger.info('[pta-ui] AI Suggestions generated for uid=%d pid=%d over %d attempt(s)', this.user._id, pid, attempts.length);
+        const updateAt = await setSuggestionReport(domainId, pid, this.user._id, report, attempts.length);
+        this.response.body = { report, updateAt };
+        logger.info('[pta-ui] AI Suggestions generated and saved for uid=%d pid=%d over %d attempt(s)', this.user._id, pid, attempts.length);
     }
 }
 
@@ -815,6 +835,650 @@ class BulkAddUsersHandler extends Handler {
     }
 }
 
+
+/* ---------------------- teacher-facing AI class report ---------------------- */
+
+const CLASS_MAX_PARTICIPANTS = 400; // hard safety ceiling
+const CLASS_SINGLE_CALL_MAX = 60; // above this, the map-reduce path runs
+const CLASS_BATCH_SIZE = 40;
+const CLASS_MAX_PIDS = 8;
+const CLASS_MAX_RECORDS = 20000;
+const NONFINAL_STATUS = [0, 20, 21, 22]; // waiting / judging / compiling / fetched
+
+/**
+ * Deterministic collector: everything the LLM may cite is computed HERE.
+ * `full` additionally assembles roster lines, code samples, and the harvest
+ * from stored per-student AI reports (all anonymized as S-tokens).
+ */
+async function buildClassStats(domainId: string, tdoc: any, full: boolean, kind = 'contest') {
+    const pidsAll: number[] = (tdoc.pids || []).filter((x: any) => typeof x === 'number');
+    const pids = pidsAll.slice(0, CLASS_MAX_PIDS);
+    // Code NEVER rides the bulk query (200+ students x attempts would be
+    // hundreds of MB) — samples are re-fetched by rid afterwards.
+    const proj: any = {
+        uid: 1, pid: 1, status: 1, score: 1,
+    };
+    // Self-learning submissions carry NO contest tag, so that kind analyzes
+    // every non-pretest judged submission on the session's problems.
+    const recordQuery = kind === 'self-learning'
+        ? { pid: { $in: pids }, contest: { $ne: record.RECORD_PRETEST } }
+        : { contest: tdoc.docId, pid: { $in: pids } };
+    const rdocs = await record.getMulti(domainId, recordQuery)
+        .sort({ _id: 1 }).limit(CLASS_MAX_RECORDS).project(proj).toArray();
+    const trails = new Map<string, { at: number, status: number, score: number, code?: string }[]>();
+    const uidSet = new Set<number>();
+    for (const r of rdocs as any[]) {
+        if (NONFINAL_STATUS.includes(r.status)) continue;
+        uidSet.add(r.uid);
+        const key = `${r.uid}/${r.pid}`;
+        if (!trails.has(key)) trails.set(key, []);
+        trails.get(key)!.push({
+            at: r._id.getTimestamp().getTime(), status: r.status, score: r.score || 0, rid: r._id,
+        });
+    }
+    const participantsAll = [...uidSet].sort((a, b) => a - b);
+    const sampled = participantsAll.length > CLASS_MAX_PARTICIPANTS
+        || pidsAll.length > pids.length || (rdocs as any[]).length >= CLASS_MAX_RECORDS;
+    const participants = participantsAll.slice(0, CLASS_MAX_PARTICIPANTS);
+    const sOf = new Map<number, string>();
+    participants.forEach((uid, i) => sOf.set(uid, `S${i + 1}`));
+    const pdocs = await problem.getMulti(domainId, { docId: { $in: pids } })
+        .project({ docId: 1, pid: 1, title: 1 }).toArray();
+    const pLabel = new Map<number, string>();
+    const pTitle = new Map<number, string>();
+    for (const pd of pdocs as any[]) {
+        pLabel.set(pd.docId, `P${pd.pid ?? pd.docId}`);
+        pTitle.set(pd.docId, pd.title || '');
+    }
+    for (const pid of pids) if (!pLabel.has(pid)) pLabel.set(pid, `P${pid}`);
+    const perPid: any[] = [];
+    for (const pid of pids) {
+        let attempted = 0;
+        let solved = 0;
+        let thrashers = 0;
+        const verdicts: Record<string, number> = {};
+        const firstFail: Record<string, number> = {};
+        const attemptCounts: number[] = [];
+        for (const uid of participants) {
+            const t = trails.get(`${uid}/${pid}`);
+            if (!t || !t.length) continue;
+            attempted++;
+            attemptCounts.push(t.length);
+            if (t.some((x) => x.status === STATUS.STATUS_ACCEPTED)) solved++;
+            const ff = t.find((x) => x.status !== STATUS.STATUS_ACCEPTED);
+            if (ff) {
+                const k = STATUS_TEXTS[ff.status] || `${ff.status}`;
+                firstFail[k] = (firstFail[k] || 0) + 1;
+            }
+            for (const x of t) {
+                if (x.status === STATUS.STATUS_ACCEPTED) continue;
+                const k = STATUS_TEXTS[x.status] || `${x.status}`;
+                verdicts[k] = (verdicts[k] || 0) + 1;
+            }
+            if (t.length >= 3) {
+                let fast = 0;
+                for (let i = 1; i < t.length; i++) if (t[i].at - t[i - 1].at < 90000) fast++;
+                if (fast / (t.length - 1) >= 0.5) thrashers++;
+            }
+        }
+        attemptCounts.sort((a, b) => a - b);
+        perPid.push({
+            pid,
+            label: pLabel.get(pid),
+            title: pTitle.get(pid),
+            attempted,
+            solved,
+            medianAttempts: attemptCounts.length ? attemptCounts[Math.floor((attemptCounts.length - 1) / 2)] : 0,
+            maxAttempts: attemptCounts[attemptCounts.length - 1] || 0,
+            thrashers,
+            verdicts,
+            firstFail,
+        });
+    }
+    // Self-learning bonus data: tutor-thread engagement per problem —
+    // questions asked, student replies, and silently-skipped questions
+    // (question shown, never answered: the fast-fix path or disengagement).
+    const tutorByPid = new Map<number, { questions: number, replies: number, skipped: number, threads: number }>();
+    if (kind === 'self-learning') {
+        try {
+            const threads = await getTutorThreadsIn(domainId, tdoc.docId, pids, participants);
+            for (const th of threads as any[]) {
+                if (!tutorByPid.has(th.pid)) {
+                    tutorByPid.set(th.pid, {
+                        questions: 0, replies: 0, skipped: 0, threads: 0,
+                    });
+                }
+                const agg = tutorByPid.get(th.pid)!;
+                agg.threads++;
+                let pendingAnswered = true;
+                for (const m of th.messages || []) {
+                    if (m.kind !== 'anno') continue;
+                    if (m.role === 'assistant' && typeof m.resolved !== 'boolean') {
+                        if (!pendingAnswered) agg.skipped++;
+                        agg.questions++;
+                        pendingAnswered = false;
+                    } else if (m.role === 'user') {
+                        agg.replies++;
+                        pendingAnswered = true;
+                    }
+                }
+                if (!pendingAnswered) agg.skipped++;
+            }
+        } catch (e) {
+            logger.warn('[pta-ui] tutor engagement stats failed: %s', e.message);
+        }
+    }
+    const light = {
+        activity: tdoc.title,
+        kind,
+        participants: participantsAll.length,
+        records: (rdocs as any[]).length,
+        sampled,
+        problems: perPid.map((p) => ({
+            label: p.label,
+            title: p.title,
+            attempted: p.attempted,
+            solved: p.solved,
+            medianAttempts: p.medianAttempts,
+            maxAttempts: p.maxAttempts,
+            thrashers: p.thrashers,
+            verdicts: p.verdicts,
+            firstFail: p.firstFail,
+            ...(kind === 'self-learning' ? {
+                tutorQuestions: tutorByPid.get(p.pid)?.questions || 0,
+                tutorReplies: tutorByPid.get(p.pid)?.replies || 0,
+                tutorSkipped: tutorByPid.get(p.pid)?.skipped || 0,
+            } : {}),
+        })),
+    };
+    if (!full) return { light } as any;
+    const roster: string[] = [];
+    for (const uid of participants) {
+        const parts: string[] = [];
+        for (const pid of pids) {
+            const t = trails.get(`${uid}/${pid}`);
+            if (!t || !t.length) continue;
+            const ac = t.some((x) => x.status === STATUS.STATUS_ACCEPTED);
+            const last = t[t.length - 1];
+            parts.push(`${pLabel.get(pid)}:${t.length}${ac ? '(AC)' : `(${STATUS_SHORT_TEXTS[last.status] || last.status})`}`);
+        }
+        roster.push(`${sOf.get(uid)}: ${parts.join(' ') || '(no submissions)'}`.slice(0, 120));
+    }
+    // Pick sample rids first, then fetch just those codes (<= ~32 small reads).
+    const picks: { rid: any, label: string, sTok: string, tag: string, cap: number }[] = [];
+    for (const p of perPid) {
+        const modal = (Object.entries(p.firstFail) as [string, number][]).sort((a, b) => b[1] - a[1])[0]?.[0];
+        let taken = 0;
+        if (modal) {
+            for (const uid of participants) {
+                if (taken >= 3) break;
+                const t = trails.get(`${uid}/${p.pid}`);
+                const hit = t?.find((x) => (STATUS_TEXTS[x.status] || `${x.status}`) === modal);
+                if (hit) {
+                    picks.push({
+                        rid: hit.rid, label: p.label!, sTok: sOf.get(uid)!, tag: `failing sample (${sOf.get(uid)}, ${modal})`, cap: 900,
+                    });
+                    taken++;
+                }
+            }
+        }
+        for (const uid of participants) {
+            const t = trails.get(`${uid}/${p.pid}`);
+            const ac = t?.find((x) => x.status === STATUS.STATUS_ACCEPTED);
+            if (ac) {
+                picks.push({
+                    rid: ac.rid, label: p.label!, sTok: sOf.get(uid)!, tag: `accepted sample (${sOf.get(uid)})`, cap: 1200,
+                });
+                break;
+            }
+        }
+    }
+    const samples: string[] = [];
+    if (picks.length) {
+        const codeDocs = await record.getMulti(domainId, { _id: { $in: picks.map((x) => x.rid) } })
+            .project({ code: 1 }).toArray();
+        const codeById = new Map((codeDocs as any[]).map((d) => [String(d._id), d.code]));
+        for (const pk of picks) {
+            const code = codeById.get(String(pk.rid));
+            if (typeof code === 'string' && code.trim()) {
+                samples.push(`--- ${pk.label} ${pk.tag} ---\n${String(code).slice(0, pk.cap)}`);
+            }
+        }
+    }
+    const harvested: string[] = [];
+    try {
+        const sdocs = await getSuggestionReportsIn(domainId, pids, participants);
+        for (const d of sdocs as any[]) {
+            const idx = String(d.report || '').toLowerCase().indexOf('critical concept');
+            if (idx < 0) continue;
+            const snip = String(d.report).slice(idx, idx + 340).replace(/[*_#`>]/g, ' ').replace(/\s+/g, ' ').trim();
+            harvested.push(`${sOf.get(d.uid) || '(other)'} on ${pLabel.get(d.pid) || `P${d.pid}`}: ${snip}`);
+            if (harvested.length >= 40) break;
+        }
+    } catch (e) { /* the harvest is best-effort */ }
+    return {
+        light, participants, sOf, perPid, roster, samples, harvested,
+    } as any;
+}
+
+/** MAP-stage context: shared per-problem stats + ONE batch's student lines. */
+function classBatchContext(stats: any, batchTokens: Set<string>): string {
+    const L = stats.light;
+    const lines: string[] = [
+        `ACTIVITY TITLE: ${L.activity}`,
+        `TYPE: ${L.kind}`,
+        `Full-class participants: ${L.participants}. THIS BATCH: ${batchTokens.size} students.`,
+        '',
+        '--- Per-problem statistics (full class; read-only reference) ---',
+    ];
+    for (const p of stats.perPid) {
+        lines.push(`${p.label} "${p.title}": attempted ${p.attempted}, solved ${p.solved}, median attempts ${p.medianAttempts}`);
+    }
+    lines.push('', `--- This batch's roster (${[...batchTokens][0]}..${[...batchTokens][batchTokens.size - 1]}) ---`);
+    lines.push(...stats.roster.filter((r: string) => batchTokens.has(r.split(':')[0])));
+    const bh = stats.harvested.filter((h: string) => batchTokens.has(h.split(' ')[0]));
+    if (bh.length) lines.push('', "--- This batch's harvested critical-concept notes ---", ...bh);
+    lines.push('', '--- End of batch. Emit the JSON now. ---');
+    return lines.join('\n');
+}
+
+/** Tolerant parse of one map-stage JSON output. */
+function parseMapOutput(raw: string, validLabels: Set<string>, batchTokens: Set<string>) {
+    const cleaned = String(raw || '').replace(/```(?:json)?/gi, '').trim();
+    const start = cleaned.indexOf('{');
+    if (start < 0) throw new Error('no JSON object');
+    const parsed = JSON.parse(cleaned.slice(start, cleaned.lastIndexOf('}') + 1));
+    const concepts = (Array.isArray(parsed?.concepts) ? parsed.concepts : [])
+        .filter((c: any) => c && typeof c.name === 'string')
+        .map((c: any) => ({
+            name: String(c.name).slice(0, 60).trim(),
+            problems: Object.fromEntries(Object.entries(c.problems || {})
+                .filter(([k, v]) => validLabels.has(String(k)) && Number.isFinite(+(v as any)) && +(v as any) > 0)
+                .map(([k, v]) => [String(k), Math.min(Math.round(+(v as any)), batchTokens.size)])),
+            students: (Array.isArray(c.students) ? c.students : []).map(String).filter((t: string) => batchTokens.has(t)).slice(0, 40),
+        }))
+        .filter((c: any) => Object.keys(c.problems).length);
+    const flags = parsed?.flags || {};
+    return {
+        concepts,
+        intervention: (Array.isArray(flags.intervention) ? flags.intervention : [])
+            .filter((f: any) => f && batchTokens.has(String(f.s)))
+            .map((f: any) => ({ s: String(f.s), reason: String(f.reason || '').slice(0, 90) })).slice(0, 8),
+        stretch: (Array.isArray(flags.stretch) ? flags.stretch : []).map(String).filter((t: string) => batchTokens.has(t)).slice(0, 8),
+        notes: (Array.isArray(parsed?.notes) ? parsed.notes : []).map((x: any) => String(x).slice(0, 140)).slice(0, 3),
+    };
+}
+
+/**
+ * Extract and strip the mandatory json:concepts trailer: the prose report
+ * stays clean while the structured knowledge points feed the charts.
+ */
+function extractConceptBlock(md: string, validLabels?: Set<string>): { report: string, concepts: any[] } {
+    const m = md.match(/```json:concepts\s*\n([\s\S]*?)```/);
+    if (!m) return { report: md.trim(), concepts: [] };
+    const report = (md.slice(0, m.index) + md.slice((m.index as number) + m[0].length)).trim();
+    let concepts: any[] = [];
+    try {
+        const parsed = JSON.parse(m[1]);
+        if (Array.isArray(parsed?.concepts)) {
+            concepts = parsed.concepts
+                .filter((c: any) => c && typeof c.name === 'string')
+                .slice(0, 10)
+                .map((c: any) => ({
+                    name: String(c.name).slice(0, 60),
+                    problems: Object.fromEntries(
+                        Object.entries(c.problems || {})
+                            .filter(([k, v]) => Number.isFinite(+(v as any)) && +(v as any) > 0
+                                && (!validLabels || validLabels.has(String(k))))
+                            .map(([k, v]) => [String(k).slice(0, 16), Math.round(+(v as any))]),
+                    ),
+                    students: Array.isArray(c.students) ? c.students.map(String).slice(0, 100) : [],
+                }))
+                .filter((c: any) => !validLabels || Object.keys(c.problems).length);
+        }
+    } catch (e) {
+        logger.warn('[pta-ui] class report concepts block unparsable: %s', e.message);
+    }
+    return { report, concepts };
+}
+
+function classContextBlock(stats: any, agg: any = null): string {
+    const L = stats.light;
+    const lines: string[] = [
+        `ACTIVITY TITLE: ${L.activity}`,
+        `TYPE: ${L.kind}`,
+        `Participants (students with at least one judged submission): ${L.participants}${L.sampled ? ' — NOTE: the data was capped/sampled; state this in the Executive Summary.' : ''}`,
+        `Total judged submissions considered: ${L.records}`,
+        '',
+        '--- Problems and deterministic statistics (server-computed; the ONLY numbers you may cite) ---',
+    ];
+    const lightByLabel = new Map((L.problems || []).map((p: any) => [p.label, p]));
+    for (const p of stats.perPid) {
+        const lp: any = lightByLabel.get(p.label) || {};
+        const tutorBit = lp.tutorQuestions != null
+            ? `, tutor questions ${lp.tutorQuestions}, student replies ${lp.tutorReplies}, silently-skipped ${lp.tutorSkipped}` : '';
+        lines.push(`${p.label} "${p.title}": attempted ${p.attempted}, solved ${p.solved}, median attempts ${p.medianAttempts}, max attempts ${p.maxAttempts}, grader-thrash students ${p.thrashers}${tutorBit}`);
+        lines.push(`  failing verdicts (all attempts): ${Object.entries(p.verdicts).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}`);
+        lines.push(`  first-failure verdicts: ${Object.entries(p.firstFail).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}`);
+    }
+    if (agg) {
+        lines.push('', `--- Batch analysis (per-student lines were processed in ${agg.batchCount} disjoint batches covering ALL ${L.participants} participants; concept counts below are exact sums) ---`);
+        for (const c of agg.concepts) {
+            const per = Object.entries(c.problems).map(([k, v]) => `${k}:${v}`).join(' ');
+            lines.push(`concept "${c.name}" — total ${c.total} student(s) (${per || 'no per-problem split'}) — e.g. ${c.students.slice(0, 10).join(', ') || '-'}`);
+        }
+        if (agg.intervention.length) lines.push('', 'Flagged for intervention:', ...agg.intervention.map((f: any) => `- ${f.s}: ${f.reason}`));
+        if (agg.stretch.length) lines.push('', `Ready for stretch material: ${agg.stretch.join(', ')}`);
+        if (agg.notes.length) lines.push('', 'Batch observations:', ...agg.notes.map((x: string) => `- ${x}`));
+        const flagged = new Set([...agg.intervention.map((f: any) => f.s), ...agg.stretch]);
+        const flaggedLines = stats.roster.filter((r: string) => flagged.has(r.split(':')[0])).slice(0, 40);
+        if (flaggedLines.length) lines.push('', '--- Roster lines of flagged students only ---', ...flaggedLines);
+    } else {
+        lines.push('', '--- Anonymized roster (per-problem attempt counts and final state) ---', ...stats.roster);
+    }
+    if (stats.harvested.length && !agg) lines.push('', '--- Harvested "critical concept" notes from per-student AI reports ---', ...stats.harvested);
+    if (stats.samples.length) lines.push('', '--- Representative code excerpts (the ONLY code you may quote) ---', ...stats.samples);
+    lines.push('', '--- End of context. Write the report now. ---');
+    return lines.join('\n');
+}
+
+/**
+ * Teacher-only class report over one contest/homework: GET serves the cached
+ * report plus cheap live stats (dry=1 returns the full assembled context for
+ * auditing, no LLM call); POST collects, generates, name-substitutes, and
+ * stores both the anonymous and the named variants.
+ */
+class AiClassReportHandler extends Handler {
+    async classTdoc(domainId: string, tid: ObjectId) {
+        let tdoc: any = null;
+        let kind = 'contest';
+        try {
+            tdoc = await contest.get(domainId, tid);
+            kind = tdoc?.rule === 'homework' ? 'homework' : 'contest';
+        } catch (e) { /* not a contest/homework — try self-learning */ }
+        if (!tdoc) {
+            tdoc = await SelfLearningModel.get(domainId, tid);
+            kind = 'self-learning';
+        }
+        if (!tdoc) throw new NotFoundError(tid);
+        const isTeacher = this.user.role === 'root'
+            || this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM)
+            || tdoc.owner === this.user._id;
+        if (!isTeacher) throw new ForbiddenError('Only the activity owner or a domain root can access the class report.');
+        return { tdoc, kind };
+    }
+
+    @param('tid', Types.ObjectId)
+    @param('dry', Types.Boolean, true)
+    async get({ domainId }, tid: ObjectId, dry = false) {
+        const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        if (dry) {
+            const stats = await buildClassStats(domainId, tdoc, true, kind);
+            const big = stats.participants.length > CLASS_SINGLE_CALL_MAX;
+            const firstBatch = big
+                ? new Set<string>(stats.participants.slice(0, CLASS_BATCH_SIZE).map((uid: number) => stats.sOf.get(uid)))
+                : null;
+            this.response.body = {
+                mode: big ? 'map-reduce' : 'single-call',
+                batchCount: big ? Math.ceil(stats.participants.length / CLASS_BATCH_SIZE) : 1,
+                light: stats.light,
+                roster: stats.roster,
+                samplesCount: stats.samples.length,
+                harvestedCount: stats.harvested.length,
+                sampleBatchContext: firstBatch ? classBatchContext(stats, firstBatch) : undefined,
+                context: classContextBlock(stats, null),
+            };
+            return;
+        }
+        const [doc, stats] = await Promise.all([
+            getClassReport(domainId, String(tid)),
+            buildClassStats(domainId, tdoc, false, kind),
+        ]);
+        this.response.body = {
+            report: doc?.reportNamed || null,
+            generatedAt: doc?.generatedAt || null,
+            participants: doc?.participants ?? null,
+            concepts: doc?.concepts || [],
+            stats: stats.light,
+        };
+    }
+
+    @param('tid', Types.ObjectId)
+    async post({ domainId }, tid: ObjectId) {
+        const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
+        await this.limitRate('ai_class_report', 600, 2, '{{user}}');
+        const stats = await buildClassStats(domainId, tdoc, true, kind);
+        if (!stats.light.participants) throw new BadRequestError('No judged submissions yet — nothing to analyze.');
+        const validLabels = new Set<string>(stats.perPid.map((p: any) => String(p.label)));
+        let agg: any = null;
+        if (stats.participants.length > CLASS_SINGLE_CALL_MAX) {
+            // MAP stage: disjoint 40-student batches -> structured JSON, with a
+            // small concurrency pool. Deterministic stats never need batching.
+            const tokens: string[] = stats.participants.map((uid: number) => stats.sOf.get(uid));
+            const batches: Set<string>[] = [];
+            for (let i = 0; i < tokens.length; i += CLASS_BATCH_SIZE) batches.push(new Set(tokens.slice(i, i + CLASS_BATCH_SIZE)));
+            const results: any[] = new Array(batches.length).fill(null);
+            let cursor = 0;
+            const worker = async () => {
+                for (;;) {
+                    const idx = cursor++;
+                    if (idx >= batches.length) return;
+                    try {
+                        const rawMap = await aiTutor.runClassMapBatch(classBatchContext(stats, batches[idx]));
+                        results[idx] = parseMapOutput(rawMap, validLabels, batches[idx]);
+                    } catch (e) {
+                        logger.warn('[pta-ui] class report map batch %d/%d failed: %s', idx + 1, batches.length, e.message);
+                    }
+                }
+            };
+            await Promise.all([worker(), worker(), worker()]);
+            const byName = new Map<string, any>();
+            const intervention: any[] = [];
+            const stretch: string[] = [];
+            const notes: string[] = [];
+            let okBatches = 0;
+            for (const r of results) {
+                if (!r) continue;
+                okBatches++;
+                for (const c of r.concepts) {
+                    const key = c.name.toLowerCase();
+                    if (!byName.has(key)) {
+                        byName.set(key, {
+                            name: c.name, problems: {}, students: [], total: 0,
+                        });
+                    }
+                    const m = byName.get(key);
+                    for (const [k, v] of Object.entries(c.problems)) {
+                        m.problems[k] = (m.problems[k] || 0) + (v as number);
+                        m.total += v as number;
+                    }
+                    m.students.push(...c.students);
+                }
+                intervention.push(...r.intervention);
+                stretch.push(...r.stretch);
+                notes.push(...r.notes);
+            }
+            if (okBatches) {
+                agg = {
+                    batchCount: batches.length,
+                    concepts: [...byName.values()].sort((a, b) => b.total - a.total).slice(0, 25),
+                    intervention: intervention.slice(0, 25),
+                    stretch: [...new Set(stretch)].slice(0, 25),
+                    notes: notes.slice(0, 8),
+                };
+                if (okBatches < batches.length) {
+                    agg.notes.push(`${batches.length - okBatches} batch(es) failed to analyze; their students are covered by the statistics only.`);
+                }
+                logger.info('[pta-ui] class report map stage: %d/%d batches ok, %d merged concept(s)', okBatches, batches.length, agg.concepts.length);
+            } else {
+                logger.warn('[pta-ui] class report: all map batches failed; reducing on statistics only');
+            }
+        }
+        const raw = await aiTutor.runClassReport(classContextBlock(stats, agg));
+        const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(raw, validLabels);
+        // Teacher-only artifact: substitute S-tokens with real usernames. The
+        // provider only ever saw the anonymous tokens.
+        let udict: any = {};
+        try {
+            udict = await user.getList(domainId, [...stats.sOf.keys()]);
+        } catch (e) { /* fall back to uid placeholders */ }
+        const sidMap = [...stats.sOf.entries()].map(([uid, sTok]) => ({
+            s: sTok, uid, uname: udict[uid]?.uname || `user#${uid}`,
+        }));
+        const byTok = new Map(sidMap.map((e) => [e.s, e.uname]));
+        const substitute = (text: string) => text.replace(/\bS(\d+)\b/g, (m) => byTok.get(m) || m);
+        const reportNamed = substitute(reportAnon);
+        const concepts = conceptsAnon.map((c: any) => ({
+            ...c, students: (c.students || []).map((tok: string) => byTok.get(tok) || tok),
+        }));
+        const generatedAt = await setClassReport({
+            domainId,
+            tid: String(tid),
+            reportAnon,
+            reportNamed,
+            sidMap,
+            concepts,
+            statsSnapshot: stats.light,
+            participants: stats.light.participants,
+            generatedBy: this.user._id,
+        });
+        this.response.body = {
+            report: reportNamed, updateAt: generatedAt, stats: stats.light, concepts,
+        };
+        logger.info('[pta-ui] AI class report generated for %s/%s by uid=%d (%d participants)', domainId, tid, this.user._id, stats.light.participants);
+    }
+}
+
+
+/* ---------------- subjective (project-level, teacher-graded) tasks ---------------- */
+
+const SUBJECTIVE_MAX_FILE = 25 * 1024 * 1024; // 25 MB per file
+const SUBJECTIVE_MAX_FILES = 10;
+const SUBJECTIVE_MAX_REPORT = 65536;
+
+function isSubjectivePdoc(pdoc: any) {
+    return /^s/i.test(String(pdoc?.pid || ''));
+}
+
+function subjectiveTeacher(h: any, pdoc: any) {
+    return h.user.role === 'root' || h.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM) || pdoc.owner === h.user._id;
+}
+
+const cleanFileName = (name: string) => String(name || '').replace(/.*[\\/]/, '').replace(/[^\w.() \-\u4e00-\u9fff]+/g, '_').slice(0, 120) || 'file';
+
+/**
+ * Subjective project tasks (pid starts with S): students upload files and
+ * write a markdown report; teachers (problem owner or domain root) list all
+ * submissions and read/download them. Nothing here touches the judge.
+ */
+class SubjectiveTaskHandler extends Handler {
+    pdoc: any;
+
+    @param('pid', Types.PositiveInt)
+    async prepare({ domainId }, pid: number) {
+        this.pdoc = await problem.get(domainId, pid);
+        if (!this.pdoc) throw new NotFoundError(pid);
+        if (!isSubjectivePdoc(this.pdoc)) throw new BadRequestError('This problem is not a subjective task.');
+    }
+
+    @param('pid', Types.PositiveInt)
+    @param('uid', Types.PositiveInt, true)
+    @param('list', Types.Boolean, true)
+    async get({ domainId }, pid: number, uid?: number, list = false) {
+        const teacher = subjectiveTeacher(this, this.pdoc);
+        if (list) {
+            if (!teacher) throw new ForbiddenError('Only the problem owner or a domain root can list submissions.');
+            const docs = await listSubjective(domainId, pid);
+            let udict: any = {};
+            try {
+                udict = await user.getList(domainId, docs.map((d) => d.uid));
+            } catch (e) { /* uname fallback below */ }
+            this.response.body = {
+                submissions: docs.map((d) => ({
+                    uid: d.uid,
+                    uname: udict[d.uid]?.uname || `user#${d.uid}`,
+                    files: (d.files || []).length,
+                    hasReport: !!(d.report || '').trim(),
+                    updateAt: d.updateAt,
+                })),
+            };
+            return;
+        }
+        const targetUid = (uid && uid !== this.user._id) ? uid : this.user._id;
+        if (targetUid !== this.user._id && !teacher) throw new ForbiddenError('Not your submission.');
+        const doc = await getSubjective(domainId, pid, targetUid);
+        this.response.body = {
+            report: doc?.report || '',
+            files: (doc?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })),
+            updateAt: doc?.updateAt || null,
+            teacher,
+        };
+    }
+
+    @param('pid', Types.PositiveInt)
+    async post({ domainId }, pid: number) {
+        const op = String(this.args.operation || '');
+        if (op === 'report') {
+            const report = String(this.args.report || '').slice(0, SUBJECTIVE_MAX_REPORT);
+            const updateAt = await setSubjectiveReport(domainId, pid, this.user._id, report);
+            this.response.body = { updateAt };
+            return;
+        }
+        if (op === 'upload') {
+            const file = this.request.files?.file;
+            if (!file || !file.size) throw new BadRequestError('No file received.');
+            if (file.size > SUBJECTIVE_MAX_FILE) throw new BadRequestError('The file exceeds the 25 MB limit.');
+            const doc = await getSubjective(domainId, pid, this.user._id);
+            const name = cleanFileName(file.originalFilename || file.newFilename || 'file');
+            const existing = (doc?.files || []).filter((f) => f.name !== name);
+            if (existing.length >= SUBJECTIVE_MAX_FILES) throw new BadRequestError(`At most ${SUBJECTIVE_MAX_FILES} files.`);
+            const target = `subjective/${domainId}/${pid}/${this.user._id}/${name}`;
+            await storage.put(target, file.filepath, this.user._id);
+            await upsertSubjectiveFile(domainId, pid, this.user._id, {
+                name, size: file.size, target, uploadAt: new Date(),
+            });
+            const fresh = await getSubjective(domainId, pid, this.user._id);
+            this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
+            logger.info('[pta-ui] subjective upload: uid=%d pid=%d "%s" (%d bytes)', this.user._id, pid, name, file.size);
+            return;
+        }
+        if (op === 'delete') {
+            const name = cleanFileName(this.args.name);
+            const doc = await getSubjective(domainId, pid, this.user._id);
+            const entry = (doc?.files || []).find((f) => f.name === name);
+            if (entry) {
+                try {
+                    await storage.del([entry.target]);
+                } catch (e) { /* the entry removal below is authoritative */ }
+                await removeSubjectiveFile(domainId, pid, this.user._id, name);
+            }
+            const fresh = await getSubjective(domainId, pid, this.user._id);
+            this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
+            return;
+        }
+        throw new BadRequestError('Unknown operation.');
+    }
+}
+
+/** Download one submitted file (own, or any as teacher) via a signed link. */
+class SubjectiveFileHandler extends Handler {
+    @param('pid', Types.PositiveInt)
+    @param('name', Types.String)
+    @param('uid', Types.PositiveInt, true)
+    async get({ domainId }, pid: number, name: string, uid?: number) {
+        const pdoc = await problem.get(domainId, pid);
+        if (!pdoc) throw new NotFoundError(pid);
+        if (!isSubjectivePdoc(pdoc)) throw new BadRequestError('This problem is not a subjective task.');
+        const targetUid = (uid && uid !== this.user._id) ? uid : this.user._id;
+        if (targetUid !== this.user._id && !subjectiveTeacher(this, pdoc)) throw new ForbiddenError('Not your submission.');
+        const doc = await getSubjective(domainId, pid, targetUid);
+        const entry = (doc?.files || []).find((f) => f.name === cleanFileName(name));
+        if (!entry) throw new NotFoundError(name);
+        this.response.redirect = await storage.signDownloadLink(entry.target, entry.name, false);
+    }
+}
+
 export async function apply(ctx: Context) {
     ctx.Route('self_learning', '/self-learning', SelfLearningMainHandler);
     ctx.Route('self_learning_create', '/self-learning/create', SelfLearningEditHandler, PRIV.PRIV_USER_PROFILE);
@@ -831,6 +1495,11 @@ export async function apply(ctx: Context) {
     ctx.Route('bulk_add_users', '/bulk-add-users', BulkAddUsersHandler, PRIV.PRIV_EDIT_SYSTEM);
     // Post-acceptance AI report behind the result modal's "AI Suggestions" button.
     ctx.Route('ai_suggestions', '/p/:pid/ai-suggestions', AiSuggestionsHandler, PRIV.PRIV_USER_PROFILE);
+    // Teacher-only class report behind the contest/homework page button.
+    ctx.Route('ai_class_report', '/activity/:tid/ai-class-report', AiClassReportHandler, PRIV.PRIV_USER_PROFILE);
+    // Subjective (project-level) tasks: submissions + file downloads.
+    ctx.Route('subjective_task', '/p/:pid/subjective', SubjectiveTaskHandler, PRIV.PRIV_USER_PROFILE);
+    ctx.Route('subjective_task_file', '/p/:pid/subjective/file', SubjectiveFileHandler, PRIV.PRIV_USER_PROFILE);
     const setKinds = async (h: any, source: string) => {
         if (!h?.UiContext || h.UiContext.tdocKinds || h.UiContext.trainingRail || h.UiContext.psetRail) return;
         let tdoc = h.tdoc || h.response?.body?.tdoc;

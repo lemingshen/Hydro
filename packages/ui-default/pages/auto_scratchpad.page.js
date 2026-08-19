@@ -1,6 +1,7 @@
 import $ from 'jquery';
 import MarkdownIt from 'markdown-it';
 import Notification from 'vj/components/notification';
+import { downloadAiReportPdf } from 'vj/components/ai-report/pdf';
 import { NamedPage } from 'vj/misc/Page';
 import { getTheme, i18n, request } from 'vj/utils';
 
@@ -98,6 +99,17 @@ const STATUS_COLORS = {
   20: '#1c7ed6', // Judging
   21: '#1c7ed6', // Compiling
 };
+/** Subjective (project-level) tasks: the display pid's S prefix is the marker. */
+function isSubjectivePid() {
+  const pdoc = window.UiContext && UiContext.pdoc;
+  return /^s/i.test(String((pdoc && pdoc.pid) || ''));
+}
+
+function reportFileName() {
+  const pdoc = (window.UiContext && UiContext.pdoc) || {};
+  return `AI-Suggestions-${pdoc.pid ?? pdoc.docId ?? 'report'}.pdf`.replace(/[^\w.-]+/g, '-');
+}
+
 const DARK_STATUS_OVERRIDES = { 8: '#9aa4ad', 9: '#9aa4ad' }; // grays legible on dark
 const statusColor = (st, accepted) => {
   if (accepted) return STATUS_COLORS[1];
@@ -142,6 +154,11 @@ const RAIL_STYLE = [
   '.pta-dark .sl-rail__chip { background: #262b31; border-color: #49515a; color: #cfd6dd; }',
   '.pta-dark .sl-rail__chip:hover { background: #2d333a; border-color: #5a6470; }',
   '.pta-dark .sl-rail__chip.current { border-color: #4dabf7; background: #1c2f42; color: #d8ecff; }',
+  '.sl-rail__chip.subj { border-style: dashed; border-color: #b197fc; color: #845ef7; }',
+  '.sl-rail__chip.subj:hover { border-color: #845ef7; background: #f6f2ff; }',
+  '.sl-rail__chip.subj.current { border-color: #845ef7; background: #f3edff; color: #5f3dc4; border-style: solid; }',
+  '.pta-dark .sl-rail__chip.subj { border-color: #6f5bb5; color: #b197fc; background: #26232e; }',
+  '.pta-dark .sl-rail__chip.subj.current { border-color: #b197fc; background: #2c2440; color: #d0bdfb; }',
   '.pta-dark .sl-rail__foot { background: #23282e; border-top-color: #2e3338; }',
   '.pta-dark .sl-rail__expander { background: #1e2227; border-color: #2e3338; color: #9aa4ad; }',
 ].join('\n');
@@ -192,19 +209,21 @@ function buildTdocGroups(kinds) {
     const byPid = {};
     for (const k of kinds) byPid[String(k.pid)] = k;
     const quizzes = [];
+    const subj = [];
     const programming = [];
     for (const pid of pids) {
       const info = byPid[String(pid)] || {};
-      const isQuiz = info.kind && info.kind !== 'programming';
+      const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
       const item = {
-        cls: `${isQuiz ? ' quiz' : ''}${String(pid) === String(current) ? ' current' : ''}`,
+        cls: `${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(pid),
         href: `${prefix}/p/${pid}?tid=${uc.tdoc.docId}`,
       };
-      (isQuiz ? quizzes : programming).push(item);
+      (kind3 === 'programming' ? programming : (kind3 === 'subjective' ? subj : quizzes)).push(item);
     }
     const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Subjectives'), items: quizzes });
+    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
+    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
     if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
     for (const g of groups) {
       g.items.forEach((it, i) => {
@@ -237,19 +256,22 @@ async function getRailGroups() {
   if (Array.isArray(uc.slProblems) && uc.slProblems.length) {
     const prefix = window.location.pathname.split('/self-learning/')[0];
     const quizzes = [];
+    const subj = [];
     const programming = [];
     for (const p of uc.slProblems) {
+      const kindCls = p.kind === 'objective' ? ' quiz' : (p.kind === 'subjective' ? ' subj' : '');
       const item = {
         accepted: p.status === 1,
-        cls: `${p.status === 1 ? ' ac' : (p.status ? ' tried' : '')}${p.kind === 'objective' ? ' quiz' : ''}`
+        cls: `${p.status === 1 ? ' ac' : (p.status ? ' tried' : '')}${kindCls}`
           + (String(p.pid) === String(uc.slPid) ? ' current' : ''),
         name: p.title || String(p.pid),
         href: `${prefix}/self-learning/${uc.slSsid}/p/${p.pid}`,
       };
-      (p.kind === 'programming' ? programming : quizzes).push(item);
+      (p.kind === 'programming' ? programming : (p.kind === 'subjective' ? subj : quizzes)).push(item);
     }
     const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Subjectives'), items: quizzes });
+    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
+    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
     if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
     for (const g of groups) {
       g.items.forEach((it, i) => {
@@ -275,18 +297,20 @@ async function getRailGroups() {
     const prefix = window.location.pathname.split('/p/')[0];
     const current = uc.pdoc && uc.pdoc.docId;
     const quizzes = [];
+    const subj = [];
     const programming = [];
     for (const info of tr.kinds) {
-      const isQuiz = info.kind && info.kind !== 'programming';
+      const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
       const item = {
-        cls: `${isQuiz ? ' quiz' : ''}${String(info.pid) === String(current) ? ' current' : ''}`,
+        cls: `${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(info.pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(info.pid),
         href: `${prefix}/p/${info.pid}?trid=${tr.trid}`,
       };
-      (isQuiz ? quizzes : programming).push(item);
+      (kind3 === 'programming' ? programming : (kind3 === 'subjective' ? subj : quizzes)).push(item);
     }
     const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Subjectives'), items: quizzes });
+    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
+    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
     if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
     for (const g of groups) {
       g.items.forEach((it, i) => {
@@ -304,18 +328,20 @@ async function getRailGroups() {
     const prefix = window.location.pathname.split('/p/')[0];
     const current = uc.pdoc && uc.pdoc.docId;
     const quizzes = [];
+    const subj = [];
     const programming = [];
     for (const info of ps.kinds) {
-      const isQuiz = info.kind && info.kind !== 'programming';
+      const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
       const item = {
-        cls: `${isQuiz ? ' quiz' : ''}${String(info.pid) === String(current) ? ' current' : ''}`,
+        cls: `${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(info.pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(info.pid),
         href: `${prefix}/p/${info.pid}`,
       };
-      (isQuiz ? quizzes : programming).push(item);
+      (kind3 === 'programming' ? programming : (kind3 === 'subjective' ? subj : quizzes)).push(item);
     }
     const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Subjectives'), items: quizzes });
+    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
+    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
     if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
     for (const g of groups) {
       g.items.forEach((it, i) => {
@@ -553,7 +579,9 @@ const SITE_UI_STYLE = [
   '.slm__sect--ai { border: 1px solid #b197fc; box-shadow: 0 4px 18px rgba(132,94,247,.16); }',
   '.slm__aihead { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: linear-gradient(90deg, #4c6ef5 0%, #845ef7 55%, #b197fc 100%); color: #fff; font-weight: bold; font-size: 14px; }',
   '.slm__aihead .slm__aititle { flex: 1 1 auto; letter-spacing: .02em; }',
-  '.slm__pdf { margin-left: auto; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.75); color: #fff; padding: 3px 14px; font-size: 12px; border-radius: 14px; cursor: pointer; flex: 0 0 auto; }',
+  '.slm__pdf { background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.75); color: #fff; padding: 3px 14px; font-size: 12px; border-radius: 14px; cursor: pointer; flex: 0 0 auto; }',
+  '.slm__pdf:disabled { opacity: .6; cursor: default; }',
+  '.slm__aits { font-size: 11px; color: rgba(255,255,255,.85); flex: 0 0 auto; }',
   '.slm__pdf:hover { background: rgba(255,255,255,.32); }',
   '.slm__ai-btn { background: linear-gradient(90deg, #4c6ef5, #845ef7); color: #fff; border: none; border-radius: 16px; padding: 7px 18px; font-size: 13px; cursor: pointer; box-shadow: 0 2px 10px rgba(76,110,245,.35); }',
   '.slm__ai-btn:hover { filter: brightness(1.08); }',
@@ -609,231 +637,6 @@ function showJudging() {
 
 function hideJudging() {
   $('#sl-judging').remove();
-}
-
-/* ------------------- report PDF export (selectable text) ------------------- */
-
-let pdfMakePromise = null;
-function ensurePdfMake() {
-  if (window.pdfMake && window.pdfMake.vfs) return Promise.resolve(window.pdfMake);
-  if (!pdfMakePromise) {
-    const load = (src) => new Promise((resolve, reject) => {
-      const el = document.createElement('script');
-      el.src = src;
-      el.onload = resolve;
-      el.onerror = () => reject(new Error(`could not load ${src.split('/').pop()} from the CDN`));
-      document.head.appendChild(el);
-    });
-    pdfMakePromise = load('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/pdfmake.min.js')
-      .then(() => load('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/vfs_fonts.js'))
-      .then(() => {
-        if (!window.pdfMake) throw new Error('pdfMake failed to initialize');
-        // Courier is a PDF standard font: real monospace with zero embedding.
-        window.pdfMake.fonts = {
-          Roboto: {
-            normal: 'Roboto-Regular.ttf', bold: 'Roboto-Medium.ttf', italics: 'Roboto-Italic.ttf', bolditalics: 'Roboto-MediumItalic.ttf',
-          },
-          Courier: {
-            normal: 'Courier', bold: 'Courier-Bold', italics: 'Courier-Oblique', bolditalics: 'Courier-BoldOblique',
-          },
-        };
-        return window.pdfMake;
-      });
-  }
-  return pdfMakePromise;
-}
-
-function reportFileName() {
-  const pdoc = (window.UiContext && UiContext.pdoc) || {};
-  return `AI-Suggestions-${pdoc.pid ?? pdoc.docId ?? 'report'}.pdf`.replace(/[^\w.-]+/g, '-');
-}
-
-const PDF_CODE = {
-  font: 'Courier', fontSize: 8.6, lineHeight: 1.25, color: '#24292f', preserveLeadingSpaces: true,
-};
-
-function pdfCodeBlock(content) {
-  return {
-    table: { widths: ['*'], body: [[{ text: String(content || '').replace(/\n$/, ''), ...PDF_CODE, margin: [6, 5, 6, 5] }]] },
-    layout: {
-      hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#d8dee4', vLineColor: () => '#d8dee4', fillColor: () => '#f6f8fa',
-    },
-    margin: [0, 3, 0, 7],
-  };
-}
-
-/** markdown-it inline children -> pdfmake text runs. */
-function pdfInline(children) {
-  const runs = [];
-  let bold = 0;
-  let italics = 0;
-  let link = null;
-  for (const t of children || []) {
-    if (t.type === 'strong_open') bold++;
-    else if (t.type === 'strong_close') bold--;
-    else if (t.type === 'em_open') italics++;
-    else if (t.type === 'em_close') italics--;
-    else if (t.type === 'link_open') link = (t.attrs || []).find((a) => a[0] === 'href')?.[1] || null;
-    else if (t.type === 'link_close') link = null;
-    else if (t.type === 'code_inline') {
-      runs.push({
-        text: t.content, font: 'Courier', fontSize: 9, color: '#9e2335', background: '#f6f8fa',
-      });
-    } else if (t.type === 'softbreak' || t.type === 'hardbreak') runs.push({ text: '\n' });
-    else if (t.type === 'text' || t.type === 'html_inline') {
-      const run = { text: t.content };
-      if (bold > 0) run.bold = true;
-      if (italics > 0) run.italics = true;
-      if (link) { run.link = link; run.color = '#0969da'; }
-      runs.push(run);
-    }
-  }
-  return runs.length ? runs : [{ text: '' }];
-}
-
-/**
- * markdown-it token stream -> pdfmake content. Covers the report's shapes:
- * headings, paragraphs, bold/italic/inline code/links, bullet & ordered
- * lists (nested), fenced code, blockquotes, tables, and rules.
- */
-function pdfWalk(tokens, start, closeType) {
-  const out = [];
-  let i = start;
-  while (i < tokens.length) {
-    const t = tokens[i];
-    if (closeType && t.type === closeType) return { content: out, next: i + 1 };
-    if (t.type === 'heading_open') {
-      const inline = tokens[i + 1];
-      out.push({ text: pdfInline(inline.children), style: `h${t.tag.slice(1)}` });
-      i += 3;
-    } else if (t.type === 'paragraph_open') {
-      const inline = tokens[i + 1];
-      out.push({ text: pdfInline(inline.children), margin: [0, 2, 0, 5] });
-      i += 3;
-    } else if (t.type === 'fence' || t.type === 'code_block') {
-      out.push(pdfCodeBlock(t.content));
-      i += 1;
-    } else if (t.type === 'bullet_list_open' || t.type === 'ordered_list_open') {
-      const ordered = t.type === 'ordered_list_open';
-      const closer = ordered ? 'ordered_list_close' : 'bullet_list_close';
-      const items = [];
-      let j = i + 1;
-      while (j < tokens.length && tokens[j].type !== closer) {
-        if (tokens[j].type === 'list_item_open') {
-          const r = pdfWalk(tokens, j + 1, 'list_item_close');
-          items.push(r.content.length === 1 ? r.content[0] : r.content);
-          j = r.next;
-        } else j += 1;
-      }
-      out.push({ [ordered ? 'ol' : 'ul']: items, margin: [0, 1, 0, 5] });
-      i = j + 1;
-    } else if (t.type === 'blockquote_open') {
-      const r = pdfWalk(tokens, i + 1, 'blockquote_close');
-      out.push({
-        table: { widths: [2, '*'], body: [[{ text: '', fillColor: '#b197fc' }, { stack: r.content, margin: [8, 2, 0, 2] }]] },
-        layout: 'noBorders',
-        margin: [0, 3, 0, 6],
-      });
-      i = r.next;
-    } else if (t.type === 'table_open') {
-      const rows = [];
-      let j = i + 1;
-      let row = null;
-      while (j < tokens.length && tokens[j].type !== 'table_close') {
-        const tt = tokens[j];
-        if (tt.type === 'tr_open') row = [];
-        else if (tt.type === 'tr_close') { rows.push(row); row = null; }
-        else if (tt.type === 'th_open' || tt.type === 'td_open') {
-          row.push({ text: pdfInline(tokens[j + 1].children), bold: tt.type === 'th_open', fontSize: 9.5 });
-          j += 2;
-        }
-        j += 1;
-      }
-      if (rows.length) {
-        out.push({
-          table: { headerRows: 1, widths: rows[0].map(() => 'auto'), body: rows },
-          layout: {
-            hLineColor: () => '#d8dee4', vLineColor: () => '#d8dee4', hLineWidth: () => 0.5, vLineWidth: () => 0.5,
-          },
-          margin: [0, 3, 0, 7],
-        });
-      }
-      i = j + 1;
-    } else if (t.type === 'hr') {
-      out.push({
-        canvas: [{
-          type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 0.5, lineColor: '#d8dee4',
-        }],
-        margin: [0, 6, 0, 8],
-      });
-      i += 1;
-    } else i += 1;
-  }
-  return { content: out, next: i };
-}
-
-/**
- * "Download PDF": a REAL text PDF — selectable, searchable, and always in
- * the light theme by construction (built from the markdown, never from the
- * themed page). Falls back to the clean print flow (also selectable text)
- * when the CDN library is unreachable.
- */
-async function downloadReportPdf(reportMd, reportHtml) {
-  try {
-    const pdfMake = await ensurePdfMake();
-    const tokens = mdReport.parse(String(reportMd || ''), {});
-    const { content } = pdfWalk(tokens, 0, null);
-    if (!content.length) throw new Error('empty report');
-    pdfMake.createPdf({
-      pageSize: 'A4',
-      pageMargins: [42, 44, 42, 50],
-      defaultStyle: { font: 'Roboto', fontSize: 10.5, lineHeight: 1.35, color: '#1f2328' },
-      styles: {
-        h1: { fontSize: 17, bold: true, color: '#1a3d6d', margin: [0, 0, 0, 8] },
-        h2: {
-          fontSize: 13.5, bold: true, color: '#1a3d6d', margin: [0, 12, 0, 5],
-        },
-        h3: { fontSize: 11.5, bold: true, margin: [0, 9, 0, 4] },
-        h4: { fontSize: 10.5, bold: true, margin: [0, 8, 0, 3] },
-      },
-      footer: (page, pages) => ({
-        text: `${page} / ${pages}`, alignment: 'center', fontSize: 8.5, color: '#8b949e', margin: [0, 16, 0, 0],
-      }),
-      content,
-    }).download(reportFileName());
-  } catch (e) {
-    console.warn('[pta-ui] pdfmake unavailable (%s) — falling back to the print dialog', e && e.message);
-    printReportFallback(reportHtml);
-  }
-}
-
-/**
- * Fallback printable view. @page { margin: 0 } removes the area where
- * browsers print their own header/footer (timestamp, URL, page numbers),
- * so even this path produces a clean, meta-free PDF via "Save as PDF".
- */
-function printReportFallback(reportHtml) {
-  const w = window.open('', '_blank');
-  if (!w) {
-    Notification.error(i18n('Popup blocked — please allow popups to download the PDF.'));
-    return;
-  }
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(reportFileName().replace(/\.pdf$/, ''))}</title><style>
-    @page { size: A4; margin: 0; }
-    body { font: 14px/1.65 -apple-system, "Segoe UI", Arial, sans-serif; color: #1f2328; margin: 0; padding: 14mm 15mm; }
-    h1, h2, h3 { color: #1f2328; } h1 { font-size: 21px; } h2 { font-size: 17px; margin-top: 20px; border-bottom: 1px solid #d8dee4; padding-bottom: 4px; }
-    code { background: #f6f8fa; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
-    pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; break-inside: avoid; }
-    pre code { background: none; padding: 0; }
-    table { border-collapse: collapse; } td, th { border: 1px solid #d8dee4; padding: 4px 10px; }
-  </style></head><body>${reportHtml}</body></html>`);
-  w.document.close();
-  w.focus();
-  setTimeout(() => {
-    try {
-      w.print();
-    } catch (e) { /* the user can still print manually */ }
-  }, 350);
 }
 
 /**
@@ -914,43 +717,77 @@ export function showSubmitModal(data, onClose) {
   $modal.find('.slm__close, .slm__ok').on('click', close);
   // Requirement: post-acceptance AI report — statement + FULL trajectory as
   // context, rendered as Markdown inside this modal, downloadable as PDF.
-  $modal.find('.slm__ai-btn').on('click', async function onAiClick() {
-    const $btn = $(this);
-    $btn.prop('disabled', true).html(`<span class="slm__btnspin"></span>${esc(i18n('Generating suggestions...'))}`);
-    // Requirement: while the AI works, an unmissable spinning hint asking the
-    // user to stay — appended into the modal body and scrolled into view.
+  // Saved-report probe: if this problem already has a generated report in the
+  // database, the button flips to an instant, token-free "View" affordance.
+  let aiSaved = null; // { report, updateAt }
+  const aiUrl = () => trajectoryUrl().replace(/\/trajectory$/, '/ai-suggestions');
+  if (aiEligible) {
+    request.get(aiUrl()).then((r) => {
+      if (r && r.report) {
+        aiSaved = { report: String(r.report), updateAt: r.updateAt };
+        $modal.find('.slm__ai-btn').html(`📄 ${esc(i18n('View AI Suggestions'))}`);
+      }
+    }).catch(() => { /* no saved report — the button stays in generate mode */ });
+  }
+
+  /** Render a report section (used for saved, fresh, and regenerated). */
+  function renderReportSection(report, updateAt, $replaceEl) {
+    const reportMd = String(report || '');
+    const reportHtml = mdReport.render(reportMd);
+    const $sect = $('<div class="slm__sect slm__sect--ai">'
+      + `<div class="slm__aihead">🤖 <span class="slm__aititle">${esc(i18n('AI Suggestions'))}</span>`
+      + (updateAt ? `<span class="slm__aits">${esc(i18n('Saved'))}: ${esc(fmtTs(updateAt))}</span>` : '')
+      + `<button type="button" class="slm__pdf slm__regen" title="${esc(i18n('Regenerate'))}">↻ ${esc(i18n('Regenerate'))}</button>`
+      + `<button type="button" class="slm__pdf slm__dl">⬇ ${esc(i18n('Download PDF'))}</button></div>`
+      + '<div class="slm__ai typo"></div></div>');
+    $sect.find('.slm__ai').html(reportHtml);
+    if ($replaceEl) $replaceEl.replaceWith($sect);
+    else $modal.find('.slm__body').append($sect);
+    import('vj/components/highlighter/prismjs')
+      .then(({ default: prism }) => prism.highlightBlocks($sect))
+      .catch(() => { /* highlighting is optional */ });
+    $sect[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $sect.find('.slm__dl').on('click', function onPdfClick() {
+      const $p = $(this);
+      $p.prop('disabled', true);
+      downloadAiReportPdf(reportMd, reportHtml, reportFileName()).finally(() => $p.prop('disabled', false));
+    });
+    $sect.find('.slm__regen').on('click', () => startGeneration($sect, null));
+    return $sect;
+  }
+
+  /** Generate (or regenerate): spinner section -> LLM -> saved server-side. */
+  async function startGeneration($replaceEl, $btn) {
+    if ($btn) $btn.prop('disabled', true).html(`<span class="slm__btnspin"></span>${esc(i18n('Generating suggestions...'))}`);
     const $gen = $('<div class="slm__sect slm__sect--ai">'
       + `<div class="slm__aihead">🤖 <span class="slm__aititle">${esc(i18n('AI Suggestions'))}</span></div>`
       + '<div class="slm__genwrap"><div class="slm__spinner"></div>'
       + `<div class="slm__gentext"><b>${esc(i18n('The AI is generating your report...'))}</b><br>`
       + `${esc(i18n('This usually takes 10-30 seconds. Please keep this window open and do not quit.'))}</div></div></div>`);
-    $modal.find('.slm__body').append($gen);
+    if ($replaceEl) $replaceEl.replaceWith($gen);
+    else $modal.find('.slm__body').append($gen);
     $gen[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
     try {
-      const res = await request.post(trajectoryUrl().replace(/\/trajectory$/, '/ai-suggestions'), {});
-      const reportMd = String((res && res.report) || '');
-      const reportHtml = mdReport.render(reportMd);
-      const $sect = $('<div class="slm__sect slm__sect--ai">'
-        + `<div class="slm__aihead">🤖 <span class="slm__aititle">${esc(i18n('AI Suggestions'))}</span>`
-        + `<button type="button" class="slm__pdf">⬇ ${esc(i18n('Download PDF'))}</button></div>`
-        + '<div class="slm__ai typo"></div></div>');
-      $sect.find('.slm__ai').html(reportHtml);
-      $gen.replaceWith($sect);
-      import('vj/components/highlighter/prismjs')
-        .then(({ default: prism }) => prism.highlightBlocks($sect))
-        .catch(() => { /* highlighting is optional */ });
-      $sect[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
-      $sect.find('.slm__pdf').on('click', function onPdfClick() {
-        const $p = $(this);
-        $p.prop('disabled', true);
-        downloadReportPdf(reportMd, reportHtml).finally(() => $p.prop('disabled', false));
-      });
-      $btn.remove();
+      const res = await request.post(aiUrl(), {});
+      aiSaved = { report: String((res && res.report) || ''), updateAt: res && res.updateAt };
+      renderReportSection(aiSaved.report, aiSaved.updateAt, $gen);
+      if ($btn) $btn.remove();
     } catch (e) {
       $gen.remove();
       Notification.error(e.message);
-      $btn.prop('disabled', false).text(`🤖 ${i18n('AI Suggestions')}`);
+      if ($btn) $btn.prop('disabled', false).text(aiSaved ? `📄 ${i18n('View AI Suggestions')}` : `🤖 ${i18n('AI Suggestions')}`);
     }
+  }
+
+  $modal.find('.slm__ai-btn').on('click', function onAiClick() {
+    const $btn = $(this);
+    if (aiSaved) {
+      // Instant view straight from the database — no LLM call, no tokens.
+      renderReportSection(aiSaved.report, aiSaved.updateAt, null);
+      $btn.remove();
+      return;
+    }
+    startGeneration(null, $btn);
   });
   $(document).on('keydown.slmodal', (ev) => {
     if (ev.key === 'Escape') close();
@@ -1253,10 +1090,20 @@ export default new NamedPage([...PROBLEM_PAGES, ...SUBMIT_PAGES, 'self_learning_
 
   const isDomainRoot = !!(window.UiContext && UiContext.isDomainRoot);
   if (SUBMIT_PAGES.includes(pagename)) {
+    if (isSubjectivePid()) return; // subjective tasks have no code submit page
     if (isDomainRoot) return; // problem authors keep the classic submit page
     // The plain paste-code page is superseded by the IDE.
     const target = window.location.pathname.replace(/\/submit\/?$/, '') + window.location.search;
     window.location.replace(target);
+    return;
+  }
+
+  if (isSubjectivePid()) {
+    // Project-level subjective task (pid S...): no judge pipeline at all —
+    // the dedicated module renders the submission UI; only the rail applies.
+    if (PROBLEM_PAGES.includes(pagename) && ((uc.tdoc && Array.isArray(uc.tdoc.pids) && uc.tdoc.pids.length > 1) || uc.trainingRail || uc.psetRail)) {
+      injectRailForPage();
+    }
     return;
   }
 

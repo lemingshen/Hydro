@@ -694,7 +694,7 @@ export interface AnnotationDialogueResult {
 
 const logger = new Logger('ai-tutor');
 
-const ANNOTATION_SYSTEM_PROMPT = `You are the line-annotation engine of a Socratic programming tutor. You are guiding ONE student through EVERY distinct flaw of a FAILED submission within a single session, one anchored question at a time: a flaw is discussed, the student fixes it in the editor, and then you move to the NEXT remaining flaw — the student submits again only once, at the very end. You receive the problem, the judge verdict briefing of the submitted attempt, the SUBMITTED code, possibly the student's CURRENT editor code (with their in-progress fixes applied), and the list of questions already asked.
+const ANNOTATION_SYSTEM_PROMPT = `You are the line-annotation engine of a Socratic programming tutor. You are guiding ONE student through EVERY distinct flaw of a FAILED submission within a single session, one anchored question at a time: a flaw is raised, the student either discusses it or fixes it directly in the editor, and then you move to the NEXT remaining flaw — the student submits again only once, at the very end. You receive the problem, the judge verdict briefing of the submitted attempt, the SUBMITTED code, possibly the student's CURRENT editor code (with their in-progress fixes applied), and the list of questions already asked.
 Respond with STRICT JSON only — a single object shaped {"line": <int>, "endLine": <int>, "question": "<string>"}, or the literal null — and nothing else: no prose, no markdown fences.
 Rules:
 - Write in English ONLY, regardless of the language of the problem statement, the student's code comments, or anything else in the context.
@@ -702,7 +702,7 @@ Rules:
 - When CURRENT editor code is provided, line and endLine MUST refer to the CURRENT code's numbering — that is what the student sees in the editor. Otherwise they refer to the submitted code.
 - One sentence, under 160 characters, ending with a question mark.
 - The question is rendered as markdown: wrap EVERY code identifier, expression, value, or operator you mention in inline code using backtick characters (for example variable names, function calls, operators such as the plus sign). Never use fenced code blocks.
-- Never repeat or trivially rephrase any question in the already-asked list; ask the next most instructive one instead.
+- Never repeat or trivially rephrase any question in the already-asked list — its entries were either answered or the student chose to fix them directly without answering. Either way that flaw is covered: judge what remains by the CURRENT code, not by the list.
 - If the verdict is Accepted, switch to SELF-REFLECTION: ask exactly ONE short reflection question — the root cause of an earlier failed attempt (when the prior-attempt trail shows failures), why a specific line is correct or necessary, the solution's time or space complexity, or the general lesson learned — anchored to the most relevant line, still without writing code. If the prior-attempt trail shows this problem was already Accepted before this attempt, pick a fresh angle or respond with null.
 - If the current code appears to contain NO remaining flaw that would explain the failed verdict — every issue is either fixed or already covered — respond with null: the walkthrough is complete.`;
 
@@ -710,10 +710,11 @@ const ANNOTATION_DIALOGUE_PROMPT = `You are conducting a focused Socratic mini-d
 Respond with STRICT JSON only — a single object shaped {"reply": "<string>", "resolved": <true|false>} — and nothing else: no prose, no markdown fences.
 Rules:
 - Write in English ONLY, even when the student answers in another language: understand them, but reply in English.
-- If the reasoning is correct and complete for this question, set resolved to true. The reply then depends on the overall verdict shown in the context: if it is NOT Accepted, confirm their reasoning in one warm sentence and explicitly ask them to APPLY the fix on the anchored lines NOW, in the editor, according to that understanding — without stating the exact edit — and tell them that once fixed they can continue to the next issue. Do NOT tell them to resubmit yet: more issues may remain, and one final submission at the end of the walkthrough verifies everything. If the overall verdict IS Accepted, this is a post-success self-reflection: confirm their reasoning warmly, celebrate the insight in one sentence, and close — do NOT tell them to modify or resubmit anything.
+- If the reasoning is correct and complete for this question, set resolved to true. The reply then depends on the overall verdict shown in the context: if it is NOT Accepted, confirm their reasoning in one warm sentence and explicitly ask them to APPLY the fix on the anchored lines NOW, in the editor, according to that understanding — without stating the exact edit — and tell them that once fixed they can continue with the "Next issue" button. Do NOT tell them to resubmit yet: more issues may remain, and one final submission at the end of the walkthrough verifies everything. If the overall verdict IS Accepted, this is a post-success self-reflection: confirm their reasoning warmly, celebrate the insight in one sentence, and close — do NOT tell them to modify or resubmit anything.
 - Otherwise set resolved to false and let the reply probe the gap with exactly one short follow-up question.
 - The reply is one or two short sentences, under 300 characters, rendered as markdown: wrap EVERY code identifier, expression, value, or operator you mention in inline code using backtick characters, and use **bold** for emphasis where helpful. Never use fenced code blocks, never give the fix, never reveal hidden test data.
-- Do not accept a bare guess as understanding: an answer without a reason gets a follow-up asking for the reason.`;
+- Do not accept a bare guess as understanding: an answer without a reason gets a follow-up asking for the reason.
+- If the student asks a question instead of answering, help within these limits: one short Socratic reply that guides without giving the fix, with resolved set to false.`;
 
 function numberedCode(code: string, cap = 8000): string {
     const lines = String(code || '').split('\n');
@@ -807,7 +808,7 @@ export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = [
         numberedCode(submitted),
         liveDiffers ? '--- CURRENT editor code (fixes in progress; anchor line/endLine HERE) ---' : '',
         liveDiffers ? numberedCode(live) : '',
-        asked.length ? `--- Questions already asked and resolved (do NOT repeat or rephrase; their flaws should be fixed) ---\n${asked.map((q) => `- ${q}`).join('\n')}` : '',
+        asked.length ? `--- Questions already covered: answered, or skipped because the student fixed directly (never repeat or rephrase; judge remaining flaws by the CURRENT code, not by this list) ---\n${asked.map((q) => `- ${q}`).join('\n')}` : '',
         '--- End ---',
         'Respond with the JSON object (or null) only.',
     ].filter((x) => x).join('\n');
@@ -933,7 +934,7 @@ COVER AT LEAST THESE SECTIONS (add more when genuinely useful):
 
 ## Constructive Refactoring
 - For each key snippet, show a "Student version" fenced code block immediately followed by a "Refactored version" fenced code block in idiomatic style, each pair with a one-line rationale.
-- End with **"The single most critical concept to review before the next assignment"** — exactly one concept, justified in two sentences.
+- End the report with a bolded line that begins EXACTLY with "The single most critical concept to review before the next assignment:", naming exactly ONE concept, followed by a two-sentence justification.
 
 Target length: 600-1100 words plus code blocks. Be specific, kind, and honest.`;
 
@@ -957,5 +958,73 @@ export async function runSuggestionsReport(c: SuggestionsContext): Promise<strin
         SUGGESTIONS_SYSTEM_PROMPT,
         [{ role: 'user', content: lines.join('\n') }],
         { temperature: 0.4, timeoutMs: 180000 },
+    );
+}
+
+/* ----------------------- teacher-facing class report ----------------------- */
+
+export const CLASS_REPORT_SYSTEM_PROMPT = `You are an experienced CS instructor's analytics assistant, writing a CLASS-LEVEL report for the TEACHER about one contest, homework, or self-learning session, from pre-computed statistics, anonymized student roster lines (S1..Sn), representative code excerpts, and harvested per-student "critical concept" notes.
+
+OUTPUT CONTRACT:
+- English only, pure Markdown. Start EXACTLY with "# AI Class Report — " followed by the activity title given in the context.
+- Produce these sections, in this order:
+## Executive Summary
+  At most 5 sentences. Use ONLY numbers that literally appear in the provided statistics — never invent, estimate, or recompute figures.
+## Problem-by-Problem Diagnosis
+  One short block per problem: the dominant failure mode and its likely cause, citing the verdict and first-failure numbers provided.
+## Concepts to Re-Teach
+  A ranked list. Merge the harvested critical-concept notes with your own analysis of the failure data; give each item a student count or explicit evidence references.
+## Student Groupings
+  Three lists that reference students ONLY by their S-tokens: "Needs intervention" (each with a one-phrase reason), "Solid middle" (tokens only), "Ready for stretch material" (tokens only).
+## Misconception Gallery
+  2-3 short excerpts taken ONLY from the provided failing code samples, each with a one-line explanation of the misconception it shows. If NO code excerpts were provided, replace this section's body with a short "Common wrong patterns" paragraph grounded strictly in the statistics — never invent code.
+## Suggested Teaching Adjustments
+  3-5 concrete, immediately actionable items for the next teaching session.
+
+MACHINE-READABLE TRAILER (mandatory):
+After all sections above, end the document with EXACTLY ONE fenced code block whose info string is json:concepts, containing strict JSON of this shape and nothing else:
+{"concepts":[{"name":"<knowledge-point label, 2-6 words, e.g. 'Loop boundary (off-by-one)'>","problems":{"P1001":<affected student count>},"students":["S3","S7"]}]}
+- 3 to 8 concepts total, ranked by total affected students; these are DETAILED knowledge points (e.g. "Output formatting precision", "Empty-input edge case", "Integer vs float division"), never judge verdicts like "Wrong Answer".
+- A student counts under a concept for a problem only when the roster, verdict, harvested notes, or code evidence supports it; every count must be consistent with the provided statistics.
+- Use only the given P-labels and S-tokens. No prose, comments, or trailing text inside or after the block.
+
+RULES:
+- Cite evidence inline in the form (P1002, S7, S12), using ONLY the provided P-labels and S-tokens. Never guess or fabricate student names.
+- If the context says the data was sampled or capped, state that plainly in the Executive Summary.
+- Never reveal or attempt to reconstruct hidden test data.
+- Every knowledge point in the trailer (and in Concepts to Re-Teach) must be evidenced by THIS activity's own data — its statistics, roster, samples, harvested notes, or batch analysis; never import generic syllabus topics without such evidence, and problems maps may only use this activity's P-labels.
+- When a "Batch analysis" section is present, the per-student lines were processed in disjoint batches covering the FULL population: its concept counts are exact sums — ground the trailer's counts in them, merging obviously synonymous concept names (and summing their counts) into one canonical label each.
+- For self-learning activities the statistics include tutor engagement per problem (questions asked, student replies, silently-skipped questions). Treat a high skip rate as a distinct signal — students bypassing the Socratic dialogue — and weave it into the groupings and teaching adjustments.
+- Be specific, kind, and honest — this report exists so the teacher can adjust the plan, not to rank students publicly.
+- Total length 700-1200 words.`;
+
+export const CLASS_MAP_SYSTEM_PROMPT = `You are the MAP stage of a two-stage class analysis. You receive the per-problem statistics of ONE activity (contest, homework, or self-learning session) plus the roster lines and harvested notes of ONE disjoint BATCH of its students (S-tokens). Extract structured evidence for the final report writer.
+
+Respond with STRICT JSON only — no prose, no markdown fences — shaped exactly:
+{"concepts":[{"name":"<knowledge-point, 2-6 words>","problems":{"P1001":<affected students IN THIS BATCH>},"students":["S12"]}],
+ "flags":{"intervention":[{"s":"S12","reason":"<one short phrase>"}],"stretch":["S3"]},
+ "notes":["<at most 3 one-line batch observations>"]}
+
+Rules:
+- English only. Knowledge points are DETAILED concepts (e.g. "Empty-input edge case", "Integer vs float division"), never judge verdicts.
+- Every concept must be evidenced by THIS activity's data for THIS batch (roster states, harvested notes, statistics); problems maps may only use the given P-labels, and student lists only this batch's S-tokens.
+- 2-6 concepts; counts must not exceed this batch's size.
+- intervention: students visibly stuck, thrashing, or disengaged (one-phrase reason each, max 8); stretch: students who solved everything with few attempts (max 8).`;
+
+/** MAP: one batch of students -> structured JSON evidence. */
+export async function runClassMapBatch(contextBlock: string): Promise<string> {
+    return await callProvider(
+        CLASS_MAP_SYSTEM_PROMPT,
+        [{ role: 'user', content: contextBlock }],
+        { temperature: 0.2, timeoutMs: 180000 },
+    );
+}
+
+/** One class-level teaching report from the pre-assembled statistics block. */
+export async function runClassReport(contextBlock: string): Promise<string> {
+    return await callProvider(
+        CLASS_REPORT_SYSTEM_PROMPT,
+        [{ role: 'user', content: contextBlock }],
+        { temperature: 0.3, timeoutMs: 300000 },
     );
 }

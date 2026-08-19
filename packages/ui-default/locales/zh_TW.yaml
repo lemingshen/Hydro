@@ -1049,7 +1049,7 @@ Time(ms): 耗時(ms)
 'Judging...': 評測中...
 Please write some code before submitting.: 提交前請先編寫程式碼。
 Submit failed.: 提交失敗。
-Subjectives: 主觀題
+Objectives: 客觀題
 User Management: 用戶管理
 Add Users: 批次新增用戶
 Bulk-create accounts from a spreadsheet (CSV / XLS / XLSX) and grant them access to one or more domains.: 透過表格檔案（CSV / XLS / XLSX）批次建立帳號，並授予一個或多個域的存取權限。
@@ -1084,3 +1084,59 @@ Next issue: 下一個問題
 "Already fixed it? Jump straight to the next issue.": 已經修好了？直接跳到下一個問題。
 View Last Submission: 查看上次提交
 "Loading...": 載入中...
+View AI Suggestions: 查看智能建議
+Regenerate: 重新生成
+Saved: 已儲存
+AI Class Report: AI 班級報告
+Generate Class Report: 生成班級報告
+"Analyzing the class...": 正在分析班級資料...
+"This can take one to three minutes. Please keep this window open.": 可能需要 1-3 分鐘，請保持視窗開啟。
+"No report generated yet.": 尚未生成報告。
+"Class report generated.": 班級報告已生成。
+Participants: 參與人數
+students: 名學生
+problems: 道題
+solved: 通過
+sampled: 已抽樣
+Statistics Overview: 統計概覽
+Completion by problem: 各題完成情況
+First-failure verdicts by problem: 各題首次失敗類型
+Median attempts and grader-thrash students: 各題中位嘗試次數與高頻重交人數
+Attempted: 嘗試人數
+Solved: 通過人數
+"Median attempts": 中位嘗試次數
+"Thrash students": 高頻重交人數
+Error knowledge points by problem: 各題錯誤知識點分佈
+Tutor engagement by problem: 各題 AI 導師互動情況
+"Questions asked": 提問數
+"Student replies": 學生回覆數
+"Skipped questions": 跳過的提問數
+"Large class detected — batched analysis may take up to five minutes.": 偵測到大班級——分批分析可能需要最多五分鐘。
+"Subjective Tasks": 主觀任務
+Project Submission: 專案提交
+"Graded by your teacher — no automatic judging.": 由教師批改——無自動判題。
+"Write your project report here (Markdown supported)...": 在此撰寫專案報告（支援 Markdown）...
+Save Report: 儲存報告
+Preview: 預覽
+Edit: 編輯
+Files: 檔案
+Upload: 上傳
+Uploading...: 上傳中...
+"Report saved.": 報告已儲存。
+"File uploaded.": 檔案已上傳。
+"Choose a file first.": 請先選擇檔案。
+"No files uploaded yet.": 尚未上傳檔案。
+Submissions: 提交列表
+Updated: 更新時間
+View: 查看
+Report: 報告
+"No report written.": 尚未撰寫報告。
+Problem Type: 題目類型
+Programming: 程式題
+Objective: 客觀題
+Subjective: 主觀題
+"Judged by the OJ: students code in the online IDE and submit for automatic testing.": 由 OJ 判題：學生在線上 IDE 中編程並提交自動測評。
+"True/false, multiple choice, fill-in-the-blank — auto-graded from the objective config.": 判斷、選擇、填空——根據客觀題配置自動評分。
+"Project-level task: students submit files and a Markdown report; graded by the teacher, no OJ judging.": 專案級任務：學生提交檔案和 Markdown 報告，由教師批改，無 OJ 判題。
+"The problem ID must start with {0} for this problem type.": 此題目類型的題目 ID 必須以 {0} 開頭。
+"The problem ID is prefixed automatically.": 題目 ID 會自動添加前綴。
