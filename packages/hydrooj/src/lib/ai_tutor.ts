@@ -12,9 +12,31 @@ const { Setting, SystemSetting, FLAG_SECRET } = SettingModel;
 /* ------------------------------------------------------------------ */
 /*  System settings (Control Panel -> Settings -> AI Tutor, root only) */
 /* ------------------------------------------------------------------ */
-SystemSetting(
+/**
+ * HMR-SAFE REGISTRATION. This module's top level re-executes whenever the
+ * dev watcher cache-busts the file, and SystemSetting() only warns on
+ * duplicate keys before pushing anyway (its disposer return value is
+ * meant for plugin lifecycles, which module scope does not have). Without
+ * this sweep, every hot reload appended another copy of the whole section
+ * to /manage/setting. Removing our stale keys first makes registration
+ * idempotent — and self-cleans any duplicates accumulated by earlier
+ * builds on the next reload.
+ */
+/** Keys that OLDER builds registered; purge them so long-running processes lose them on reload. */
+const RETIRED_SETTING_KEYS = ['ai_tutor.max_tokens'];
+
+function registerSystemSettingsIdempotent(...defs: any[]) {
+    const keys = new Set([...defs.map((d) => d.key), ...RETIRED_SETTING_KEYS]);
+    for (let i = SettingModel.SYSTEM_SETTINGS.length - 1; i >= 0; i--) {
+        if (keys.has(SettingModel.SYSTEM_SETTINGS[i].key)) SettingModel.SYSTEM_SETTINGS.splice(i, 1);
+    }
+    for (const k of keys) delete SettingModel.SYSTEM_SETTINGS_BY_KEY[k];
+    SystemSetting(...defs);
+}
+
+registerSystemSettingsIdempotent(
     Setting('setting_ai_tutor', 'ai_tutor.enabled', true, 'boolean', 'ai_tutor.enabled', 'Enable the AI Socratic tutor'),
-    Setting('setting_ai_tutor', 'ai_tutor.provider', 'claude', { claude: 'Anthropic Claude', openai: 'OpenAI', deepseek: 'DeepSeek' }, 'ai_tutor.provider', 'AI provider'),
+    Setting('setting_ai_tutor', 'ai_tutor.provider', 'claude', { claude: 'Anthropic Claude', openai: 'OpenAI', deepseek: 'DeepSeek', ollama: 'Ollama (local, no key)' }, 'ai_tutor.provider', 'AI provider'),
     Setting('setting_ai_tutor', 'ai_tutor.model', '', 'text', 'ai_tutor.model', 'Model name (leave blank for the provider default)'),
     Setting('setting_ai_tutor', 'ai_tutor.api_key', '', 'password', 'ai_tutor.api_key', 'API key of the selected provider. For security the saved key is never displayed, so this field always looks blank. Leave it blank to keep the current key.', FLAG_SECRET),
     Setting('setting_ai_tutor', 'ai_tutor.base_url', '', 'text', 'ai_tutor.base_url', 'API base URL or full endpoint (optional, for proxies / compatible gateways). A base like https://api.deepseek.com works, and the chat path is appended automatically.'),
@@ -32,21 +54,62 @@ const PROVIDERS: Record<string, ProviderPreset> = {
     claude: { style: 'anthropic', url: 'https://api.anthropic.com/v1/messages', defaultModel: 'claude-sonnet-4-5' },
     openai: { style: 'openai', url: 'https://api.openai.com/v1/chat/completions', defaultModel: 'gpt-4o' },
     deepseek: { style: 'openai', url: 'https://api.deepseek.com/chat/completions', defaultModel: 'deepseek-chat' },
+    // Local models via Ollama: it exposes an OpenAI-compatible endpoint and
+    // needs no API key. Point ai_tutor.base_url at another host if Ollama
+    // does not run on the web server itself.
+    ollama: { style: 'openai', url: 'http://127.0.0.1:11434/v1/chat/completions', defaultModel: 'qwen2.5-coder:7b' },
 };
+
+/** Providers that work without an API key (local inference). */
+const KEYLESS_PROVIDERS = ['ollama'];
+
+/**
+ * system.get, hardened: duplicated settings forms once wrote arrays/objects
+ * into storage for these keys. Arrays keep the last non-empty string (the
+ * last form field wins); other objects reset to the fallback.
+ */
+const GARBAGE_VALUE = /^\s*(\[object [A-Za-z]+\]\s*,?\s*)+$/;
+
+export function sysStr(key: string, fallback = ''): string {
+    const v: any = system.get(key);
+    if (Array.isArray(v)) {
+        const last = [...v].reverse().find((x) => typeof x === 'string' && x.trim() && !GARBAGE_VALUE.test(x));
+        return last ? String(last).trim() : fallback;
+    }
+    if (v && typeof v === 'object') return fallback;
+    if (typeof v === 'string' && GARBAGE_VALUE.test(v)) return fallback;
+    return v == null ? fallback : String(v);
+}
+
+// One-time self-heal of storage: rewrite any corrupted value as its
+// sanitized string so /manage/setting displays sanely again. Idempotent.
+(async () => {
+    for (const key of ['ai_tutor.provider', 'ai_tutor.model', 'ai_tutor.base_url', 'ai_tutor.api_key']) {
+        const raw: any = system.get(key);
+        const nonScalar = raw != null && typeof raw !== 'string' && typeof raw !== 'number' && typeof raw !== 'boolean';
+        const garbageString = typeof raw === 'string' && GARBAGE_VALUE.test(raw);
+        if (nonScalar || garbageString) {
+            const fixed = nonScalar ? sysStr(key, '') : '';
+            logger.warn('healing corrupted system setting %s (%s) -> %j', key, garbageString ? 'saved "[object Object]" text' : Object.prototype.toString.call(raw), fixed);
+            await system.set(key, fixed).catch((e) => logger.warn('heal failed for %s: %s', key, e.message));
+        }
+    }
+})();
 
 export function tutorEnabled() {
     const v = system.get('ai_tutor.enabled');
     return v === undefined ? true : !!v;
 }
 export function tutorConfigured() {
-    return tutorEnabled() && !!system.get('ai_tutor.api_key');
+    const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
+    return tutorEnabled() && (!!sysStr('ai_tutor.api_key') || KEYLESS_PROVIDERS.includes(provider));
 }
 export function tutorProviderInfo() {
-    const provider = system.get('ai_tutor.provider') || 'claude';
+    const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
     const preset = PROVIDERS[provider] || PROVIDERS.claude;
     return {
         provider,
-        model: system.get('ai_tutor.model') || preset.defaultModel,
+        model: sysStr('ai_tutor.model') || preset.defaultModel,
     };
 }
 
@@ -94,12 +157,12 @@ export async function callProvider(
     opts: { temperature?: number, timeoutMs?: number } = {},
 ): Promise<string> {
     if (!tutorEnabled()) throw new Error('The AI tutor is disabled by the administrator.');
-    const apiKey = String(system.get('ai_tutor.api_key') || '').trim();
-    if (!apiKey) throw new Error('The AI tutor is not configured yet (missing API key). Please contact the administrator.');
-    const provider: string = system.get('ai_tutor.provider') || 'claude';
+    const apiKey = sysStr('ai_tutor.api_key').trim();
+    const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
+    if (!apiKey && !KEYLESS_PROVIDERS.includes(provider)) throw new Error('The AI tutor is not configured yet (missing API key). Please contact the administrator.');
     const preset = PROVIDERS[provider] || PROVIDERS.claude;
-    const model = String(system.get('ai_tutor.model') || preset.defaultModel).trim();
-    const url = resolveEndpoint(preset.style, system.get('ai_tutor.base_url'), preset.url);
+    const model = (sysStr('ai_tutor.model') || preset.defaultModel).trim();
+    const url = resolveEndpoint(preset.style, sysStr('ai_tutor.base_url'), preset.url);
     const temperature = opts.temperature
         ?? (Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.6);
     const timeout = opts.timeoutMs ?? ((+system.get('ai_tutor.timeout') || 60) * 1000);
@@ -120,7 +183,9 @@ export async function callProvider(
                     }
                     : {
                         'content-type': 'application/json',
-                        authorization: `Bearer ${apiKey}`,
+                        // Ollama and other keyless local servers ignore auth;
+                        // only send the header when a key is configured.
+                        ...apiKey ? { authorization: `Bearer ${apiKey}` } : {},
                     },
                 body: JSON.stringify(body),
             });

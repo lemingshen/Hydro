@@ -6,7 +6,6 @@ ai_tutor.api_key: API Key
 ai_tutor.base_url: API Base URL
 ai_tutor.enabled: Enable AI Tutor
 ai_tutor.max_messages: Max Messages per Conversation
-ai_tutor.max_tokens: Max Tokens per Reply
 ai_tutor.model: Model Name
 ai_tutor.provider: AI Provider
 ai_tutor.temperature: Sampling Temperature
@@ -106,7 +105,7 @@ self_learning_create: Create Self-Learning Session
 self_learning_detail: Self-Learning Session
 self_learning_edit: Edit Self-Learning Session
 self_learning_solve: Practice
-setting_ai_tutor: AI Tutor
+setting_ai_tutor: AI Functionalities
 setting_customize: Customize
 setting_display: Display Preference
 setting_function: Function

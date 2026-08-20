@@ -6,7 +6,6 @@ ai_tutor.api_key: API 金鑰
 ai_tutor.base_url: API 位址（可選）
 ai_tutor.enabled: 啟用 AI 輔導員
 ai_tutor.max_messages: 每個對話最大訊息數
-ai_tutor.max_tokens: 單次回覆最大 Token 數
 ai_tutor.model: 模型名稱
 ai_tutor.provider: AI 供應商
 ai_tutor.temperature: 取樣溫度
@@ -787,7 +786,7 @@ Set Role: 設定角色
 Set Roles for Selected User: 設定所選使用者的角色
 Set Roles for selected users: 為所選使用者設定角色
 setting_basic: 基礎設定
-setting_ai_tutor: AI 輔導
+setting_ai_tutor: AI 功能
 setting_customize: 自訂
 setting_display: 顯示偏好
 setting_domain: 域設定
@@ -1057,7 +1056,6 @@ Upload the user list: 上傳用戶名單
 Domain access and role: 域存取與角色
 Every listed user will be added to every domain below with the chosen role. Add more rows for multi-domain access.: 名單中的每位用戶都將以所選角色加入以下每個域。如需多域存取，請新增更多列。
 Add domain: 新增域
-Cancel: 取消
 'Parsing...': 解析中...
 Result: 結果
 Created: 已建立
@@ -1117,22 +1115,130 @@ Project Submission: 專案提交
 "Graded by your teacher — no automatic judging.": 由教師批改——無自動判題。
 "Write your project report here (Markdown supported)...": 在此撰寫專案報告（支援 Markdown）...
 Save Report: 儲存報告
-Preview: 預覽
-Edit: 編輯
 Files: 檔案
-Upload: 上傳
 Uploading...: 上傳中...
 "Report saved.": 報告已儲存。
 "File uploaded.": 檔案已上傳。
 "Choose a file first.": 請先選擇檔案。
 "No files uploaded yet.": 尚未上傳檔案。
-Submissions: 提交列表
+"Drag & drop files here, or click to browse": 拖曳檔案到此處，或點擊選擇
+"Up to 10 files · 25 MB each": 最多 10 個檔案，每個不超過 25 MB
+"At most 10 files.": 最多 10 個檔案。
+Uploading: 上傳中
+"file(s) uploaded.": 個檔案已上傳。
+"Unsaved changes": 未儲存的變更
+"The file exceeds the 25 MB limit.": 檔案超過 25 MB 限制。
+"Click View to read the report and download files.": 點擊「查看」閱讀報告並下載檔案。
+"Save and Submit": 儲存並提交
+"You can modify it any time before": 截止前可隨時修改：
+"Deadline passed:": 已過截止時間：
+"My Last Submission": 我的最新提交
+"AI Studio — Programming Tasks": AI 出題工作室 — 程式題
+Model: 模型
+"New draft": 新建草稿
+"Describe the task you want; paste the relevant slide text below. The AI drafts the statement, solutions and tests — then the judge verifies everything before you can publish.": 描述你想要的題目，並在下方貼上相關簡報文字。AI 將起草題面、參考解答與測試資料——隨後評測機會先驗證一切，通過後才能發布。
+"e.g. A problem practicing prefix sums, based on the attendance example from today's lecture": 例如：基於今天課上「簽到統計」的例子，出一道練習前綴和的題
+intro: 入門
+medium: 中等
+challenge: 挑戰
+Cross-check: 交叉驗證
+"On (recommended)": 開啟（推薦）
+"Off": 關閉
+"Slide text / notes (optional)": 簡報文字 / 備註（可選）
+"Paste the text of the relevant lecture slides here — it grounds the generated task in what you actually taught.": 在此貼上相關簡報的文字內容——它能讓生成的題目緊扣你實際講授的內容。
+"Create draft": 建立草稿
+"My drafts": 我的草稿
+"Title / Topic": 標題 / 主題
+Open: 開啟
 Updated: 更新時間
+"No drafts yet.": 暫無草稿。
+"Please describe the task first.": 請先描述題目。
+Draft: 草稿
+"Verifying…": 驗證中…
+Verified: 已驗證
+Failed: 失敗
+Published: 已發布
+"Creating a programming task? Let the AI draft it from your slides — the judge verifies everything before publishing.": 要出程式題？讓 AI 基於你的簡報起草——發布前評測機會驗證一切。
+"Open AI Studio": 開啟 AI 出題工作室
+"All drafts": 全部草稿
+"Untitled draft": 未命名草稿
+"Every artifact is editable — your edits go through the same verification.": 每個部分都可以編輯——你的修改同樣會經過驗證。
+"Reference solution": 參考解答
+"Cross-check solution": 交叉驗證解答
+Tests: 測試資料
+"Generate all": 一鍵生成
+"Run verification": 執行驗證
+Publish: 發布
+Discard: 捨棄
+"Statement (markdown, no samples — samples are computed by the judge)": 題面（Markdown，不含樣例——樣例由評測機計算生成）
+"AI refine…": AI 修改…
+"Reference solution (must read stdin, write stdout only)": 參考解答（從標準輸入讀取，只向標準輸出寫答案）
+"An independent second solution: during verification its outputs are diffed against the reference to catch a wrong reference solution.": 一份獨立的第二解答：驗證時會將其輸出與參考解答逐一比對，以發現參考解答本身的錯誤。
+"Cases (JSON — inputs only; outputs come from running the reference solution)": 測試點（JSON——僅輸入；輸出由執行參考解答生成）
+"No tests yet.": 暫無測試資料。
+sample: 樣例
+Verification: 驗證
+"Judge evidence": 評測證據
+"Measured (reference solution)": 實測（參考解答）
+Case: 測試點
+"Calibrated limits": 校準後的限制
+"Draft problem": 草稿題目
+hidden: 隱藏
+"Recent activity": 最近動態
+Prepare: 準備
+"Run reference": 執行參考解答
+"Upload testdata": 上傳測試資料
+"Judge verify": 評測驗證
+"Calibrate limits": 校準限制
+"Generating all artifacts — this takes a moment…": 正在生成全部內容——請稍候…
+"Draft generated. Review it, then run verification.": 草稿已生成。請檢查後執行驗證。
+"Tell the AI how to revise this artifact:": 告訴 AI 你希望如何修改這一部分：
+"The tests JSON is invalid — fix it and try again.": 測試資料 JSON 格式有誤——請修正後重試。
+"Saved.": 已儲存。
+"Starting…": 啟動中…
+"Published as": 已發布為
+"Discard this draft and delete its hidden scratch problem?": 捨棄此草稿並刪除其隱藏的草稿題目？
+"Verification passed.": 驗證通過。
+"Verification failed at": 驗證失敗於
+idle: 待驗證
+running: 執行中
+passed: 已通過
+failed: 未通過
+"Context files (slides, notes)": 參考資料（簡報、筆記）
+"Drop the relevant slides / notes here, or click to choose": 將相關簡報 / 筆記拖曳到此處，或點擊選擇
+"PPTX / DOCX / PDF / plain text · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.": PPTX / DOCX / PDF / 純文字 · 最多 8 個檔案，每個不超過 15 MB。上傳時擷取文字；不保存原始檔案。
+"Extra requirements (optional)": 額外要求（可選）
+"e.g. must use a loop and no arrays; write the statement in English": 例如：必須使用迴圈、不允許使用陣列；題面用英文
+"Describe the task you want and attach the relevant slides below. The AI drafts the statement, solutions and tests — then the judge verifies everything before you can publish.": 描述你想要的題目，並在下方附上相關簡報。AI 將起草題面、參考解答與測試資料——隨後評測機會先驗證一切，通過後才能發布。
+"Uploading context": 正在上傳資料
+"At most 8 context files.": 最多 8 個參考資料檔案。
+"The file exceeds the 15 MB limit.": 檔案超過 15 MB 限制。
+Context: 參考資料
+"Slides and notes uploaded here ground the generated task. Text is extracted on upload; the original files are not stored.": 在此上傳的簡報與筆記將作為出題依據。上傳時擷取文字；不保存原始檔案。
+"chars extracted": 字元
+"No context files yet.": 尚未上傳參考資料。
+"Save notes": 儲存備註
+"Notes saved.": 備註已儲存。
+"Teacher report": 教師簡報
+"Generate & verify": 生成並驗證
+"Artifacts generated — verification started.": 內容已生成——驗證已自動開始。
+"Key idea": 核心思路
+"Knowledge points tested": 考查的知識點
+"Test case design": 測試點設計
+"Common pitfalls": 常見錯誤
+"No report yet — it is generated automatically after verification passes.": 暫無簡報——驗證通過後會自動生成。
+generator: 生成器
+"Starter code": 起始程式碼
+"Starter check": 起始程式碼檢查
+"If the statement is ambiguous for this input (e.g. negative values), clarify it in the Statement tab and verify again — or edit either solution directly.": 若題面對該輸入的行為定義不清（例如負數），請在「題面」標籤中補充說明後重新驗證——或直接修改任一份解答。
+"Starter code shown to students inside the statement (below the samples): the I/O boilerplate plus TODO markers. The pipeline only checks that it compiles.": 展示給學生的起始程式碼（附在題面樣例之後）：包含輸入輸出樣板與 TODO 標記。流水線只檢查它能否編譯。
+"Generated case — the Python program below produces the input in the sandbox.": 生成型測試點——由下方 Python 程式在沙箱中產生輸入。
+"A briefing for you, not for students: the key idea, the knowledge points the task tests, how the cases probe them, and likely pitfalls.": 這份簡報只給教師看：核心思路、本題考查的知識點、測試點如何檢驗它們，以及學生可能犯的錯誤。
+Submissions: 提交列表
 View: 查看
 Report: 報告
 "No report written.": 尚未撰寫報告。
 Problem Type: 題目類型
-Programming: 程式題
 Objective: 客觀題
 Subjective: 主觀題
 "Judged by the OJ: students code in the online IDE and submit for automatic testing.": 由 OJ 判題：學生在線上 IDE 中編程並提交自動測評。

@@ -9,6 +9,7 @@ import {
 } from '../error';
 import type { ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
+import { AiStudioDetailHandler, AiStudioHandler, registerAiStudioTemplates } from './ai_author';
 import { PERM, PRIV } from '../model/builtin';
 import * as contest from '../model/contest';
 import domain from '../model/domain';
@@ -1375,17 +1376,22 @@ const cleanFileName = (name: string) => String(name || '').replace(/.*[\\/]/, ''
 class SubjectiveTaskHandler extends Handler {
     pdoc: any;
 
-    @param('pid', Types.PositiveInt)
-    async prepare({ domainId }, pid: number) {
+    /** Canonical numeric problem id: URLs may carry the display pid (e.g. "S1000"). */
+    get npid(): number {
+        return this.pdoc.docId;
+    }
+
+    @param('pid', Types.ProblemId)
+    async prepare({ domainId }, pid: number | string) {
         this.pdoc = await problem.get(domainId, pid);
         if (!this.pdoc) throw new NotFoundError(pid);
         if (!isSubjectivePdoc(this.pdoc)) throw new BadRequestError('This problem is not a subjective task.');
     }
 
-    @param('pid', Types.PositiveInt)
     @param('uid', Types.PositiveInt, true)
     @param('list', Types.Boolean, true)
-    async get({ domainId }, pid: number, uid?: number, list = false) {
+    async get({ domainId }, uid?: number, list = false) {
+        const pid = this.npid;
         const teacher = subjectiveTeacher(this, this.pdoc);
         if (list) {
             if (!teacher) throw new ForbiddenError('Only the problem owner or a domain root can list submissions.');
@@ -1416,63 +1422,66 @@ class SubjectiveTaskHandler extends Handler {
         };
     }
 
-    @param('pid', Types.PositiveInt)
-    async post({ domainId }, pid: number) {
-        const op = String(this.args.operation || '');
-        if (op === 'report') {
-            const report = String(this.args.report || '').slice(0, SUBJECTIVE_MAX_REPORT);
-            const updateAt = await setSubjectiveReport(domainId, pid, this.user._id, report);
-            this.response.body = { updateAt };
-            return;
+    /**
+     * Hydro dispatches POSTs that carry an `operation` field to
+     * post{Operation} and throws InvalidOperationError (whose inherited
+     * message reads "MethodNotAllowedError") when that method is missing —
+     * a generic post() is never consulted for such requests. So each
+     * client operation gets its own method here.
+     */
+    async postReport({ domainId }) {
+        const report = String(this.args.report || '').slice(0, SUBJECTIVE_MAX_REPORT);
+        const updateAt = await setSubjectiveReport(domainId, this.npid, this.user._id, report);
+        this.response.body = { updateAt };
+    }
+
+    async postUpload({ domainId }) {
+        const pid = this.npid;
+        const file = this.request.files?.file;
+        if (!file || !file.size) throw new BadRequestError('No file received.');
+        if (file.size > SUBJECTIVE_MAX_FILE) throw new BadRequestError('The file exceeds the 25 MB limit.');
+        const doc = await getSubjective(domainId, pid, this.user._id);
+        const name = cleanFileName(file.originalFilename || file.newFilename || 'file');
+        const existing = (doc?.files || []).filter((f) => f.name !== name);
+        if (existing.length >= SUBJECTIVE_MAX_FILES) throw new BadRequestError(`At most ${SUBJECTIVE_MAX_FILES} files.`);
+        const target = `subjective/${domainId}/${pid}/${this.user._id}/${name}`;
+        await storage.put(target, file.filepath, this.user._id);
+        await upsertSubjectiveFile(domainId, pid, this.user._id, {
+            name, size: file.size, target, uploadAt: new Date(),
+        });
+        const fresh = await getSubjective(domainId, pid, this.user._id);
+        this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
+        logger.info('[pta-ui] subjective upload: uid=%d pid=%d "%s" (%d bytes)', this.user._id, pid, name, file.size);
+    }
+
+    async postDelete({ domainId }) {
+        const pid = this.npid;
+        const name = cleanFileName(this.args.name);
+        const doc = await getSubjective(domainId, pid, this.user._id);
+        const entry = (doc?.files || []).find((f) => f.name === name);
+        if (entry) {
+            try {
+                await storage.del([entry.target]);
+            } catch (e) { /* the entry removal below is authoritative */ }
+            await removeSubjectiveFile(domainId, pid, this.user._id, name);
         }
-        if (op === 'upload') {
-            const file = this.request.files?.file;
-            if (!file || !file.size) throw new BadRequestError('No file received.');
-            if (file.size > SUBJECTIVE_MAX_FILE) throw new BadRequestError('The file exceeds the 25 MB limit.');
-            const doc = await getSubjective(domainId, pid, this.user._id);
-            const name = cleanFileName(file.originalFilename || file.newFilename || 'file');
-            const existing = (doc?.files || []).filter((f) => f.name !== name);
-            if (existing.length >= SUBJECTIVE_MAX_FILES) throw new BadRequestError(`At most ${SUBJECTIVE_MAX_FILES} files.`);
-            const target = `subjective/${domainId}/${pid}/${this.user._id}/${name}`;
-            await storage.put(target, file.filepath, this.user._id);
-            await upsertSubjectiveFile(domainId, pid, this.user._id, {
-                name, size: file.size, target, uploadAt: new Date(),
-            });
-            const fresh = await getSubjective(domainId, pid, this.user._id);
-            this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
-            logger.info('[pta-ui] subjective upload: uid=%d pid=%d "%s" (%d bytes)', this.user._id, pid, name, file.size);
-            return;
-        }
-        if (op === 'delete') {
-            const name = cleanFileName(this.args.name);
-            const doc = await getSubjective(domainId, pid, this.user._id);
-            const entry = (doc?.files || []).find((f) => f.name === name);
-            if (entry) {
-                try {
-                    await storage.del([entry.target]);
-                } catch (e) { /* the entry removal below is authoritative */ }
-                await removeSubjectiveFile(domainId, pid, this.user._id, name);
-            }
-            const fresh = await getSubjective(domainId, pid, this.user._id);
-            this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
-            return;
-        }
-        throw new BadRequestError('Unknown operation.');
+        const fresh = await getSubjective(domainId, pid, this.user._id);
+        this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
     }
 }
 
 /** Download one submitted file (own, or any as teacher) via a signed link. */
 class SubjectiveFileHandler extends Handler {
-    @param('pid', Types.PositiveInt)
+    @param('pid', Types.ProblemId)
     @param('name', Types.String)
     @param('uid', Types.PositiveInt, true)
-    async get({ domainId }, pid: number, name: string, uid?: number) {
+    async get({ domainId }, pid: number | string, name: string, uid?: number) {
         const pdoc = await problem.get(domainId, pid);
         if (!pdoc) throw new NotFoundError(pid);
         if (!isSubjectivePdoc(pdoc)) throw new BadRequestError('This problem is not a subjective task.');
         const targetUid = (uid && uid !== this.user._id) ? uid : this.user._id;
         if (targetUid !== this.user._id && !subjectiveTeacher(this, pdoc)) throw new ForbiddenError('Not your submission.');
-        const doc = await getSubjective(domainId, pid, targetUid);
+        const doc = await getSubjective(domainId, pdoc.docId, targetUid);
         const entry = (doc?.files || []).find((f) => f.name === cleanFileName(name));
         if (!entry) throw new NotFoundError(name);
         this.response.redirect = await storage.signDownloadLink(entry.target, entry.name, false);
@@ -1500,6 +1509,13 @@ export async function apply(ctx: Context) {
     // Subjective (project-level) tasks: submissions + file downloads.
     ctx.Route('subjective_task', '/p/:pid/subjective', SubjectiveTaskHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('subjective_task_file', '/p/:pid/subjective/file', SubjectiveFileHandler, PRIV.PRIV_USER_PROFILE);
+    // AI Studio (teacher problem authoring). Registered HERE, not in
+    // ai_author.ts: new handler files are only discovered at boot and the
+    // HMR watcher cannot see them, so their routes would 404 until a cold
+    // restart. self_learning.ts is always loaded and hot-reloads.
+    ctx.Route('ai_studio', '/ai-studio', AiStudioHandler, PRIV.PRIV_USER_PROFILE);
+    ctx.Route('ai_studio_detail', '/ai-studio/:id', AiStudioDetailHandler, PRIV.PRIV_USER_PROFILE);
+    registerAiStudioTemplates(ctx); // template registry survives hot-reload; no cold restart needed
     const setKinds = async (h: any, source: string) => {
         if (!h?.UiContext || h.UiContext.tdocKinds || h.UiContext.trainingRail || h.UiContext.psetRail) return;
         let tdoc = h.tdoc || h.response?.body?.tdoc;

@@ -6,7 +6,6 @@ ai_tutor.api_key: API 密钥
 ai_tutor.base_url: API 地址（可选）
 ai_tutor.enabled: 启用 AI 辅导员
 ai_tutor.max_messages: 每个对话最大消息数
-ai_tutor.max_tokens: 单次回复最大 Token 数
 ai_tutor.model: 模型名称
 ai_tutor.provider: AI 提供商
 ai_tutor.temperature: 采样温度
@@ -813,7 +812,7 @@ Set Role: 设置角色
 Set Roles for Selected User: 设置所选用户的角色
 Set Roles for selected users: 为所选用户设置角色
 setting_basic: 基础设置
-setting_ai_tutor: AI 辅导
+setting_ai_tutor: AI 功能
 setting_customize: 个性化
 setting_display: 显示偏好
 setting_domain: 域设置

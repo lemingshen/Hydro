@@ -1101,6 +1101,7 @@ export default new NamedPage([...PROBLEM_PAGES, ...SUBMIT_PAGES, 'self_learning_
   if (isSubjectivePid()) {
     // Project-level subjective task (pid S...): no judge pipeline at all —
     // the dedicated module renders the submission UI; only the rail applies.
+    const uc = window.UiContext || {};
     if (PROBLEM_PAGES.includes(pagename) && ((uc.tdoc && Array.isArray(uc.tdoc.pids) && uc.tdoc.pids.length > 1) || uc.trainingRail || uc.psetRail)) {
       injectRailForPage();
     }
