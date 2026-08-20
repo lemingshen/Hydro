@@ -4,7 +4,7 @@ import {
 } from 'path';
 import {
   Context, fs, Handler, Logger, NotFoundError, param, SettingModel, sha1,
-  size, SystemModel, Types, UiContextBase,
+  size, SystemModel, Types, UiContextBase, yaml,
 } from 'hydrooj';
 import esbuild from 'esbuild';
 
@@ -169,7 +169,42 @@ export async function apply(ctx: Context) {
   ctx.Route('constant', '/resource/:version/:name', UiConstantsHandler);
   ctx.on('app/started', buildUI);
   const debouncedBuildUI = ctx.debounce(buildUI, 2000);
+  // Locale yamls are read into global.Hydro.locales ONLY at boot; without
+  // this branch, a change to any locales/*.yaml just re-serialized the
+  // stale in-memory copy under the same content hash — so translations
+  // could never update without a full restart. Re-reading the file into
+  // the live i18n chain (i18n.load unshifts, newest wins) emits
+  // app/i18n/update, which is already wired to rebuild lang-*.js with a
+  // fresh hash. Deliberately paranoid: every step is guarded so a broken
+  // yaml or a missing service degrades to a log line, never a crash —
+  // this file is require()d inline by the addon entry, so an exception
+  // here would take the whole ui-default addon (renderer included) down.
+  const localeFile = /[/\\]locales?[/\\]([A-Za-z_]+)\.ya?ml$/;
   const triggerHotUpdate = (path?: string) => {
+    try {
+      const m = typeof path === 'string' ? localeFile.exec(path) : null;
+      if (m) {
+        const file = String(path);
+        const lang = m[1];
+        fs.readFile(file, 'utf-8')
+          .then((content) => {
+            try {
+              const dict = (yaml as any)?.load?.(content);
+              const i18n = (ctx as any).i18n;
+              if (dict && typeof dict === 'object' && i18n?.load) {
+                i18n.load(lang, dict);
+                logger.info('Locale hot-reloaded: %s (%s)', lang, file);
+              }
+            } catch (e) {
+              logger.error('Locale hot-reload parse failed for %s: %s', file, e.message);
+            }
+          })
+          .catch((e) => logger.error('Locale hot-reload read failed for %s: %s', file, e.message));
+        return;
+      }
+    } catch (e) {
+      logger.error('Locale hot-reload check failed: %s', e.message);
+    }
     if (path && !path.includes('/ui-default/') && !path.includes('/public/') && !path.includes('/frontend/')) return;
     debouncedBuildUI();
   };

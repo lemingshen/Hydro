@@ -1,3 +1,4 @@
+import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
 import { createReadStream } from 'fs';
 import { PassThrough, Readable, Writable } from 'stream';
 import { Entry, ZipReader } from '@zip.js/zip.js';
@@ -612,10 +613,40 @@ export class ProblemManageHandler extends ProblemDetailHandler {
     }
 }
 
+
+/** Read the problem's raw config.yaml (verbatim fields, {} when absent). */
+async function readRawProblemConfig(pdoc: ProblemDoc): Promise<any> {
+    const f = (pdoc.data || []).find((i) => i.name.toLowerCase() === 'config.yaml');
+    if (!f) return {};
+    try {
+        const buf = await streamToBuffer(await storage.get(`problem/${pdoc.domainId}/${pdoc.docId}/testdata/${f.name}`));
+        return (yamlLoad(buf.toString()) as any) || {};
+    } catch (e) {
+        return {};
+    }
+}
+
+/**
+ * Apply the teacher's allowed-language whitelist to config.yaml via
+ * read-modify-write (time/memory/cases and any other keys survive).
+ * CRITICAL: when the list is empty the key is DELETED, never written as
+ * [] — an empty langs array intersects to ZERO allowed languages in
+ * Hydro's resolution chain.
+ */
+async function applyAllowLangs(pdoc: ProblemDoc, owner: number, raw: string) {
+    const langs = [...new Set(raw.split(',').map((i) => i.trim()).filter((i) => i && setting.langs[i]))].slice(0, 64);
+    const cfg = await readRawProblemConfig(pdoc);
+    const had = Array.isArray(cfg.langs) && cfg.langs.length;
+    if (!langs.length && !had) return; // nothing to change, don't create a file
+    if (langs.length) cfg.langs = langs; else delete cfg.langs;
+    await problem.addTestdata(pdoc.domainId, pdoc.docId, 'config.yaml', Buffer.from(yamlDump(cfg)), owner);
+}
+
 export class ProblemEditHandler extends ProblemManageHandler {
     async get() {
         this.response.body.additional_file = sortFiles(this.pdoc.additional_file || []);
         this.response.body.statementLangs = this.ctx.i18n.langs(false);
+        this.response.body.allowLangs = (await readRawProblemConfig(this.pdoc)).langs || [];
         this.response.template = 'problem_edit.html';
     }
 
@@ -626,9 +657,10 @@ export class ProblemEditHandler extends ProblemManageHandler {
     @post('hidden', Types.Boolean)
     @post('tag', Types.Content, true, null, parseCategory)
     @post('difficulty', Types.PositiveInt, (i) => +i <= 10, true)
+    @post('allowLangs', Types.String, true)
     async post(
         domainId: string, pid: string | number, title: string, content: string,
-        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0,
+        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0, allowLangs = '',
     ) {
         if (typeof newPid !== 'string') newPid = `P${newPid}`;
         if (newPid !== this.pdoc.pid && await problem.get(domainId, newPid)) throw new ProblemAlreadyExistError(newPid);
@@ -636,6 +668,7 @@ export class ProblemEditHandler extends ProblemManageHandler {
             title, content, pid: newPid, hidden, tag: tag ?? [], difficulty, html: false,
         };
         const pdoc = await problem.edit(domainId, this.pdoc.docId, $update);
+        await applyAllowLangs(this.pdoc, this.user._id, allowLangs);
         this.response.redirect = this.url('problem_detail', { pid: newPid || pdoc.docId });
     }
 }
@@ -1004,13 +1037,16 @@ export class ProblemCreateHandler extends Handler {
     @post('hidden', Types.Boolean)
     @post('difficulty', Types.PositiveInt, (i) => +i <= 10, true)
     @post('tag', Types.Content, true, null, parseCategory)
+    @post('allowLangs', Types.String, true)
     async post(
         domainId: string, title: string, content: string, pid: string | number = '',
-        hidden = false, difficulty = 0, tag: string[] = [],
+        hidden = false, difficulty = 0, tag: string[] = [], allowLangs = '',
     ) {
         if (typeof pid !== 'string') pid = `P${pid}`;
         if (pid && await problem.get(domainId, pid)) throw new ProblemAlreadyExistError(pid);
         const docId = await problem.add(domainId, pid, title, content, this.user._id, tag ?? [], { hidden, difficulty });
+        const cleanLangs = [...new Set(allowLangs.split(',').map((i) => i.trim()).filter((i) => i && setting.langs[i]))].slice(0, 64);
+        if (cleanLangs.length) await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ langs: cleanLangs })), this.user._id);
         const files = new Set(Array.from(content.matchAll(/file:\/\/([\w-]+\.[a-zA-Z0-9]+)/g)).map((i) => i[1]));
         const tasks = [];
         for (const file of files) {

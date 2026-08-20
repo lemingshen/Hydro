@@ -154,14 +154,14 @@ function mergeAlternating(messages: ChatMessage[]): ChatMessage[] {
 
 export async function callProvider(
     systemPrompt: string, messages: ChatMessage[],
-    opts: { temperature?: number, timeoutMs?: number } = {},
+    opts: { temperature?: number, timeoutMs?: number, model?: string } = {},
 ): Promise<string> {
     if (!tutorEnabled()) throw new Error('The AI tutor is disabled by the administrator.');
     const apiKey = sysStr('ai_tutor.api_key').trim();
     const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
     if (!apiKey && !KEYLESS_PROVIDERS.includes(provider)) throw new Error('The AI tutor is not configured yet (missing API key). Please contact the administrator.');
     const preset = PROVIDERS[provider] || PROVIDERS.claude;
-    const model = (sysStr('ai_tutor.model') || preset.defaultModel).trim();
+    const model = (String(opts?.model || '').trim() || sysStr('ai_tutor.model') || preset.defaultModel).trim();
     const url = resolveEndpoint(preset.style, sysStr('ai_tutor.base_url'), preset.url);
     const temperature = opts.temperature
         ?? (Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.6);

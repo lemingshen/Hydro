@@ -57,9 +57,15 @@ function _buildParam(name: string, source: 'get' | 'post' | 'all' | 'route', ...
 
 function _descriptor(v: ParamOption<any>) {
     return function desc(this: Handler, target: any, funcName: string, obj: any) {
-        target.__param ||= {};
+        // HMR safety: __param must be an OWN property of this prototype.
+        // With the inherited `||=`, a hot-reloaded handler module found the
+        // previous evaluation's registry through the prototype chain,
+        // concluded its methods were already wrapped, and skipped
+        // installing the validator — so handlers received the raw args
+        // OBJECT as their first positional parameter (domainId).
+        if (!Object.prototype.hasOwnProperty.call(target, '__param')) target.__param = {};
         target.__param[target.constructor.name] ||= {};
-        if (!target.__param[target.constructor.name][funcName]) {
+        if (!Object.prototype.hasOwnProperty.call(target.__param[target.constructor.name], funcName)) {
             const originalMethod = obj.value;
             const val = originalMethod.toString();
             const firstArg = val.split(')')[0]?.split(',')[0]?.split('(')[1]?.trim() || '';

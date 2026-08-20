@@ -30,10 +30,13 @@ const DETAIL_STYLE = [
   '.aisd__pane--on { display: block; }',
   '.aisd__bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }',
   '.aisd__stage { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12.5px; }',
-  '.aisd__dot { width: 10px; height: 10px; border-radius: 5px; background: #dee2e6; flex: 0 0 auto; }',
-  '.aisd__dot--run { background: #339af0; animation: aisdPulse 1.1s ease-in-out infinite; }',
-  '.aisd__dot--ok { background: #40c057; }',
-  '.aisd__dot--bad { background: #fa5252; }',
+  '.aisd__dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(151, 117, 250, .45); background: transparent; box-sizing: border-box; flex: 0 0 auto; transition: background .3s ease, border-color .3s ease, transform .3s ease; position: relative; z-index: 1; }',
+  '.aisd__dot--run { background: #7048e8; border-color: #7048e8; transform: scale(1.2); animation: ais-pulse 1.4s ease-out infinite; }',
+  '.aisd__dot--ok { background: #40c057; border-color: #40c057; }',
+  '.aisd__dot--bad { background: #e03131; border-color: #e03131; box-shadow: 0 0 10px rgba(224, 49, 49, .5); }',
+  '.aisd__stage { position: relative; }',
+  '.aisd__stage:not(:last-of-type)::after { content: ""; position: absolute; left: 5px; top: 17px; bottom: -6px; width: 2px; background: rgba(151, 117, 250, .22); border-radius: 2px; }',
+  '.aisd__stage--done:not(:last-of-type)::after { background: #40c057; }',
   '@keyframes aisdPulse { 50% { opacity: .35; } }',
   '.aisd__ev { background: #1e2227; color: #e6e6e6; border-radius: 10px; padding: 10px 12px; font: 11.5px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow: auto; }',
   '.aisd__meta { color: #8a94a6; font-size: 11.5px; }',
@@ -47,10 +50,10 @@ const DETAIL_STYLE = [
 ].join('\n');
 
 const STAGES = [
+  ['generate', 'Generate'],
   ['precheck', 'Prepare'],
   ['build', 'Run reference'],
   ['crosscheck', 'Cross-check'],
-  ['starter', 'Starter check'],
   ['testdata', 'Upload testdata'],
   ['judge', 'Judge verify'],
   ['calibrate', 'Calibrate limits'],
@@ -58,9 +61,24 @@ const STAGES = [
 ];
 
 let state = null; // the draft
+let lastFp = ''; // artifact fingerprint: re-render tabs when it changes
+const artifactFp = (d) => JSON.stringify([
+  d?.artifacts?.statement?.title,
+  d?.artifacts?.statement?.body?.length,
+  d?.artifacts?.solution?.code?.length,
+  d?.artifacts?.alt?.code?.length,
+  (d?.artifacts?.tests || []).length,
+  !!d?.artifacts?.report,
+]);
 let langsMap = {}; // judge languages from the server (scratchpad-identical set)
 let activePane = null; // which tab survives re-renders
 let pollTimer = null;
+let lastSideFp = ''; // sidebar re-renders only when this changes
+const sideFp = () => {
+  const p = state?.pipeline || {};
+  return JSON.stringify([p.status, p.stage, p.message, (p.evidence || '').length,
+    (state?.log || []).length, state?.measured?.time, state?.published]);
+};
 let statementEditor = null;
 
 function j(v) {
@@ -81,7 +99,9 @@ function stageDots(p) {
       if (i < idx) cls = 'aisd__dot--ok';
       else if (i === idx || (idx < 0 && i === 0)) cls = 'aisd__dot--bad';
     }
-    return `<div class="aisd__stage"><span class="aisd__dot ${cls}"></span>${esc(i18n(label))}</div>`;
+    const rowCls = cls === 'aisd__dot--ok' ? ' aisd__stage--done' : '';
+    const live = cls === 'aisd__dot--run';
+    return `<div class="aisd__stage${rowCls}"><span class="aisd__dot ${cls}"></span><span style="${live ? 'font-weight:bold;' : ''}">${esc(i18n(label))}</span></div>`;
   }).join('');
 }
 
@@ -97,12 +117,21 @@ function sideHtml(d) {
   return `
     <div class="ais">
       <div class="ais__head">🧪 <span class="ais__title">${esc(i18n('Verification'))}</span>
+        ${p.status === 'running' && p.startedAt ? `<span class="ais__chip">⏱ <span class="ais__timer">${Math.max(0, Math.round((Date.now() - new Date(p.startedAt).getTime()) / 1000))}</span>s</span>` : ''}
         <span class="ais__hint"><span class="ais__badge ${badgeCls}" style="background:rgba(255,255,255,.18);color:#fff;">${esc(i18n(p.status || 'idle'))}</span></span></div>
       <div class="ais__body">
+        ${(() => {
+    const idx = STAGES.findIndex(([k]) => k === p.stage);
+    if (!['running', 'failed', 'passed'].includes(p.status)) return '';
+    const pct = p.status === 'passed' ? 100 : Math.round((Math.max(0, idx) / STAGES.length) * 100);
+    const mod = p.status === 'running' ? ' ais__progress--live' : p.status === 'failed' ? ' ais__progress--bad' : '';
+    return `<div class="ais__progress${mod}"><i style="width:${Math.max(pct, p.status === 'running' ? 6 : 3)}%"></i></div>`;
+  })()}
         ${stageDots(p)}
-        ${p.message ? `<div class="aisd__meta" style="margin-top:6px;">${esc(p.message)}</div>` : ''}
+        ${p.message ? `<div class="aisd__meta${p.status === 'running' ? ' ais__msg--live' : ''}" style="margin-top:6px;">${esc(p.message)}</div>` : ''}
         ${p.evidence ? `<div class="ais__label">🔍 ${esc(i18n('Judge evidence'))}</div><div class="aisd__ev">${esc(p.evidence)}</div>` : ''}
-        ${p.status === 'failed' && p.stage === 'crosscheck' ? `<div class="aisd__meta" style="margin-top:6px;">💡 ${esc(i18n('If the statement is ambiguous for this input (e.g. negative values), clarify it in the Statement tab and verify again — or edit either solution directly.'))}</div>` : ''}
+        ${p.status === 'failed' && p.stage === 'crosscheck' ? `<div class="aisd__meta" style="margin-top:6px;">💡 ${esc(i18n('If the statement is ambiguous for this input (e.g. negative values), clarify it in the Statement tab and verify again — or edit either solution directly.'))}</div>
+        <button class="ais__btn ais__btn--sm aisd__skipcc" style="margin-top:8px;">✋ ${esc(i18n('Trust the reference — re-verify without cross-check'))}</button>` : ''}
         ${measured}
         ${d.docId ? `<div class="aisd__meta" style="margin-top:10px;">${esc(i18n('Draft problem'))}: <a href="${domainPrefix()}/p/${d.docId}" target="_blank" rel="noopener">#${d.docId}</a>${d.published ? ` · <b>${esc(i18n('Published'))}</b>` : ` (${esc(i18n('hidden'))})`}</div>` : ''}
         ${logs ? `<div class="ais__label">📜 ${esc(i18n('Recent activity'))}</div>${logs}` : ''}
@@ -140,10 +169,11 @@ function reportPane(d) {
 
 function render($root) {
   const d = state;
+  lastFp = artifactFp(d);
+  lastSideFp = sideFp();
   const s = d.artifacts.statement || { title: '', body: '' };
   const sol = d.artifacts.solution || { language: d.brief.language, code: '' };
   const alt = d.artifacts.alt || { language: d.brief.language, code: '' };
-  const st = d.artifacts.starter || { language: d.brief.language, code: '' };
   const busy = d.pipeline.status === 'running';
   const langSel = (cls, cur) => `<select class="${cls}" style="max-width:240px;">${langOptionsHtml(langsMap, cur)}</select>`;
   $root.html(`
@@ -156,16 +186,16 @@ function render($root) {
         <div class="ais__head">✨ <span class="ais__title">${esc(s.title || i18n('Untitled draft'))}</span>
           <span class="ais__hint">${esc(i18n('Every artifact is editable — your edits go through the same verification.'))}</span></div>
         <div class="aisd__tabs">
-          <button class="aisd__tab" data-pane="ctx">📚 ${esc(i18n('Context'))} (${(d.brief.files || []).length})</button>
           <button class="aisd__tab" data-pane="stmt">📝 ${esc(i18n('Statement'))}</button>
           <button class="aisd__tab" data-pane="sol">✅ ${esc(i18n('Reference solution'))}</button>
           <button class="aisd__tab" data-pane="alt">🔁 ${esc(i18n('Cross-check solution'))}</button>
-          <button class="aisd__tab" data-pane="starter">🧩 ${esc(i18n('Starter code'))}</button>
           <button class="aisd__tab" data-pane="tests">🧾 ${esc(i18n('Tests'))} (${(d.artifacts.tests || []).length})</button>
           <button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Teacher report'))}</button>
+          <button class="aisd__tab" data-pane="ctx">📚 ${esc(i18n('Context'))} (${(d.brief.files || []).length})</button>
         </div>
         <div class="ais__body">
           <div class="aisd__bar">
+            ${busy ? `<button class="ais__btn ais__btn--danger aisd__stop">⏹ ${esc(i18n('Stop'))}</button>` : ''}
             <button class="ais__btn aisd__genall" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Generate & verify'))}</button>
             <button class="ais__btn aisd__verify" ${busy ? 'disabled' : ''}>🧪 ${esc(i18n('Run verification'))}</button>
             <button class="ais__btn aisd__publish" ${d.pipeline.status === 'passed' && !d.published ? '' : 'disabled'}>🚀 ${esc(i18n('Publish'))}</button>
@@ -173,6 +203,16 @@ function render($root) {
           </div>
 
           <div class="aisd__pane" data-pane="ctx">
+            <div class="ais__label">🧠 ${esc(i18n('Task requirement'))}</div>
+            <textarea class="aisd__topic" rows="3" spellcheck="false">${esc(d.brief.topic || '')}</textarea>
+            <div class="ais__row" style="margin-top:8px;align-items:center;gap:10px;display:flex;flex-wrap:wrap;">
+              <div><div class="ais__label" style="margin-top:0;">${esc(i18n('Difficulty'))}</div>
+                <select class="aisd__difficulty" style="max-width:180px;">
+                  ${['intro', 'medium', 'challenge'].map((x) => `<option value="${x}" ${d.brief.difficulty === x ? 'selected' : ''}>${esc(i18n(x))}</option>`).join('')}
+                </select></div>
+              <button class="ais__btn ais__btn--sm aisd__brief-save" style="align-self:flex-end;">💾 ${esc(i18n('Save requirement'))}</button>
+            </div>
+            <div class="aisd__meta" style="margin:6px 0 14px;">${esc(i18n('After changing the requirement, click Generate & verify to synthesize the task against it.'))}</div>
             <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('Slides and notes uploaded here ground the generated task. Text is extracted on upload; the original files are not stored.'))}</div>
             <div class="ais__drop aisd__ctx-drop">
               <div class="ais__drop-main">${esc(i18n('Drop the relevant slides / notes here, or click to choose'))}</div>
@@ -215,6 +255,9 @@ function render($root) {
           </div>
 
           <div class="aisd__pane" data-pane="alt">
+            <div class="aisd__meta" style="margin-bottom:8px;">${d.brief.crosscheck
+    ? `${esc(i18n('Cross-check is ON: a second, independently written solution must agree with the reference on every test.'))} <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__cc-toggle" data-on="0">${esc(i18n('Turn off'))}</button>`
+    : `${esc(i18n('Cross-check is OFF: the reference solution\u2019s outputs are trusted as-is \u2014 read it yourself before publishing.'))} <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__cc-toggle" data-on="1">${esc(i18n('Turn on'))}</button>`}</div>
             <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('An independent second solution: during verification its outputs are diffed against the reference to catch a wrong reference solution.'))}</div>
             <div class="ais__label">${esc(i18n('Language'))}</div>${langSel('aisd__alt-lang', alt.language)}
             <div class="ais__label">${esc(i18n('Cross-check solution'))}</div>
@@ -222,18 +265,6 @@ function render($root) {
             <div class="aisd__bar" style="margin-top:10px;">
               <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="alt" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate'))}</button>
               <button class="ais__btn ais__btn--sm aisd__save" data-t="alt">💾 ${esc(i18n('Save'))}</button>
-            </div>
-          </div>
-
-          <div class="aisd__pane" data-pane="starter">
-            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('Starter code shown to students inside the statement (below the samples): the I/O boilerplate plus TODO markers. The pipeline only checks that it compiles.'))}</div>
-            <div class="ais__label">${esc(i18n('Language'))}</div>${langSel('aisd__starter-lang', st.language)}
-            <div class="ais__label">${esc(i18n('Starter code'))}</div>
-            <textarea class="aisd__starter-code" rows="14" spellcheck="false">${esc(st.code)}</textarea>
-            <div class="aisd__bar" style="margin-top:10px;">
-              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="starter" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate'))}</button>
-              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__refine" data-t="starter" ${busy ? 'disabled' : ''}>💬 ${esc(i18n('AI refine…'))}</button>
-              <button class="ais__btn ais__btn--sm aisd__save" data-t="starter">💾 ${esc(i18n('Save'))}</button>
             </div>
           </div>
 
@@ -270,9 +301,21 @@ function render($root) {
 
 /* Only the sidebar refreshes during polling, so editors keep focus. */
 function renderSide($root) {
+  const fp = sideFp();
+  if (fp === lastSideFp) {
+    // Nothing changed: tick the timer in place so the panel's animations
+    // run uninterrupted instead of restarting on every poll (that DOM
+    // replacement was what made the whole panel "blink").
+    const p = state?.pipeline || {};
+    if (p.status === 'running' && p.startedAt) {
+      $root.find('.ais__timer').text(Math.max(0, Math.round((Date.now() - new Date(p.startedAt).getTime()) / 1000)));
+    }
+    return;
+  }
+  lastSideFp = fp;
   $root.find('.aisd__side').html(sideHtml(state));
   const busy = state.pipeline.status === 'running';
-  $root.find('.aisd__genall, .aisd__verify, .aisd__regen, .aisd__refine').prop('disabled', busy);
+  $root.find('.aisd__genall, .aisd__verify, .aisd__regen, .aisd__refine, .aisd__brief-save').prop('disabled', busy);
   $root.find('.aisd__publish').prop('disabled', !(state.pipeline.status === 'passed' && !state.published));
   $root.find('.aisd__discard').prop('disabled', busy || !!state.published);
 }
@@ -299,9 +342,6 @@ function collectPayload($root, target) {
   if (target === 'alt') {
     return { language: $root.find('.aisd__alt-lang').val(), code: String($root.find('.aisd__alt-code').val() || '') };
   }
-  if (target === 'starter') {
-    return { language: $root.find('.aisd__starter-lang').val(), code: String($root.find('.aisd__starter-code').val() || '') };
-  }
   const raw = String($root.find('.aisd__tests').val() || '[]');
   const cases = JSON.parse(raw); // throws -> caught by caller with a friendly message
   return { cases };
@@ -312,8 +352,11 @@ function startPolling($root) {
   pollTimer = setInterval(async () => {
     try {
       const data = await request.get(base());
+      const hadStmt = !!state?.artifacts?.statement;
       state = data.draft;
-      renderSide($root);
+      if (!hadStmt && state?.artifacts?.statement && (!activePane || activePane === 'ctx')) activePane = 'stmt';
+      if (artifactFp(state) !== lastFp) render($root); // new artifact — show it live
+      else renderSide($root);
       if (state.pipeline.status !== 'running') {
         clearInterval(pollTimer);
         pollTimer = null;
@@ -373,6 +416,45 @@ function wire($root) {
       Notification.error(e.message);
     }
   });
+  const setCrosscheck = async (enabled, thenVerify) => {
+    const res = await request.post(base(), { operation: 'save', target: 'crosscheck', payload: JSON.stringify({ enabled }) });
+    state = res.draft;
+    if (thenVerify) {
+      const r2 = await request.post(base(), { operation: 'verify' });
+      if (r2.draft) state = r2.draft;
+      render($root);
+      startPolling($root);
+    } else {
+      render($root);
+    }
+  };
+  $root.find('.aisd__cc-toggle').on('click', function onCcToggle() {
+    const enabled = String($(this).data('on')) === '1';
+    act($(this), () => setCrosscheck(enabled, false));
+  });
+  $root.find('.aisd__skipcc').on('click', function onSkipCc() {
+    act($(this), async () => {
+      await setCrosscheck(false, true);
+      Notification.success(i18n('Cross-check disabled — re-verifying with the reference trusted.'));
+    });
+  });
+
+  $root.find('.aisd__brief-save').on('click', function onBrief() {
+    act($(this), async () => {
+      const res = await request.post(base(), {
+        operation: 'save',
+        target: 'brief',
+        payload: JSON.stringify({
+          topic: String($root.find('.aisd__topic').val() || ''),
+          difficulty: $root.find('.aisd__difficulty').val(),
+        }),
+      });
+      state = res.draft;
+      render($root);
+      Notification.success(i18n('Requirement saved — run Generate & verify to synthesize against it.'));
+    });
+  });
+
   $root.find('.aisd__notes-save').on('click', async function onNotes() {
     const $b = $(this).prop('disabled', true);
     try {
@@ -397,16 +479,23 @@ function wire($root) {
     }
   };
 
+  $root.find('.aisd__stop').on('click', function onStop() {
+    act($(this), async () => {
+      const res = await request.post(base(), { operation: 'stop' });
+      state = res.draft;
+      render($root);
+      Notification.info(i18n('Stopping — the run will halt at its next checkpoint.'));
+      startPolling($root);
+    });
+  });
+
   $root.find('.aisd__genall').on('click', function onGen() {
     act($(this), async () => {
-      Notification.info(i18n('Generating all artifacts — this takes a moment…'));
       const res = await request.post(base(), { operation: 'generate', target: 'all', verify: true });
       state = res.draft;
       render($root);
-      if (res.started) {
-        Notification.success(i18n('Artifacts generated — verification started.'));
-        startPolling($root);
-      }
+      Notification.success(i18n('Generation started — the task will appear here as each part is drafted.'));
+      startPolling($root);
     });
   });
   $root.find('.aisd__regen').on('click', function onRegen() {

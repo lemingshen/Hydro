@@ -37,7 +37,7 @@ export const AIS_STYLE = [
   '.ais__chip { display: inline-block; border-radius: 10px; padding: 2px 10px; font-size: 11.5px; background: #f1ecff; color: #7048e8; }',
   '.ais__badge { display: inline-block; border-radius: 10px; padding: 2px 10px; font-size: 11.5px; font-weight: bold; }',
   '.ais__badge--idle { background: #f1f3f5; color: #666; }',
-  '.ais__badge--running { background: #e7f5ff; color: #1c7ed6; }',
+  '.ais__badge--running { background: #e7f5ff; color: #1c7ed6; animation: ais-breathe 2.4s ease-in-out infinite; }',
   '.ais__badge--passed { background: #ebfbee; color: #2b8a3e; }',
   '.ais__badge--failed { background: #fff0f4; color: #c2255c; }',
   '.ais__badge--published { background: #f3f0ff; color: #7048e8; }',
@@ -57,6 +57,33 @@ export const AIS_STYLE = [
   '.ais__pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #e3dcf5; border-radius: 12px; padding: 3px 10px; font-size: 11.5px; background: #faf9ff; }',
   '.ais__pill button { border: none; background: transparent; color: #c2255c; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }',
   '.ais__pill span { color: #8a94a6; font-size: 11px; }',
+  '.ais__dd { position: relative; display: inline-block; }',
+  '.ais__dd-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; background: #fff; border: 1px solid #e3dcf5; border-radius: 12px; padding: 10px 12px; max-height: 280px; overflow: auto; min-width: 300px; box-shadow: 0 10px 28px rgba(80,60,140,.2); display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; }',
+  '.ais__dd-panel[hidden] { display: none; }',
+  '.ais__dd-panel label { font-size: 12px; white-space: nowrap; cursor: pointer; display: flex; align-items: center; gap: 5px; }',
+  '.ais__dd-actions { grid-column: 1 / -1; margin-top: 8px; }',
+  '@keyframes ais-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }',
+  '@keyframes ais-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }',
+  '@keyframes ais-pulse { 0% { box-shadow: 0 0 0 0 rgba(112, 72, 232, .45); } 70% { box-shadow: 0 0 0 9px rgba(112, 72, 232, 0); } 100% { box-shadow: 0 0 0 0 rgba(112, 72, 232, 0); } }',
+  '@keyframes ais-stripes { from { background-position: 0 0; } to { background-position: 28px 0; } }',
+  '@keyframes ais-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }',
+  '@keyframes ais-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }',
+  '.ais { animation: ais-in .28s ease both; }',
+  '.ais__head { background: linear-gradient(120deg, #7048e8, #9775fa, #845ef7, #7048e8); background-size: 260% 260%; animation: ais-flow 9s ease infinite; }',
+  '.ais__btn { transition: transform .15s ease, box-shadow .15s ease, filter .15s ease; }',
+  '.ais__btn:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(112, 72, 232, .28); }',
+  '.ais__btn:not(:disabled):active { transform: translateY(0); box-shadow: 0 2px 6px rgba(112, 72, 232, .25); }',
+  '.ais__btn:focus-visible { outline: 2px solid #9775fa; outline-offset: 2px; }',
+  'input.textbox:focus, .ais textarea:focus, .ais select:focus { border-color: #9775fa; box-shadow: 0 0 0 3px rgba(151, 117, 250, .18); transition: box-shadow .15s ease, border-color .15s ease; }',
+  '.ais__drop { transition: background .2s ease, border-color .2s ease, transform .2s ease; }',
+  '.ais__drop--over { transform: scale(1.01); }',
+  '.ais__row-hover:hover, .ais tbody tr:hover { background: rgba(151, 117, 250, .06); }',
+  '.ais__progress { height: 6px; border-radius: 999px; background: rgba(151, 117, 250, .18); overflow: hidden; margin: 8px 0 10px; }',
+  '.ais__progress > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #7048e8, #9775fa); transition: width .6s ease; }',
+  '.ais__progress--live > i { background-image: repeating-linear-gradient(45deg, #7048e8 0 10px, #9775fa 10px 20px); background-size: 28px 28px; animation: ais-stripes .9s linear infinite; }',
+  '.ais__progress--bad > i { background: linear-gradient(90deg, #e03131, #ff6b6b); }',
+  '.ais__msg--live { background: linear-gradient(90deg, #7a6fae 35%, #b197fc 50%, #7a6fae 65%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: ais-shimmer 2.2s linear infinite; }',
+  '@media (prefers-reduced-motion: reduce) { .ais, .ais * { animation: none !important; transition: none !important; } }',
   /* dark */
   '.pta-dark .ais { background: #23272c; border-color: #37313f; box-shadow: 0 8px 28px rgba(0,0,0,.4); }',
   '.pta-dark .ais__body { color: #d5dade; }',
@@ -75,6 +102,10 @@ export const AIS_STYLE = [
   '.pta-dark .ais__drop:hover, .pta-dark .ais__drop--over { background: #292339; border-color: #7a5fd0; }',
   '.pta-dark .ais__drop-sub { color: #7f75a8; }',
   '.pta-dark .ais__pill { background: #262b31; border-color: #37313f; }',
+  '.pta-dark .ais__dd-panel { background: #23202c; border-color: #4d4070; box-shadow: 0 10px 28px rgba(0,0,0,.5); }',
+  '.pta-dark .ais__progress { background: rgba(151, 117, 250, .14); }',
+  '.pta-dark .ais__msg--live { background: linear-gradient(90deg, #a99ed0 35%, #d0bfff 50%, #a99ed0 65%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; }',
+  '.pta-dark .ais__row-hover:hover, .pta-dark .ais tbody tr:hover { background: rgba(151, 117, 250, .09); }',
 ].join('\n');
 
 export function ensureAisStyle() {
@@ -101,13 +132,47 @@ export async function uploadContextFile(url, file) {
 }
 
 /** Language options: the server's judge config, same filter as the scratchpad. */
-export function langOptionsHtml(serverLangs, selected) {
+export function langEntries(serverLangs) {
   let langs = serverLangs;
   if (!langs || !Object.keys(langs).length) {
     const avail = getAvailableLangs();
     langs = {};
     for (const k of Object.keys(avail)) langs[k] = avail[k].display || k;
   }
+  return langs;
+}
+
+const ddLabel = (n) => (n ? `${n} ${i18n('languages selected')}` : i18n('All languages allowed'));
+
+/** Compact multi-select dropdown for language restriction. */
+export function renderAllowLangsDd(langsMap, selected, disabled) {
+  const sel = new Set(selected || []);
+  return `<div class="ais__dd">
+    <button type="button" class="ais__btn ais__btn--ghost ais__btn--sm ais__dd-btn" ${disabled ? 'disabled' : ''}>🌐 <span class="ais__dd-label">${esc(ddLabel(sel.size))}</span> ▾</button>
+    <div class="ais__dd-panel" hidden>
+      ${Object.entries(langsMap).map(([id, disp]) => `<label><input type="checkbox" class="ais__dd-cb" value="${id}" ${sel.has(id) ? 'checked' : ''} ${disabled ? 'disabled' : ''}> ${esc(disp)}</label>`).join('')}
+      <div class="ais__dd-actions"><button type="button" class="ais__btn ais__btn--ghost ais__btn--sm ais__dd-clear" ${disabled ? 'disabled' : ''}>${esc(i18n('Clear (allow all)'))}</button></div>
+    </div></div>`;
+}
+
+export function wireAllowLangsDd($scope, onChange) {
+  const $dd = $scope.find('.ais__dd');
+  if (!$dd.length) return;
+  const $panel = $dd.find('.ais__dd-panel');
+  $dd.find('.ais__dd-btn').on('click', (ev) => { ev.stopPropagation(); $panel.prop('hidden', !$panel.prop('hidden')); });
+  $panel.on('click', (ev) => ev.stopPropagation());
+  $(document).off('click.aisdd').on('click.aisdd', () => $panel.prop('hidden', true));
+  const emit = () => {
+    const langs = $dd.find('.ais__dd-cb:checked').map(function cv() { return $(this).val(); }).get();
+    $dd.find('.ais__dd-label').text(ddLabel(langs.length));
+    if (onChange) onChange(langs);
+  };
+  $dd.find('.ais__dd-cb').on('change', emit);
+  $dd.find('.ais__dd-clear').on('click', () => { $dd.find('.ais__dd-cb').prop('checked', false); emit(); });
+}
+
+export function langOptionsHtml(serverLangs, selected) {
+  const langs = langEntries(serverLangs);
   const keys = Object.keys(langs);
   const sel = selected && keys.includes(selected) ? selected
     : ['cc', 'c', 'py.py3', 'py', 'java'].find((k) => keys.includes(k)) || keys[0];

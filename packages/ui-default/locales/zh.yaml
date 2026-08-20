@@ -560,7 +560,6 @@ Open in Problem Set: 在题库中打开
 Open Scratchpad: 进入在线编程模式
 Open Since: 开始时间
 Open Source: 开源
-Open: 开放
 Operating System: 操作系统
 Ops: 运维
 Or paste CSV content: 或粘贴 CSV 内容
@@ -686,7 +685,6 @@ Reply discussions: 回复讨论
 Reply problem solutions: 回复题解
 reply: 回复
 Reply: 回复
-Report: 举报
 required: 必填
 Reset Password or Find Username: 重置密码或找回用户名
 Reset Password: 重置密码
@@ -750,7 +748,6 @@ AI Socratic Tutor: AI 苏格拉底式辅导员
 Back to session: 返回任务
 Compiler output: 编译输出
 Confirm deleting this self-learning session? Tutoring conversations will be deleted as well.: 确认删除这个自主学习任务？相关的辅导对话也会被删除。
-Created: 创建时间
 Current AI provider: 当前 AI 提供商
 Describe the goal of this session for your students.: 向学生说明本次自主学习的目标。
 Explain your thinking, answer the tutor, or ask for guidance... (Enter to send): 说说你的思路、回答辅导员的问题，或请求引导……（Enter 发送）
@@ -842,7 +839,6 @@ Student ID: 学号
 Subject: 主题
 Submission Statistics: 递交统计
 Submission: 递交
-Submissions: 递交
 Submit: 递交
 Submitted: 已递交
 Support: 支持
@@ -1221,6 +1217,25 @@ Context: 参考材料
 "No context files yet.": 尚未上传参考材料。
 "Save notes": 保存备注
 "Notes saved.": 备注已保存。
+Generate: 生成
+"Cross-check is ON: a second, independently written solution must agree with the reference on every test.": 交叉验证已开启：另一份独立编写的解答必须在所有测试点上与参考解答一致。
+"Cross-check is OFF: the reference solution\u2019s outputs are trusted as-is \u2014 read it yourself before publishing.": 交叉验证已关闭：参考解答的输出将被直接采信——发布前请亲自审阅参考解答。
+"Turn off": 关闭
+"Turn on": 开启
+"Trust the reference — re-verify without cross-check": 采信参考解答——跳过交叉验证并重新验证
+"Cross-check disabled — re-verifying with the reference trusted.": 已关闭交叉验证——正在以参考解答为准重新验证。
+Stop: 停止
+"Task requirement": 任务需求
+"Save requirement": 保存需求
+"After changing the requirement, click Generate & verify to synthesize the task against it.": 修改需求后，点击「生成并验证」按新需求重新合成题目。
+"Requirement saved — run Generate & verify to synthesize against it.": 需求已保存——点击「生成并验证」按新需求重新合成。
+"Allowed languages for students": 允许学生使用的语言
+"(leave empty = all languages)": （留空 = 允许所有语言）
+"All languages allowed": 允许所有语言
+"languages selected": 种语言可用
+"Clear (allow all)": 清空（允许所有）
+"Stopping — the run will halt at its next checkpoint.": 正在停止——将在下一个检查点停止运行。
+"Generation started — the task will appear here as each part is drafted.": 已开始生成——每一部分完成后会立即显示在此。
 "Teacher report": 教师简报
 "Generate & verify": 生成并验证
 "Artifacts generated — verification started.": 内容已生成——验证已自动开始。

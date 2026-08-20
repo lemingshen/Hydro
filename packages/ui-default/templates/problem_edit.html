@@ -48,6 +48,13 @@
                value:pdoc['difficulty'] or ''
              }) }}
           </div>
+          <div class="row" style="margin-top: 6px;">
+            <div class="medium-12 columns">
+              <label>{{ _('Allowed languages for students') }} <span style="opacity:.7">{{ _('(leave empty = all languages)') }}</span></label>
+              <input type="hidden" name="allowLangs" id="pe-allowlangs-input" value="{{ (allowLangs or [])|join(',') }}">
+              <div id="pe-allowlangs" style="margin-top: 4px;"></div>
+            </div>
+          </div>
           <div class="section__tab-container nojs--hide">
           <div class="section__tab-header-wrapper">
             <ul class="section__tab-header">

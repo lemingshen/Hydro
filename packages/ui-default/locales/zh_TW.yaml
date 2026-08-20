@@ -557,7 +557,6 @@ Open in Problem Set: 在題庫中開啟
 Open Scratchpad: 進入線上程式設計模式
 Open Since: 開始時間
 Open Source: 開源
-Open: 開放
 Operating System: 作業系統
 Ops: 運維
 Or paste CSV content: 或貼上 CSV 內容
@@ -683,7 +682,6 @@ Reply discussions: 回覆討論
 Reply problem solutions: 回覆題解
 reply: 回覆
 Reply: 回覆
-Report: 舉報
 required: 必填
 Reset Password or Find Username: 重置密碼或找回使用者名稱
 Reset Password: 重置密碼
@@ -747,7 +745,6 @@ AI Socratic Tutor: AI 蘇格拉底式輔導員
 Back to session: 返回任務
 Compiler output: 編譯輸出
 Confirm deleting this self-learning session? Tutoring conversations will be deleted as well.: 確認刪除這個自主學習任務？相關的輔導對話也會被刪除。
-Created: 建立時間
 Current AI provider: 目前 AI 供應商
 Describe the goal of this session for your students.: 向學生說明本次自主學習的目標。
 Explain your thinking, answer the tutor, or ask for guidance... (Enter to send): 說說你的思路、回答輔導員的問題，或請求引導……（Enter 傳送）
@@ -839,7 +836,6 @@ Student ID: 學號
 Subject: 主題
 Submission Statistics: 遞交統計
 Submission: 遞交
-Submissions: 遞交
 Submit: 遞交
 Submitted: 已遞交
 Support: 支援
@@ -975,7 +971,6 @@ View problems: 檢視題目
 View ranking: 檢視排名
 View this domain: 檢視此域
 View training plans: 檢視訓練計劃
-View: 檢視
 Visible to registered users: 對註冊使用者可見
 Visit: 檢視
 Vote problem solutions: 為題解投票
@@ -1219,6 +1214,25 @@ Context: 參考資料
 "No context files yet.": 尚未上傳參考資料。
 "Save notes": 儲存備註
 "Notes saved.": 備註已儲存。
+Generate: 生成
+"Cross-check is ON: a second, independently written solution must agree with the reference on every test.": 交叉驗證已開啟：另一份獨立撰寫的解答必須在所有測試點上與參考解答一致。
+"Cross-check is OFF: the reference solution\u2019s outputs are trusted as-is \u2014 read it yourself before publishing.": 交叉驗證已關閉：參考解答的輸出將被直接採信——發布前請親自審閱參考解答。
+"Turn off": 關閉
+"Turn on": 開啟
+"Trust the reference — re-verify without cross-check": 採信參考解答——跳過交叉驗證並重新驗證
+"Cross-check disabled — re-verifying with the reference trusted.": 已關閉交叉驗證——正在以參考解答為準重新驗證。
+Stop: 停止
+"Task requirement": 任務需求
+"Save requirement": 儲存需求
+"After changing the requirement, click Generate & verify to synthesize the task against it.": 修改需求後，點擊「生成並驗證」按新需求重新合成題目。
+"Requirement saved — run Generate & verify to synthesize against it.": 需求已儲存——點擊「生成並驗證」按新需求重新合成。
+"Allowed languages for students": 允許學生使用的語言
+"(leave empty = all languages)": （留空 = 允許所有語言）
+"All languages allowed": 允許所有語言
+"languages selected": 種語言可用
+"Clear (allow all)": 清空（允許所有）
+"Stopping — the run will halt at its next checkpoint.": 正在停止——將在下一個檢查點停止運行。
+"Generation started — the task will appear here as each part is drafted.": 已開始生成——每一部分完成後會立即顯示在此。
 "Teacher report": 教師簡報
 "Generate & verify": 生成並驗證
 "Artifacts generated — verification started.": 內容已生成——驗證已自動開始。

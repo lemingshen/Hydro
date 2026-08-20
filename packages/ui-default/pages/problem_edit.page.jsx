@@ -7,6 +7,9 @@ import Editor from 'vj/components/editor/index';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { i18n, request, tpl } from 'vj/utils';
+import {
+  ensureAisStyle, langEntries, renderAllowLangsDd, wireAllowLangsDd,
+} from 'vj/pages/ai_studio.page';
 
 const categories = {};
 const dirtyCategories = [];
@@ -137,6 +140,17 @@ function buildCategoryFilter() {
 }
 
 export default new NamedPage(['problem_create', 'problem_edit'], () => {
+  // Allowed-languages dropdown (shared with the AI Studio): syncs a
+  // comma-joined id list into the hidden form input the handler reads.
+  const $peMount = $('#pe-allowlangs');
+  if ($peMount.length) {
+    ensureAisStyle();
+    const $peInput = $('#pe-allowlangs-input');
+    const selected = String($peInput.val() || '').split(',').map((i) => i.trim()).filter(Boolean);
+    $peMount.html(renderAllowLangsDd(langEntries(null), selected));
+    wireAllowLangsDd($peMount, (langs) => $peInput.val(langs.join(',')));
+  }
+
   let confirmed = false;
   $(document).on('click', '[name="operation"]', (ev) => {
     ev.preventDefault();
