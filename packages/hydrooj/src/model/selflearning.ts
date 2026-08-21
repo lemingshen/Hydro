@@ -51,6 +51,17 @@ export interface TutorThreadDoc {
     rid?: ObjectId;
     attemptCount: number;
     messages: TutorMessage[];
+    /** Set once, when this student first gets this problem Accepted (spark counters key off it). */
+    firstAcceptedAt?: Date;
+    /** Boss Challenge state for this student on this problem. */
+    challenge?: {
+        state: 'active' | 'cleared' | 'declined';
+        title?: string;
+        question?: string;
+        hook?: string;
+        rid?: ObjectId;
+        clearedAt?: Date;
+    };
     createdAt: Date;
     updateAt: Date;
 }
@@ -62,6 +73,66 @@ declare module '../service/db' {
 }
 
 export const collTutor = db.collection('selflearning.tutor');
+
+/* --------------------- Tutor Spark: momentum & badges ---------------------- */
+/*
+ * Lightweight motivation layer for the AI tutor: a per-student momentum doc
+ * (daily streak + achievement counters) and a fixed badge catalog. Counters
+ * are only ever bumped from the tutor handlers, so everything derives from
+ * activity the tutor actually witnessed. Deliberately per-student and
+ * non-competitive: the class-report anonymization ethos extends here — spark
+ * celebrates the student's OWN momentum, never ranks them against others.
+ */
+
+export interface SparkDoc {
+    domainId: string;
+    uid: number;
+    /** Consecutive calendar days (server-local) with tutor-visible activity. */
+    streak: number;
+    lastDay: string;
+    /** Problems brought to Accepted (first accept per problem thread). */
+    accepted: number;
+    /** Accepted on attempt #1. */
+    cleanSolves: number;
+    /** Accepted after three or more failed attempts. */
+    comebacks: number;
+    /** Answers typed into tutor question cards (incl. Boss Challenge turns). */
+    cardAnswers: number;
+    challengesCleared: number;
+    badges: string[];
+    updateAt: Date;
+}
+
+declare module '../service/db' {
+    interface Collections {
+        'selflearning.spark': SparkDoc;
+    }
+}
+
+export const collSpark = db.collection('selflearning.spark');
+
+export interface SparkBadge {
+    id: string;
+    icon: string;
+    title: string;
+    desc: string;
+    test: (s: SparkDoc) => boolean;
+}
+
+export const SPARK_BADGES: SparkBadge[] = [
+    { id: 'first-light', icon: '🌱', title: 'First Light', desc: 'Get your first problem Accepted.', test: (s) => s.accepted >= 1 },
+    { id: 'hat-trick', icon: '🎩', title: 'Hat Trick', desc: 'Bring three problems to Accepted.', test: (s) => s.accepted >= 3 },
+    { id: 'rising-star', icon: '🌟', title: 'Rising Star', desc: 'Bring ten problems to Accepted.', test: (s) => s.accepted >= 10 },
+    { id: 'problem-crusher', icon: '🚀', title: 'Problem Crusher', desc: 'Bring twenty-five problems to Accepted.', test: (s) => s.accepted >= 25 },
+    { id: 'clean-strike', icon: '🎯', title: 'Clean Strike', desc: 'Solve a problem on your very first attempt.', test: (s) => s.cleanSolves >= 1 },
+    { id: 'comeback-kid', icon: '💪', title: 'Comeback Kid', desc: 'Get Accepted after three or more failed attempts. Persistence wins.', test: (s) => s.comebacks >= 1 },
+    { id: 'bug-whisperer', icon: '🐛', title: 'Bug Whisperer', desc: 'Answer ten tutor questions at your code.', test: (s) => s.cardAnswers >= 10 },
+    { id: 'deep-thinker', icon: '🧠', title: 'Deep Thinker', desc: 'Answer thirty tutor questions. Thinking out loud works.', test: (s) => s.cardAnswers >= 30 },
+    { id: 'on-fire', icon: '🔥', title: 'On Fire', desc: 'Practice three days in a row.', test: (s) => s.streak >= 3 },
+    { id: 'unstoppable', icon: '🌋', title: 'Unstoppable', desc: 'Practice seven days in a row.', test: (s) => s.streak >= 7 },
+    { id: 'challenger', icon: '⚔️', title: 'Challenger', desc: 'Clear your first Boss Challenge.', test: (s) => s.challengesCleared >= 1 },
+    { id: 'boss-slayer', icon: '👑', title: 'Boss Slayer', desc: 'Clear five Boss Challenges.', test: (s) => s.challengesCleared >= 5 },
+];
 
 export class SelfLearningModel {
     static add(domainId: string, owner: number, title: string, content: string, pids: number[]): Promise<ObjectId> {
@@ -115,6 +186,55 @@ export class SelfLearningModel {
                 $set: { updateAt: at, ...$set },
             },
         );
+    }
+
+    static setThreadFields(tid: ObjectId, $set: any) {
+        return collTutor.updateOne({ _id: tid }, { $set: { ...$set, updateAt: new Date() } });
+    }
+
+    /* ------------------------------ Tutor Spark ------------------------------ */
+
+    static sparkDay(d = new Date()): string {
+        const p = (n: number) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    }
+
+    static async getSpark(domainId: string, uid: number): Promise<SparkDoc> {
+        const s = await collSpark.findOne({ domainId, uid });
+        return s || {
+            domainId, uid, streak: 0, lastDay: '', accepted: 0, cleanSolves: 0, comebacks: 0, cardAnswers: 0, challengesCleared: 0, badges: [], updateAt: new Date(),
+        };
+    }
+
+    /**
+     * Register tutor-visible activity: advance the daily streak, apply the
+     * counter increments, and award any badge whose condition just became
+     * true. Returns the fresh doc plus the badges earned by THIS call so the
+     * client can celebrate exactly once.
+     */
+    static async touchSpark(domainId: string, uid: number, inc: Partial<Record<'accepted' | 'cleanSolves' | 'comebacks' | 'cardAnswers' | 'challengesCleared', number>> = {}) {
+        const now = new Date();
+        const today = SelfLearningModel.sparkDay(now);
+        const s = await SelfLearningModel.getSpark(domainId, uid);
+        if (s.lastDay !== today) {
+            const yesterday = SelfLearningModel.sparkDay(new Date(now.getTime() - 86400000));
+            s.streak = s.lastDay === yesterday ? (s.streak || 0) + 1 : 1;
+            s.lastDay = today;
+        }
+        for (const [k, v] of Object.entries(inc)) if (v) (s as any)[k] = ((s as any)[k] || 0) + v;
+        const owned = new Set(s.badges || []);
+        const newBadges = SPARK_BADGES.filter((b) => !owned.has(b.id) && b.test(s));
+        if (newBadges.length) s.badges = [...(s.badges || []), ...newBadges.map((b) => b.id)];
+        s.updateAt = now;
+        const { domainId: d, uid: u, ...rest } = s as any;
+        delete rest._id;
+        await collSpark.updateOne({ domainId, uid }, { $set: rest }, { upsert: true });
+        return { spark: s, newBadges };
+    }
+
+    /** The public badge catalog (no test functions) for client rendering. */
+    static badgeCatalog() {
+        return SPARK_BADGES.map(({ id, icon, title, desc }) => ({ id, icon, title, desc }));
     }
 
     static async resetThread(domainId: string, ssid: ObjectId, pid: number, uid: number) {

@@ -98,12 +98,32 @@ class SelfLearningDetailHandler extends Handler {
             ? await problem.getListStatus(domainId, this.user._id, sdoc.pids)
             : {};
         const udict = await user.getList(domainId, [sdoc.owner]);
+        // Tutor Spark strip: the student's own momentum, rendered server-side
+        // so the page needs no extra scripting. Staff accounts see nothing.
+        const isStudentView = !this.user.own(sdoc)
+            && !this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK)
+            && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
+        let spark: any = null;
+        if (isStudentView && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
+            const sp = await SelfLearningModel.getSpark(domainId, this.user._id).catch(() => null);
+            if (sp) {
+                const owned = new Set(sp.badges || []);
+                spark = {
+                    streak: sp.streak || 0,
+                    challengesCleared: sp.challengesCleared || 0,
+                    badges: SelfLearningModel.badgeCatalog().filter((b) => owned.has(b.id)),
+                };
+            }
+        }
+        const solvedCount = sdoc.pids.filter((pid) => psdict[pid]?.status === STATUS.STATUS_ACCEPTED).length;
         this.response.template = 'self_learning_detail.html';
         this.response.body = {
             sdoc,
             pdict,
             psdict,
             udict,
+            spark,
+            solvedCount,
             canEdit: sdoc.owner === this.user._id
                 || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)
                 || this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM),
@@ -308,6 +328,68 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         if (!this.isStudent) throw new ForbiddenError('The AI tutor is only available to student accounts.');
     }
 
+    /** Best-effort spark update — motivation must never break tutoring. */
+    async sparkTouch(domainId: string, inc: any = {}) {
+        try {
+            return await SelfLearningModel.touchSpark(domainId, this.user._id, inc);
+        } catch (e) {
+            logger.warn('[pta-ui] spark update failed: %s', e.message);
+            return null;
+        }
+    }
+
+    static sparkView(s: any) {
+        if (!s) return null;
+        return {
+            streak: s.streak || 0,
+            accepted: s.accepted || 0,
+            cleanSolves: s.cleanSolves || 0,
+            comebacks: s.comebacks || 0,
+            cardAnswers: s.cardAnswers || 0,
+            challengesCleared: s.challengesCleared || 0,
+            badges: s.badges || [],
+        };
+    }
+
+    static publicBadges(badges: any[]) {
+        return (badges || []).map((b) => ({ id: b.id, icon: b.icon, title: b.title, desc: b.desc }));
+    }
+
+    /** The Boss Challenge offer/state payload for the client. */
+    challengePayload(thread: TutorThreadDoc | null) {
+        if (!['programming', 'objective'].includes(this.problemKind)) return null;
+        const c = thread?.challenge;
+        if (c?.state === 'cleared') return { state: 'cleared' };
+        if (c?.state === 'declined') return { state: 'declined' };
+        if (c?.state === 'active') {
+            return {
+                state: 'active', available: true, title: c.title || 'Boss Challenge', hook: c.hook || '', question: c.question || '',
+            };
+        }
+        return { state: 'offered', available: true };
+    }
+
+    /**
+     * First-accept bookkeeping shared by every path a fresh Accepted verdict
+     * can arrive through (postAnnotate for programming, postAccepted for
+     * quizzes, postStart for the record-page flows). attemptCountAtAc counts
+     * the accepted attempt itself; the thread flag makes it fire exactly once
+     * per student per problem.
+     */
+    async sparkOnAccepted(domainId: string, thread: TutorThreadDoc | null, attemptCountAtAc: number) {
+        if (!thread || thread.firstAcceptedAt) return this.sparkTouch(domainId);
+        try {
+            await SelfLearningModel.setThreadFields(thread._id, { firstAcceptedAt: new Date() });
+        } catch (e) {
+            logger.warn('[pta-ui] firstAcceptedAt stamp failed: %s', e.message);
+        }
+        return this.sparkTouch(domainId, {
+            accepted: 1,
+            cleanSolves: attemptCountAtAc <= 1 ? 1 : 0,
+            comebacks: attemptCountAtAc >= 4 ? 1 : 0,
+        });
+    }
+
     async tutorCtx(rdoc: RecordDoc | null, attemptCount: number, everAccepted: boolean): Promise<aiTutor.TutorTurnContext> {
         const uiLang = this.user.viewLang || this.session.viewLang || system.get('server.language') || 'en';
         const problemKind = this.problemKind;
@@ -390,9 +472,13 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
     async get() {
         this.checkTutorAllowed();
         const thread = await SelfLearningModel.getThread(this.args.domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        const spark = await SelfLearningModel.getSpark(this.args.domainId, this.user._id).catch(() => null);
         this.response.body = {
             messages: (thread?.messages || []).map(SelfLearningTutorHandler.mapMsg),
             attemptCount: thread?.attemptCount || 0,
+            spark: SelfLearningTutorHandler.sparkView(spark),
+            badgeCatalog: SelfLearningModel.badgeCatalog(),
+            challenge: this.challengePayload(thread),
         };
     }
 
@@ -414,7 +500,13 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         const lastMsg = thread.messages[thread.messages.length - 1];
         // Reopening the chat on the same submission: just return existing history.
         if (sameRid && lastMsg?.role === 'assistant') {
-            this.response.body = { messages: thread.messages.map(SelfLearningTutorHandler.mapMsg) };
+            const sparkNow = await SelfLearningModel.getSpark(domainId, this.user._id).catch(() => null);
+            this.response.body = {
+                messages: thread.messages.map(SelfLearningTutorHandler.mapMsg),
+                spark: SelfLearningTutorHandler.sparkView(sparkNow),
+                badgeCatalog: SelfLearningModel.badgeCatalog(),
+                challenge: this.challengePayload(thread),
+            };
             return;
         }
         // First tutoring turn if the tutor has never spoken in this thread yet.
@@ -440,7 +532,16 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         const reply = await aiTutor.runTutorTurn(ctx, thread.messages, directive);
         await SelfLearningModel.pushMessages(thread._id, [{ role: 'assistant', kind: 'chat', content: reply }]);
         const messages = [...thread.messages, { role: 'assistant', kind: 'chat', content: reply }];
-        this.response.body = { messages: messages.map((m: any) => SelfLearningTutorHandler.mapMsg(m)) };
+        const touched = accepted && !sameRid
+            ? await this.sparkOnAccepted(domainId, thread, attemptCount || 1)
+            : await this.sparkTouch(domainId);
+        this.response.body = {
+            messages: messages.map((m: any) => SelfLearningTutorHandler.mapMsg(m)),
+            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
+            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+            badgeCatalog: SelfLearningModel.badgeCatalog(),
+            challenge: this.challengePayload(await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id)),
+        };
     }
 
     @param('rid', Types.ObjectId)
@@ -476,7 +577,19 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 role: 'assistant', kind: 'anno', content: annotation.question, line: annotation.line, endLine: annotation.endLine,
             }]);
         }
-        this.response.body = { annotation, marker, markerAccepted: accepted };
+        // Spark: a FRESH accepted divider means this attempt just won —
+        // counted once per problem; every call keeps the daily streak alive.
+        const touched = accepted && marker
+            ? await this.sparkOnAccepted(domainId, thread, thread?.attemptCount || 1)
+            : await this.sparkTouch(domainId);
+        this.response.body = {
+            annotation,
+            marker,
+            markerAccepted: accepted,
+            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
+            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+            challenge: accepted ? this.challengePayload(thread) : null,
+        };
     }
 
     @param('rid', Types.ObjectId)
@@ -525,12 +638,18 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 role: 'assistant', kind: 'anno', content: result.reply, line, endLine, resolved: result.resolved,
             },
         ]);
-        this.response.body = result;
+        const touched = await this.sparkTouch(domainId, { cardAnswers: 1 });
+        this.response.body = {
+            ...result,
+            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
+            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+        };
     }
 
     @param('text', Types.String)
     async postMessage({ domainId }, text: string) {
         this.checkTutorAllowed();
+        this.sparkTouch(domainId); // fire-and-forget: chatting counts as a practice day
         await this.limitRate('ai_tutor', 60, 10, '{{user}}');
         text = text.trim();
         if (!text) throw new ValidationError('text');
@@ -561,21 +680,153 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         if (this.problemKind === 'programming') {
             // The card channel asks nothing on success (the student should not
             // lose patience after winning); just record the accepted divider so
-            // the read-only history shows the milestone.
-            const { marker } = await this.ensureAttemptMarker(domainId, rdoc);
-            this.response.body = { reply: null, marker, markerAccepted: true };
+            // the read-only history shows the milestone. Spark counting also
+            // lives in postAnnotate — the firstAcceptedAt stamp keeps the two
+            // paths from ever double-counting.
+            const { thread, marker } = await this.ensureAttemptMarker(domainId, rdoc);
+            const touched = marker
+                ? await this.sparkOnAccepted(domainId, thread, thread?.attemptCount || 1)
+                : await this.sparkTouch(domainId);
+            this.response.body = {
+                reply: null,
+                marker,
+                markerAccepted: true,
+                spark: SelfLearningTutorHandler.sparkView(touched?.spark),
+                newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+                challenge: this.challengePayload(thread),
+            };
             return;
         }
-        const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
-        if (!thread || !thread.messages.length) {
-            this.response.body = { reply: null };
+        // Quizzes: ensure the thread + accepted divider exist even when this
+        // is a clean first-try accept (no failed attempts, so no prior chat).
+        const { thread, marker: attemptMarker } = await this.ensureAttemptMarker(domainId, rdoc);
+        const touched = attemptMarker
+            ? await this.sparkOnAccepted(domainId, thread, thread?.attemptCount || 1)
+            : await this.sparkTouch(domainId);
+        const sparkFields = {
+            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
+            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+            challenge: this.challengePayload(thread),
+        };
+        const hasDialogue = (thread?.messages || []).some((m) => m.role === 'assistant');
+        if (!thread || !hasDialogue) {
+            // Nothing to congratulate in-chat yet — the client celebrates via
+            // spark and offers the Boss Challenge directly.
+            this.response.body = { reply: null, marker: attemptMarker, markerAccepted: true, ...sparkFields };
             return;
         }
         const marker: Omit<TutorMessage, 'at'> = { role: 'user', kind: 'accepted', content: 'My new submission was ACCEPTED!' };
         const ctx = await this.tutorCtx(rdoc, thread.attemptCount || 1, true);
         const reply = await aiTutor.runTutorTurn(ctx, [...thread.messages, { ...marker, at: new Date() }], aiTutor.ACCEPTED_DIRECTIVE);
         await SelfLearningModel.pushMessages(thread._id, [marker, { role: 'assistant', kind: 'chat', content: reply }], { rid });
-        this.response.body = { reply };
+        this.response.body = { reply, ...sparkFields };
+    }
+
+    /**
+     * Boss Challenge: start (or resume) the optional post-acceptance stretch
+     * goal. Generation runs once per problem; the stored question survives
+     * page reloads so the student can come back to it.
+     */
+    @param('rid', Types.ObjectId, true)
+    async postChallenge({ domainId }, rid?: ObjectId) {
+        this.checkTutorAllowed();
+        if (!['programming', 'objective'].includes(this.problemKind)) throw new BadRequestError('The Boss Challenge is only available for programming and quiz problems.');
+        await this.limitRate('ai_tutor', 60, 10, '{{user}}');
+        const thread = await SelfLearningModel.ensureThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        if (thread.challenge?.state === 'cleared') throw new BadRequestError('You already cleared the Boss Challenge for this problem.');
+        if (thread.challenge?.state === 'active' && thread.challenge.question) {
+            this.response.body = {
+                title: thread.challenge.title || 'Boss Challenge',
+                hook: thread.challenge.hook || '',
+                question: thread.challenge.question,
+                resumed: true,
+            };
+            return;
+        }
+        if (!thread.firstAcceptedAt && !(await this.everAccepted(domainId))) {
+            throw new BadRequestError('Get the problem Accepted first — then the Boss Challenge unlocks.');
+        }
+        // The challenge grows out of the student's own accepted solution.
+        let rdoc: RecordDoc | null = null;
+        if (rid) rdoc = await this.loadOwnRecord(domainId, rid);
+        if (!rdoc || rdoc.status !== STATUS.STATUS_ACCEPTED) {
+            const [latest] = await record.getMulti(domainId, {
+                uid: this.user._id, pid: this.pdoc.docId, status: STATUS.STATUS_ACCEPTED,
+            }).sort({ _id: -1 }).limit(1).toArray();
+            rdoc = latest || rdoc;
+        }
+        const ctx = await this.tutorCtx(rdoc, thread.attemptCount || 1, true);
+        const gen = await aiTutor.runChallengeGeneration(ctx);
+        await SelfLearningModel.pushMessages(thread._id, [{
+            role: 'assistant', kind: 'anno', content: `🔥 ${gen.title} — ${gen.challenge}`,
+        }], {
+            challenge: {
+                state: 'active', title: gen.title, hook: gen.hook, question: gen.challenge, rid: rdoc?._id,
+            },
+        });
+        await this.sparkTouch(domainId);
+        this.response.body = { title: gen.title, hook: gen.hook, question: gen.challenge };
+    }
+
+    @param('text', Types.String)
+    @param('history', Types.String, true)
+    async postChallengeReply({ domainId }, text: string, history = '') {
+        this.checkTutorAllowed();
+        await this.limitRate('ai_tutor', 60, 10, '{{user}}');
+        const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        if (!thread || thread.challenge?.state !== 'active' || !thread.challenge.question) {
+            throw new BadRequestError('No active Boss Challenge. Start one first.');
+        }
+        const maxMessages = +system.get('ai_tutor.max_messages') || 80;
+        if (thread.messages.length >= maxMessages) {
+            throw new BadRequestError('This tutoring conversation reached its length limit. Please reset it to continue.');
+        }
+        let turns: { role: string, content: string }[] = [];
+        try {
+            const parsed = JSON.parse(history || '[]');
+            if (Array.isArray(parsed)) {
+                turns = parsed
+                    .filter((t) => t && typeof t === 'object')
+                    .map((t) => ({ role: String(t.role || ''), content: String(t.content || '').slice(0, 800) }))
+                    .slice(-12);
+            }
+        } catch (e) { /* ignore malformed history */ }
+        let rdoc: RecordDoc | null = null;
+        if (thread.challenge.rid) rdoc = await record.get(domainId, thread.challenge.rid).catch(() => null);
+        if (rdoc && (rdoc.uid !== this.user._id || rdoc.pid !== this.pdoc.docId)) rdoc = null;
+        const ctx = await this.tutorCtx(rdoc, thread.attemptCount || 1, true);
+        if (typeof this.args.code === 'string' && this.args.code.trim()) {
+            ctx.liveCode = String(this.args.code).slice(0, 8000);
+        }
+        const result = await aiTutor.runChallengeTurn(ctx, {
+            challenge: thread.challenge.question,
+            history: turns,
+            answer: text.slice(0, 1500),
+        });
+        await SelfLearningModel.pushMessages(thread._id, [
+            { role: 'user', kind: 'anno', content: text.slice(0, 1500) },
+            {
+                role: 'assistant', kind: 'anno', content: result.reply, resolved: result.cleared,
+            },
+        ], result.cleared ? { 'challenge.state': 'cleared', 'challenge.clearedAt': new Date() } : {});
+        const touched = await this.sparkTouch(domainId, { cardAnswers: 1, challengesCleared: result.cleared ? 1 : 0 });
+        this.response.body = {
+            reply: result.reply,
+            cleared: result.cleared,
+            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
+            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+        };
+    }
+
+    async postChallengeDecline({ domainId }) {
+        this.checkTutorAllowed();
+        const thread = await SelfLearningModel.ensureThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+        if (thread.challenge?.state === 'cleared') {
+            this.response.body = { ok: 1, state: 'cleared' };
+            return;
+        }
+        await SelfLearningModel.setThreadFields(thread._id, { challenge: { ...(thread.challenge || {}), state: 'declined' } });
+        this.response.body = { ok: 1, state: 'declined' };
     }
 
     async postReset({ domainId }) {

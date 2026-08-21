@@ -4,10 +4,20 @@
 {% block content %}
   <div class="row">
     <div class="medium-9 columns">
+      <div class="ptabs">
+        {%- for k, label in [['programming', 'Programming'], ['objective', 'Objective'], ['subjective', 'Subjective']] -%}
+        <a class="ptabs__tab ptabs__tab--{{ k[0] }}{% if kind == k %} ptabs__tab--on{% endif %}"
+           href="{{ url('problem_main') }}?{{ utils.buildQueryString({kind: k, q: qs, sort: '' if sort == 'default' else sort}) }}">
+          <span class="ptabs__label">{{ _(label) }}</span>
+          {%- if kindCounts -%}<span class="ptabs__count">{{ kindCounts[k] }}</span>{%- endif -%}
+        </a>
+        {%- endfor -%}
+      </div>
       <div class="section display-mode">
         <div class="section__body no-padding">
           <form method="get" id="searchForm" action="{{ url('problem_main') }}">
             <div class="search">
+              {% if kind %}<input type="hidden" name="kind" value="{{ kind }}">{% endif %}
               <input name="q" type="text" value="{{ qs }}" placeholder="{{ _('Search') }}">
               {% include "partials/problem_stat.html" %}
               <select name="sort" class="search-sort">

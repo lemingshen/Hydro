@@ -1,5 +1,11 @@
 {% extends "layout/basic.html" %}
 {% block content %}
+<style>
+  .sle-tip { display: flex; gap: 10px; align-items: flex-start; border: 1px solid #e2e9f4; border-radius: 12px; background: linear-gradient(135deg, #f4f8ff, #f6f2ff); padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: #4a5b78; }
+  .sle-tip__icon { font-size: 20px; line-height: 1.2; }
+  .sle-form input[name="pids"] { font-family: var(--code-font-family); }
+  .theme--dark .sle-tip { background: linear-gradient(135deg, #1b2431, #241f33); border-color: #333a41; color: #aab4be; }
+</style>
 <div class="row">
   <div class="medium-9 columns">
     <div class="section">
@@ -7,7 +13,7 @@
         <h1 class="section__title">{% if sdoc %}{{ _('Edit Self-Learning Session') }}{% else %}{{ _('Create Self-Learning Session') }}{% endif %}</h1>
       </div>
       <div class="section__body">
-        <form method="post">
+        <form method="post" class="sle-form">
           {{ form.form_text({
               columns:12,
               label:'Title',
@@ -47,8 +53,11 @@
   </div>
   <div class="medium-3 columns">
     <div class="section side">
-      <div class="section__body typo">
-        <p>{{ _('Students will solve the selected problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them — without giving away the answer.') }}</p>
+      <div class="section__body">
+        <div class="sle-tip">
+          <span class="sle-tip__icon">💡</span>
+          <span>{{ _('Students will solve the selected problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them — without giving away the answer.') }}</span>
+        </div>
       </div>
     </div>
   </div>

@@ -69,6 +69,8 @@ const STYLE = [
   '.pta-dark .bau__foot { border-top-color: #2f3941; }',
   '.pta-dark .bau__names { color: #b9c2cb; }',
   '.pta-dark .bau__pw { background: #3a3320; border-color: #5c5230; color: #e6d9a0; }',
+  '.pta-dark .bau__badge { background: #1e3524; color: #69db7c; }',
+  '.pta-dark .bau__badge.off { background: #2a3036; color: #8b97a3; }',
 ].join('\n');
 
 function esc(text) {

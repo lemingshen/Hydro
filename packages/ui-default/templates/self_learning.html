@@ -1,5 +1,36 @@
 {% extends "layout/basic.html" %}
 {% block content %}
+<style>
+  .sll-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .sll-card { display: flex; flex-direction: column; gap: 8px; position: relative; border: 1px solid #e7ebf3; border-radius: 14px; background: #fff; padding: 14px 16px 12px; text-decoration: none; color: inherit; box-shadow: 0 1px 3px rgba(15,23,42,.05); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; overflow: hidden; }
+  .sll-card::before { content: ''; position: absolute; left: 0; top: 0; right: 0; height: 4px; background: linear-gradient(90deg, #4dabf7, #845ef7); opacity: .9; }
+  .sll-card:hover { transform: translateY(-3px); border-color: #bcd6f5; box-shadow: 0 14px 30px -12px rgba(28,126,214,.35); }
+  .sll-card__top { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+  .sll-card__emblem { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 11px; font-size: 19px; background: linear-gradient(135deg, #e7f2fd, #efe9fd); box-shadow: inset 0 0 0 1px rgba(76,110,245,.14); }
+  .sll-card__count { font-size: 11.5px; font-weight: bold; color: #4c6ef5; background: #eef2ff; border: 1px solid #dde4fb; border-radius: 999px; padding: 2px 10px; }
+  .sll-card__title { font-size: 14.5px; font-weight: bold; color: #2b3a55; line-height: 1.35; word-break: break-word; }
+  .sll-card:hover .sll-card__title { color: #1c7ed6; }
+  .sll-card__meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+  .sll-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: #7d8aa3; background: #f4f6fa; border: 1px solid #e9edf4; border-radius: 999px; padding: 2px 9px; }
+  .sll-chip .time { color: inherit; }
+  .sll-card__go { position: absolute; right: 12px; bottom: 10px; font-size: 15px; color: #b9c3d6; transition: transform .16s ease, color .16s ease; }
+  .sll-card:hover .sll-card__go { color: #1c7ed6; transform: translateX(3px); }
+  .sll-hero { position: relative; border-radius: 14px; overflow: hidden; background: linear-gradient(135deg, #1f6fd0 0%, #6b4ce0 100%); color: #fff; padding: 18px 16px 16px; box-shadow: 0 14px 34px -14px rgba(76,110,245,.6); }
+  .sll-hero__icon { font-size: 26px; margin-bottom: 8px; }
+  .sll-hero p { color: rgba(255,255,255,.94); font-size: 13px; line-height: 1.6; margin: 0 0 14px; }
+  .sll-hero .button { box-shadow: 0 8px 18px -8px rgba(0,0,0,.35); }
+  .sll-hero .button.primary { background: rgba(255,255,255,.94); color: #3d4fc4; border: none; }
+  .sll-hero .button.primary:hover { background: #fff; color: #3d4fc4; filter: none; transform: translateY(-1px); }
+  .theme--dark .sll-card { background: #23272c; border-color: #333a41; box-shadow: none; }
+  .theme--dark .sll-card:hover { border-color: #3a5a80; box-shadow: 0 14px 30px -12px rgba(0,0,0,.6); }
+  .theme--dark .sll-card__emblem { background: linear-gradient(135deg, #1e2b3c, #281f3e); box-shadow: inset 0 0 0 1px rgba(120,150,255,.18); }
+  .theme--dark .sll-card__count { background: #262d3d; border-color: #34405c; color: #91a7ff; }
+  .theme--dark .sll-card__title { color: #dbe2ea; }
+  .theme--dark .sll-card:hover .sll-card__title { color: #4dabf7; }
+  .theme--dark .sll-chip { background: #262b31; border-color: #333a41; color: #9aa7b8; }
+  .theme--dark .sll-card__go { color: #55606e; }
+  .theme--dark .sll-card:hover .sll-card__go { color: #4dabf7; }
+</style>
 <div class="row">
   <div class="medium-9 columns">
     <div class="section">
@@ -10,48 +41,33 @@
         {% if not sdocs.length %}
           {{ nothing.render('There are no self-learning sessions yet.') }}
         {% else %}
-        <table class="data-table">
-          <colgroup>
-            <col class="col--title">
-            <col class="col--problems">
-            <col class="col--owner">
-            <col class="col--time">
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="col--title">{{ _('Title') }}</th>
-              <th class="col--problems">{{ _('Problems') }}</th>
-              <th class="col--owner">{{ _('Owner') }}</th>
-              <th class="col--time">{{ _('Created') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {%- for sdoc in sdocs -%}
-            <tr>
-              <td class="col--title">
-                <a href="{{ url('self_learning_detail', ssid=sdoc.docId) }}">{{ sdoc.title }}</a>
-              </td>
-              <td class="col--problems">{{ sdoc.pids|length }}</td>
-              <td class="col--owner">
-                <a href="{{ url('user_detail', uid=sdoc.owner) }}">{{ udict[sdoc.owner].uname }}</a>
-              </td>
-              <td class="col--time">{{ datetimeSpan(sdoc._id)|safe }}</td>
-            </tr>
-            {%- endfor -%}
-          </tbody>
-        </table>
+        <div class="sll-grid">
+          {%- for sdoc in sdocs -%}
+          <a class="sll-card" href="{{ url('self_learning_detail', ssid=sdoc.docId) }}">
+            <div class="sll-card__top">
+              <span class="sll-card__emblem">🎓</span>
+              <span class="sll-card__count">{{ sdoc.pids|length }} {{ _('Problems') }}</span>
+            </div>
+            <div class="sll-card__title">{{ sdoc.title }}</div>
+            <div class="sll-card__meta">
+              <span class="sll-chip" title="{{ _('Owner') }}">👤 {{ udict[sdoc.owner].uname }}</span>
+              <span class="sll-chip" title="{{ _('Created') }}">🕒 {{ datetimeSpan(sdoc._id)|safe }}</span>
+            </div>
+            <span class="sll-card__go">→</span>
+          </a>
+          {%- endfor -%}
+        </div>
         {% endif %}
       </div>
     </div>
   </div>
   <div class="medium-3 columns">
-    <div class="section side">
-      <div class="section__body">
-        <p>{{ _('Practice problems at your own pace. When a submission is not accepted, an AI Socratic tutor will guide you to find and fix the mistake yourself.') }}</p>
-        {% if canCreate %}
-        <a href="{{ url('self_learning_create') }}" class="expanded primary button">{{ _('Create Self-Learning Session') }}</a>
-        {% endif %}
-      </div>
+    <div class="sll-hero">
+      <div class="sll-hero__icon">🤖✨</div>
+      <p>{{ _('Practice problems at your own pace. When a submission is not accepted, an AI Socratic tutor will guide you to find and fix the mistake yourself.') }}</p>
+      {% if canCreate %}
+      <a href="{{ url('self_learning_create') }}" class="expanded rounded primary button">{{ _('Create Self-Learning Session') }}</a>
+      {% endif %}
     </div>
   </div>
 </div>

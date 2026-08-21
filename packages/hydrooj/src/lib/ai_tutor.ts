@@ -947,9 +947,105 @@ export async function runAnnotationDialogue(c: TutorTurnContext, input: Annotati
     }
 }
 
+/* ------------------------- Boss Challenge engine -------------------------- */
+/*
+ * An OPTIONAL post-acceptance stretch goal ("optimal challenge" in flow
+ * terms): one self-contained upgrade of the problem the student just solved,
+ * refereed conversationally. There is no judge data for the variant, so the
+ * referee evaluates the student's reasoning or revised code — strictly, but
+ * warmly — and emits a machine marker when (and only when) it is cleared.
+ */
+
+export const CHALLENGE_CLEARED_MARK = '[[CHALLENGE_CLEARED]]';
+
+const CHALLENGE_GEN_PROMPT = `You are a beloved competitive-programming coach designing ONE optional "Boss Challenge" for a student who has JUST gotten a problem Accepted. Reply in English only.
+
+Design rules:
+- Invent exactly ONE self-contained upgrade of THIS problem. Pick ONE lever: tighten constraints so their current approach breaks (e.g. n up to 10^9 — needs better complexity), remove a convenience (single pass / O(1) extra memory / no extra array), or add ONE well-defined twist to the input.
+- For a QUIZ (objective) problem instead: invent ONE fresh, harder question that tests the SAME concept from a new angle (never reuse or lightly reword the original questions).
+- It must be solvable by evolving what the student already did, in roughly 5-15 minutes of thinking, and checkable by reasoning alone (no new test data exists).
+- State a concrete, verifiable success criterion. NEVER include the solution, the key trick, or hints.
+- "hook": one or two vivid, TRUE sentences connecting the concept to a concrete real-world system, discovery, or story — this is the bait that makes the challenge irresistible. No invented facts.
+
+Output STRICT JSON only, no markdown fences:
+{"title": "<= 6 punchy words", "hook": "1-2 sentences", "challenge": "<= 80 words, second person, ends with the success criterion"}`;
+
+export interface BossChallenge { title: string; hook: string; challenge: string }
+
+export async function runChallengeGeneration(c: TutorTurnContext): Promise<BossChallenge> {
+    const kind: ProblemKind = c.problemKind || 'programming';
+    const user = [
+        `Problem kind: ${kind}`,
+        `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
+        '--- Problem statement ---',
+        truncate(extractStatement(c.pdoc, c.uiLang), 4000, '\n...[truncated]'),
+        kind === 'programming' && c.rdoc?.code
+            ? `--- The student's ACCEPTED code ---\n${truncate(String(c.rdoc.code), 4000, '\n...[truncated]')}`
+            : '',
+        `The student needed ${c.attemptCount || 1} attempt(s).`,
+        'Design the Boss Challenge now. JSON only.',
+    ].filter((x) => x).join('\n');
+    const raw = await callProvider(CHALLENGE_GEN_PROMPT, [{ role: 'user', content: user }]);
+    const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
+    try {
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start < 0 || end <= start) throw new Error('no JSON object');
+        const parsed: any = JSON.parse(cleaned.slice(start, end + 1));
+        const title = truncate(String(parsed.title || 'Boss Challenge').trim(), 60, '...') || 'Boss Challenge';
+        const hook = truncate(String(parsed.hook || '').replace(/\s+/g, ' ').trim(), 400, '...');
+        const challenge = truncate(String(parsed.challenge || '').replace(/\s+/g, ' ').trim(), 700, '...');
+        if (!challenge) throw new Error('empty challenge');
+        return { title, hook, challenge };
+    } catch (e) {
+        logger.warn('challenge generation output not parseable: %s | raw: %s', e.message, truncate(raw, 200, '...'));
+        return {
+            title: 'Boss Challenge',
+            hook: 'Real systems rarely get friendly inputs — the engineers who thrive are the ones who ask "what if this were a thousand times bigger?"',
+            challenge: kind === 'programming'
+                ? 'Suppose the input were a thousand times larger than the stated limits. Explain precisely why your current solution would or would not survive, and describe (in words) the smallest change that would make it survive. Success: a correct complexity argument for both versions.'
+                : 'Invent one tricky edge case this quiz did NOT cover for the same concept, state the correct answer for it, and explain in two sentences why. Success: a correct case with a correct justification.',
+        };
+    }
+}
+
+const CHALLENGE_REFEREE_PROMPT = `You are the Boss Challenge referee — a warm but rigorous coach. The student accepted an optional challenge after solving the base problem, and now explains an approach or shows revised code in chat. Reply in English only.
+
+Rules:
+- Evaluate their latest message STRICTLY against the stated challenge and its success criterion. Solve the challenge privately yourself first; never reveal your solution.
+- If they are not there yet: name concretely what is missing or wrong, give AT MOST ONE targeted nudge (never the key idea itself), and encourage another try. <= 90 words.
+- If (and ONLY if) their reasoning or code genuinely satisfies the success criterion: congratulate them specifically (name what was clever), then END your reply with the exact token ${CHALLENGE_CLEARED_MARK} — nothing after it. Never emit the token otherwise, and never mention the token.
+- If they clearly want to stop, respect it gracefully and do not emit the token.
+- Plain text only. No markdown code blocks. Do not start a new topic.`;
+
+export async function runChallengeTurn(
+    c: TutorTurnContext,
+    input: { challenge: string, history: { role: string, content: string }[], answer: string },
+): Promise<{ reply: string, cleared: boolean }> {
+    const transcript = (input.history || []).slice(-12)
+        .map((h) => `${h.role === 'student' ? 'Student' : 'Referee'}: ${truncate(String(h.content || ''), 600, '...')}`)
+        .join('\n');
+    const user = [
+        `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
+        c.rdoc?.code ? `--- The student's ORIGINAL accepted code ---\n${truncate(String(c.rdoc.code), 3500, '\n...[truncated]')}` : '',
+        c.liveCode ? `--- The student's CURRENT editor code ---\n${truncate(String(c.liveCode), 3500, '\n...[truncated]')}` : '',
+        '--- THE BOSS CHALLENGE ---',
+        input.challenge,
+        transcript ? `--- Dialogue so far ---\n${transcript}` : '',
+        '--- Student message to evaluate ---',
+        truncate(String(input.answer || ''), 1500, '...'),
+        'Referee reply now.',
+    ].filter((x) => x).join('\n');
+    const raw = await callProvider(CHALLENGE_REFEREE_PROMPT, [{ role: 'user', content: user }]);
+    const cleared = raw.includes(CHALLENGE_CLEARED_MARK);
+    const reply = truncate(raw.split(CHALLENGE_CLEARED_MARK).join(' ').replace(/```[\s\S]*?```/g, ' ').replace(/[ \t]+/g, ' ').trim(), 700, '...')
+        || 'Can you walk me through your reasoning in a bit more detail?';
+    return { reply, cleared };
+}
+
 export const OPENING_DIRECTIVE = '[SYSTEM DIRECTIVE] Compose your OPENING message to the student now: one short empathetic sentence acknowledging the verdict, then begin stage S1/S2 with a single well-aimed question. For an objective quiz, name which question you are starting with (e.g. "I suggest we start with Q2") before that question. Do not summarize the whole framework. Do not reveal your diagnosis.';
-export const ACCEPTED_DIRECTIVE = '[SYSTEM DIRECTIVE] The student\'s latest submission was ACCEPTED. Congratulate them genuinely and briefly (reference something real that improved). Ask AT MOST ONE short, clearly optional question — the one-sentence root cause of the earlier failure — and make clear they are done and free to stop here. Do not chain further questions unless they explicitly ask to continue; if they do, follow section 4-C under its hard cap.';
-export const ACCEPTED_OPENING_DIRECTIVE = '[SYSTEM DIRECTIVE] The latest submission is ACCEPTED and this is your first message in this conversation. Congratulate the student specifically (reference something real in their code) and keep it SHORT. Pose AT MOST ONE light, clearly optional question from section 4-C — or none at all — and tell them they can simply stop here. Never open with multiple questions; the victory lap is optional and runs under the section 4-C hard cap.';
+export const ACCEPTED_DIRECTIVE = '[SYSTEM DIRECTIVE] The student\'s latest submission was ACCEPTED. Structure your reply as: (1) genuine, brief congratulation referencing something real that improved; (2) a "💡 Spark:" mini-paragraph — at most TWO vivid, TRUE sentences connecting the exact concept they just used to one concrete real-world system, discovery, or story (make the course feel alive; no fluff, no invented facts); (3) at most ONE short, clearly optional question — the one-sentence root cause of the earlier failure — and make clear they are done and free to stop here; (4) one closing sentence noting that the optional 🔥 Boss Challenge button is there if they feel brave. The Spark teaser is rhetorical: never demand an answer to it. Do not chain further questions unless they explicitly ask to continue; if they do, follow section 4-C under its hard cap.';
+export const ACCEPTED_OPENING_DIRECTIVE = '[SYSTEM DIRECTIVE] The latest submission is ACCEPTED and this is your first message in this conversation. Congratulate the student specifically (reference something real in their code) and keep it SHORT. Then add a "💡 Spark:" mini-paragraph — at most TWO vivid, TRUE sentences tying the exact concept they just used to one concrete real-world system, discovery, or story that makes the course feel alive (no invented facts; the teaser is rhetorical, no answer expected). Pose AT MOST ONE light, clearly optional question from section 4-C — or none at all — tell them they can simply stop here, and close with one sentence that the optional 🔥 Boss Challenge button awaits if they feel brave. Never open with multiple questions; the victory lap is optional and runs under the section 4-C hard cap.';
 export const RESUBMIT_DIRECTIVE = '[SYSTEM DIRECTIVE] The student submitted a NEW attempt (see the latest [NEW SUBMISSION] block and updated context). Privately re-diagnose. If they made progress, acknowledge exactly what improved. Then continue tutoring with one aimed question from the appropriate stage.';
 
 /* ---------------------- post-acceptance AI Suggestions ---------------------- */

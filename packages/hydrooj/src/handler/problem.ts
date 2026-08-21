@@ -88,6 +88,31 @@ export interface QueryContext {
     hint: string;
 }
 
+/**
+ * PTA UI: the problem set is presented as three tabs. Classification
+ * mirrors resolveKinds() in handler/self_learning.ts — the display pid's
+ * first letter is authoritative (P=programming, O=objective, S=subjective),
+ * with the problem config as the fallback for legacy problems. `config` is
+ * stored in the database as the raw config.yaml STRING (it is only parsed
+ * into an object at read time), hence the regex matching here.
+ */
+const KIND_OBJECTIVE_RE = /^\s*type:\s*['"]?objective/im;
+const PROBLEM_KIND_FILTERS: Record<string, any> = {
+    subjective: { pid: /^s/i },
+    objective: {
+        $or: [
+            { pid: /^o/i },
+            { pid: { $not: /^[sp]/i }, config: KIND_OBJECTIVE_RE },
+        ],
+    },
+    programming: {
+        $and: [
+            { pid: { $not: /^[so]/i } },
+            { $or: [{ pid: /^p/i }, { config: { $not: KIND_OBJECTIVE_RE } }] },
+        ],
+    },
+};
+
 export class ProblemMainHandler extends Handler {
     queryContext: QueryContext = {
         query: {},
@@ -107,7 +132,8 @@ export class ProblemMainHandler extends Handler {
     @param('pjax', Types.Boolean)
     @param('quick', Types.Boolean)
     @param('sort', Types.Range(['default', 'recent']), true)
-    async get(domainId: string, page = 1, q = '', limit: number, pjax = false, quick = false, sortStrategy = 'default') {
+    @param('kind', Types.Range(['programming', 'objective', 'subjective']), true)
+    async get(domainId: string, page = 1, q = '', limit: number, pjax = false, quick = false, sortStrategy = 'default', kind?: string) {
         this.response.template = 'problem_main.html';
         if (!limit || limit > this.ctx.setting.get('pagination.problem') || page > 1) limit = this.ctx.setting.get('pagination.problem');
         this.queryContext.query = buildQuery(this.user);
@@ -146,6 +172,28 @@ export class ProblemMainHandler extends Handler {
             this.queryContext.hint = 'basic';
             this.queryContext.sort = result.hits;
         }
+        // PTA UI tabs: the plain HTML view always lands on one of the three
+        // tabs (Programming by default). pjax refreshes carry the active tab
+        // in their query string themselves; quick (autocomplete) and other
+        // programmatic callers stay unfiltered unless they ask for a kind.
+        if (!kind && !pjax && !quick) kind = 'programming';
+        const kindFilter = kind ? PROBLEM_KIND_FILTERS[kind] : null;
+        let kindCounts: Record<string, number> | null = null;
+        if (kindFilter && !quick && !pjax && !this.queryContext.fail && !text) {
+            // Per-tab totals from the SAME base query (visibility, category,
+            // difficulty, namespace) so the badges always agree with the
+            // list. Text search narrows to a paginated hit window, so counts
+            // are hidden there instead of shown wrong.
+            const baseAnd = query.$and ? [...query.$and] : [];
+            const countOf = (f: any) => problem.count(domainId, { ...query, $and: [...baseAnd, f] });
+            const [pc, oc, sc] = await Promise.all([
+                countOf(PROBLEM_KIND_FILTERS.programming),
+                countOf(PROBLEM_KIND_FILTERS.objective),
+                countOf(PROBLEM_KIND_FILTERS.subjective),
+            ]);
+            kindCounts = { programming: pc, objective: oc, subjective: sc };
+        }
+        if (kindFilter) query.$and = [...(query.$and || []), kindFilter];
         const sort = this.queryContext.sort;
         await this.ctx.parallel('problem/list', query, this, sort);
         const sortKey = ({
@@ -176,7 +224,7 @@ export class ProblemMainHandler extends Handler {
                 title: this.renderTitle(this.translate('problem_main')),
                 fragments: (await Promise.all([
                     this.renderHTML('partials/problem_list.html', {
-                        page, ppcount, pcount, pdocs, psdict, qs: q, sort: sortStrategy,
+                        page, ppcount, pcount, pdocs, psdict, qs: q, sort: sortStrategy, kind,
                     }),
                     this.renderHTML('partials/problem_stat.html', { pcount, pcountRelation: this.queryContext.pcountRelation }),
                     this.renderHTML('partials/problem_lucky.html', { qs: q }),
@@ -192,6 +240,8 @@ export class ProblemMainHandler extends Handler {
                 psdict,
                 qs: q,
                 sort: sortStrategy,
+                kind,
+                kindCounts,
             };
         }
     }

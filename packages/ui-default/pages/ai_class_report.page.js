@@ -58,6 +58,7 @@ const STYLE = [
   '.pta-dark .acr { background: #23272c; color: #d5dade; }',
   '.pta-dark .acr__stat { background: #262b31; border-color: #333a41; color: #cfd6dd; }',
   '.pta-dark .acr__stat b { color: #91a7ff; }',
+  '.pta-dark .acr__spinner { border-color: #3a4658; border-top-color: #91a7ff; }',
   '.pta-dark .acr__empty { color: #98a2ac; }',
   '.pta-dark .acr__report h1, .pta-dark .acr__report h2, .pta-dark .acr__report h3 { color: #b197fc; }',
   '.pta-dark .acr__report h2 { border-bottom-color: #3a3350; }',

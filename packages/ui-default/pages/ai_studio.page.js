@@ -106,6 +106,11 @@ export const AIS_STYLE = [
   '.pta-dark .ais__progress { background: rgba(151, 117, 250, .14); }',
   '.pta-dark .ais__msg--live { background: linear-gradient(90deg, #a99ed0 35%, #d0bfff 50%, #a99ed0 65%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; }',
   '.pta-dark .ais__row-hover:hover, .pta-dark .ais tbody tr:hover { background: rgba(151, 117, 250, .09); }',
+  '.pta-dark .ais__badge--idle { background: #2a3036; color: #9aa4ad; }',
+  '.pta-dark .ais__badge--running { background: #16283a; color: #4dabf7; }',
+  '.pta-dark .ais__badge--passed { background: #1e3524; color: #69db7c; }',
+  '.pta-dark .ais__badge--failed { background: #3a1f2c; color: #faa2c1; }',
+  '.pta-dark .ais__badge--published { background: #2c2440; color: #d0bdfb; }',
 ].join('\n');
 
 export function ensureAisStyle() {

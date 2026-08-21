@@ -1,0 +1,486 @@
+/**
+ * PTA UI — site-wide visual refresh.
+ *
+ * Auto-bundled: theme/default.js loads every *.page.styl through
+ * require.context AFTER the core misc/*.styl and theme/dark.styl imports,
+ * so equal-specificity rules here win by source order — no !important
+ * needed except where core already uses heavy selectors.
+ *
+ * Design language shared with the custom PTA components (rail, result
+ * modal, AI tutor, AI Studio): 12-16px radii, layered soft shadows,
+ * blue #1c7ed6 -> violet #845ef7 accents, crimson #c2255c for the tutor,
+ * green #2f9e44 success, red #e03131 fail. Dark mode keys off the
+ * server-rendered html.theme--dark class.
+ *
+ * Only visual properties are touched (colors, radii, shadows, focus
+ * rings, transitions). Nothing here changes box metrics of elements the
+ * navigation JS measures.
+ */
+
+:root {
+  --pta-primary: #1c7ed6;
+  --pta-primary-2: #4dabf7;
+  --pta-violet: #7048e8;
+  --pta-violet-2: #9775fa;
+  --pta-crimson: #c2255c;
+  --pta-success: #2f9e44;
+  --pta-fail: #e03131;
+  --pta-warn: #e8590c;
+  --pta-ink: #2b3a55;
+  --pta-ink-soft: #5b6b85;
+  --pta-line: rgba(15, 23, 42, 0.08);
+  --pta-line-soft: rgba(15, 23, 42, 0.05);
+  --pta-card: #ffffff;
+  --pta-card-2: #f7f9fc;
+  --pta-radius: 14px;
+  --pta-radius-sm: 10px;
+  --pta-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 12px 32px -16px rgba(15, 23, 42, 0.18);
+  --pta-shadow-hover: 0 2px 4px rgba(15, 23, 42, 0.06), 0 18px 40px -16px rgba(15, 23, 42, 0.24);
+  --pta-ring: 0 0 0 3px rgba(28, 126, 214, 0.16);
+  --pta-grad: linear-gradient(120deg, #4dabf7, #845ef7);
+  --pta-grad-btn: linear-gradient(135deg, #339af0, #1c7ed6);
+}
+
+.theme--dark {
+  --pta-ink: #dbe2ea;
+  --pta-ink-soft: #9aa7b8;
+  --pta-line: rgba(255, 255, 255, 0.09);
+  --pta-line-soft: rgba(255, 255, 255, 0.06);
+  --pta-card: #23272c;
+  --pta-card-2: #1d2126;
+  --pta-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 34px -16px rgba(0, 0, 0, 0.6);
+  --pta-shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.45), 0 20px 44px -16px rgba(0, 0, 0, 0.7);
+  --pta-ring: 0 0 0 3px rgba(77, 171, 247, 0.22);
+}
+
+/* ------------------------------- page canvas ------------------------------- */
+
+body {
+  background-color: #eef1f6;
+  background-image: linear-gradient(180deg, #f5f7fb 0%, #eef1f6 320px);
+  background-repeat: no-repeat;
+}
+
+.theme--dark body {
+  background-color: #101318;
+  background-image: linear-gradient(180deg, #14181e 0%, #101318 320px);
+}
+
+/* ------------------------------ cards / sections --------------------------- */
+
+.section {
+  border-radius: var(--pta-radius);
+  border: 1px solid var(--pta-line-soft);
+  box-shadow: var(--pta-shadow);
+  transition: box-shadow 0.25s ease;
+}
+
+.theme--dark .section {
+  background-color: var(--pta-card);
+  border-color: var(--pta-line);
+  box-shadow: var(--pta-shadow);
+}
+
+/* Keep radii visible on flush (.no-padding) tables at the card edges. */
+.section .section__body.no-padding .data-table tr:last-child td:first-child { border-bottom-left-radius: var(--pta-radius); }
+.section .section__body.no-padding .data-table tr:last-child td:last-child { border-bottom-right-radius: var(--pta-radius); }
+
+.section__title {
+  color: var(--pta-ink);
+  letter-spacing: 0.01em;
+}
+
+.section__title::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 0.95em;
+  border-radius: 4px;
+  background: var(--pta-grad);
+  margin-right: 10px;
+  vertical-align: -0.12em;
+}
+
+/* --------------------------------- buttons --------------------------------- */
+
+.button {
+  border-radius: var(--pta-radius-sm);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.rounded.button { border-radius: 999px; }
+
+.primary.button {
+  border-color: transparent;
+  background: var(--pta-grad-btn);
+  color: #fff;
+  box-shadow: 0 6px 16px -6px rgba(28, 126, 214, 0.55);
+}
+
+.primary.button:hover,
+.primary.button:focus {
+  background: var(--pta-grad-btn);
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px -8px rgba(28, 126, 214, 0.6);
+  color: #fff;
+}
+
+.primary.button:active {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+
+.button[disabled],
+.button.disabled {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+  opacity: 0.6;
+}
+
+.theme--dark .button:not(.primary):not(.text) {
+  background-color: #2a3036;
+  border-color: #3a424b;
+  color: #d5dade;
+}
+
+.theme--dark .button:not(.primary):not(.text):hover {
+  background-color: #323942;
+  border-color: #4a545f;
+}
+
+/* ------------------------------ inputs / selects --------------------------- */
+
+.textbox,
+textarea.textbox,
+select.select {
+  border-radius: 9px;
+  border-color: #d7dde8;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.textbox:focus,
+textarea.textbox:focus,
+select.select:focus {
+  border-color: var(--pta-primary);
+  box-shadow: var(--pta-ring);
+  outline: none;
+}
+
+.theme--dark .textbox,
+.theme--dark textarea.textbox,
+.theme--dark select.select {
+  background-color: #1d2126;
+  border-color: #363d45;
+  color: #d5dade;
+}
+
+.theme--dark .textbox:focus,
+.theme--dark textarea.textbox:focus,
+.theme--dark select.select:focus {
+  border-color: var(--pta-primary-2);
+}
+
+/* --------------------------------- tables ---------------------------------- */
+
+.data-table thead th {
+  background: var(--pta-card-2);
+  color: #7d8aa3;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid #e6ebf4;
+}
+
+.data-table tbody tr { transition: background-color 0.12s ease; }
+.data-table tbody tr:nth-child(even) { background-color: rgba(247, 249, 252, 0.6); }
+.data-table tbody tr:hover { background-color: #f2f7ff; }
+.data-table tbody td { border-bottom: 1px solid #eef1f6; }
+
+.theme--dark .data-table thead th {
+  background: #262b31;
+  color: #8b97a3;
+  border-bottom-color: #333a41;
+}
+.theme--dark .data-table tbody tr:nth-child(even) { background-color: rgba(255, 255, 255, 0.02); }
+.theme--dark .data-table tbody tr:hover { background-color: #2a313a; }
+.theme--dark .data-table tbody td { border-bottom-color: #2c3238; }
+
+/* ----------------------------------- tags ---------------------------------- */
+
+.tag {
+  border-radius: 999px;
+  background: #f1f5fb;
+  border: 1px solid #e2e9f4;
+  color: #4a5b78;
+}
+
+.theme--dark .tag {
+  background: #262b31;
+  border-color: #333a41;
+  color: #aab4be;
+}
+
+/* ----------------------------------- notes --------------------------------- */
+
+blockquote.note {
+  border-left: 4px solid var(--pta-primary-2);
+  background: #f3f8ff;
+  border-radius: 0 var(--pta-radius-sm) var(--pta-radius-sm) 0;
+}
+
+.theme--dark blockquote.note {
+  background: #17222e;
+  border-left-color: #2b74b8;
+  color: #c3ccd6;
+}
+
+/* ------------------------------------ nav ---------------------------------- */
+
+.nav {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(10px) saturate(1.35);
+  -webkit-backdrop-filter: blur(10px) saturate(1.35);
+  /* hairline via shadow: a border would grow the fixed 45px nav past its
+     placeholder and overlap the first content pixel row */
+  box-shadow: 0 1px 0 var(--pta-line-soft);
+}
+
+.theme--dark .nav {
+  background: rgba(22, 26, 31, 0.86);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.nav .nav__item {
+  transition: background-color 0.15s ease, color 0.15s ease;
+  background-image: linear-gradient(90deg, #4dabf7, #845ef7);
+  background-repeat: no-repeat;
+  background-size: 0 3px;
+  background-position: bottom center;
+}
+
+.nav .nav__item:hover {
+  background-color: rgba(28, 126, 214, 0.07);
+  background-size: 60% 2px;
+  border-color: transparent;
+}
+
+.nav .nav__item.nav--active {
+  border-color: transparent;
+  background-size: 100% 3px;
+  font-weight: bold;
+}
+
+.nav .nav__item.nav--active:before { box-shadow: none; }
+
+.theme--dark .nav .nav__item { color: #d5dade; }
+.theme--dark .nav .nav__item:hover { background-color: rgba(77, 171, 247, 0.1); }
+
+.nav--shadow { box-shadow: 0 2px 14px rgba(15, 23, 42, 0.1); }
+.theme--dark .nav--shadow { box-shadow: 0 2px 14px rgba(0, 0, 0, 0.5); }
+
+/* ---------------------------------- footer --------------------------------- */
+
+.footer { border-top: 1px solid var(--pta-line-soft); }
+.theme--dark .footer { border-top-color: var(--pta-line); }
+
+/* ------------------------------ dialogs / toasts ---------------------------- */
+
+.dialog.withBg .dialog__content {
+  border-radius: var(--pta-radius);
+  border-color: var(--pta-line);
+  box-shadow: 0 18px 60px -12px rgba(15, 23, 42, 0.35);
+}
+
+.notification {
+  border-radius: 12px;
+  background: rgba(23, 30, 41, 0.92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.5);
+}
+
+/* ------------------------------- scratchpad IDE ----------------------------- */
+
+.scratchpad__toolbar__button.enabled {
+  border-radius: 8px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+/* -------------------------------- scrollbars -------------------------------- */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #c7cfdc;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: #aab6c8; background-clip: content-box; }
+
+.theme--dark ::-webkit-scrollbar-thumb { background-color: #3d454f; background-clip: content-box; }
+.theme--dark ::-webkit-scrollbar-thumb:hover { background-color: #4c5560; background-clip: content-box; }
+
+/* ------------------------------- focus visible ------------------------------ */
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid rgba(28, 126, 214, 0.65);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* --------------------- homepage "User Management" card ---------------------- */
+
+.pta-mgmt .section__body { position: relative; }
+
+.pta-mgmt__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--pta-grad);
+  color: #fff;
+  font-size: 20px;
+  box-shadow: 0 8px 18px -8px rgba(112, 72, 232, 0.6);
+  margin-bottom: 10px;
+}
+
+/* ------------------- dark-mode systemic fixes (audit round) ------------------ */
+
+/*
+ * Core theme/dark.styl paints EVERY .button:not(.codicon) dark gray with
+ * #aaa text — at (0,3,0)+ specificity that silently defeats the gradient
+ * primary buttons above on dark pages. Re-assert the primary look with
+ * matching-or-higher specificity for every state core touches (base,
+ * :visited, the :not(.disabled):hover/:focus background group, and the
+ * .typo-nested color group).
+ */
+.theme--dark .primary.button,
+.theme--dark .primary.button:visited,
+.theme--dark .typo .primary.button,
+.theme--dark .typo .primary.button:visited {
+  background: var(--pta-grad-btn);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 16px -6px rgba(28, 126, 214, 0.6);
+}
+
+.theme--dark .primary.button:not(.disabled):hover,
+.theme--dark .primary.button:not(.disabled):focus,
+.theme--dark .typo .primary.button:not(.disabled):hover,
+.theme--dark .typo .primary.button:not(.disabled):focus {
+  background: var(--pta-grad-btn);
+  border-color: transparent;
+  color: #fff;
+  filter: brightness(1.07);
+  box-shadow: 0 10px 22px -8px rgba(28, 126, 214, 0.65);
+}
+
+/*
+ * The GitHub-style code copy button ships light-only (!important) colors in
+ * components/highlighter/highlighter.page.styl; until now only the result
+ * modal and attempts panel carried dark overrides. Make the dark variant
+ * site-wide (problem statements, discussions, solutions, tutor bubbles),
+ * mirroring the values already used inside the modals.
+ */
+.theme--dark div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn,
+.theme--dark .toolbar-item a.code-copy-btn {
+  background: #2d333b !important;
+  border-color: #444c56;
+  color: #adbac7 !important;
+}
+
+.theme--dark div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn:hover,
+.theme--dark div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn:focus,
+.theme--dark .toolbar-item a.code-copy-btn:hover,
+.theme--dark .toolbar-item a.code-copy-btn:focus {
+  background: #39414a !important;
+  color: #cdd9e5 !important;
+  border-color: #545d68;
+}
+
+.theme--dark div.code-toolbar > .toolbar > .toolbar-item > a.code-copy-btn.code-copy-btn--ok,
+.theme--dark .toolbar-item a.code-copy-btn.code-copy-btn--ok {
+  background: #1e3524 !important;
+  border-color: #347d39;
+  color: #69db7c !important;
+}
+
+/* --------------------------- problem set kind tabs --------------------------- */
+
+.ptabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 6px;
+  background: var(--pta-card);
+  border: 1px solid var(--pta-line-soft);
+  border-radius: var(--pta-radius);
+  box-shadow: var(--pta-shadow);
+}
+
+.ptabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--pta-ink-soft);
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.ptabs__tab:hover {
+  color: var(--pta-ink);
+  background: var(--pta-card-2);
+  transform: translateY(-1px);
+}
+
+.ptabs__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 0 7px;
+  height: 19px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: bold;
+  background: rgba(15, 23, 42, 0.07);
+  color: inherit;
+}
+
+.theme--dark .ptabs__count { background: rgba(255, 255, 255, 0.1); }
+
+.ptabs__tab--on,
+.ptabs__tab--on:hover {
+  color: #fff;
+  transform: none;
+}
+
+.ptabs__tab--on .ptabs__count { background: rgba(255, 255, 255, 0.22); color: #fff; }
+
+.ptabs__tab--p.ptabs__tab--on { background: linear-gradient(120deg, #339af0, #1c7ed6); box-shadow: 0 6px 16px -6px rgba(28, 126, 214, 0.6); }
+.ptabs__tab--o.ptabs__tab--on { background: linear-gradient(120deg, #20c997, #0ca678); box-shadow: 0 6px 16px -6px rgba(12, 166, 120, 0.6); }
+.ptabs__tab--s.ptabs__tab--on { background: linear-gradient(120deg, #9775fa, #7048e8); box-shadow: 0 6px 16px -6px rgba(112, 72, 232, 0.6); }
+
+.ptabs__tab--p:not(.ptabs__tab--on):hover { color: #1c7ed6; }
+.ptabs__tab--o:not(.ptabs__tab--on):hover { color: #0ca678; }
+.ptabs__tab--s:not(.ptabs__tab--on):hover { color: #7048e8; }
+
+.theme--dark .ptabs__tab--p:not(.ptabs__tab--on):hover { color: #4dabf7; }
+.theme--dark .ptabs__tab--o:not(.ptabs__tab--on):hover { color: #3dd6a5; }
+.theme--dark .ptabs__tab--s:not(.ptabs__tab--on):hover { color: #b197fc; }
+
+@media (max-width: 600px) {
+  .ptabs { gap: 4px; padding: 5px; }
+  .ptabs__tab { padding: 7px 12px; font-size: 12.5px; flex: 1 1 auto; justify-content: center; }
+}
