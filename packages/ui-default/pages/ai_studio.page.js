@@ -125,6 +125,20 @@ const domainPrefix = () => (window.location.pathname.match(/^\/d\/[^/]+/) || [''
 export const fmtSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
 /** Upload one context file (slides/notes) to a draft; server extracts the text. */
+/**
+ * Hydro serializes errors as { message: <i18n template>, params: [...] } —
+ * for classes like BadRequestError the template is just the class name and
+ * the human sentence rides in params. Reassemble whichever shape arrives.
+ */
+function hydroErrorText(body, status) {
+  const err = (body && body.error) || {};
+  let msg = String(err.message || '');
+  const params = Array.isArray(err.params) ? err.params : [];
+  if (/\{\d+\}/.test(msg)) msg = msg.replace(/\{(\d+)\}/g, (_, i) => String(params[+i] ?? ''));
+  else if ((!msg || /^[A-Za-z]*Error$/.test(msg)) && params.length) msg = params.join(' ');
+  return msg || `Upload failed (HTTP ${status})`;
+}
+
 export async function uploadContextFile(url, file) {
   const fd = new FormData();
   fd.append('csrfToken', (window.UiContext || {}).csrfToken || '');
@@ -132,7 +146,7 @@ export async function uploadContextFile(url, file) {
   fd.append('file', file);
   const resp = await fetch(url, { method: 'POST', body: fd, headers: { Accept: 'application/json' } });
   const body = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((body.error && body.error.message) || `Upload failed (HTTP ${resp.status})`);
+  if (!resp.ok) throw new Error(hydroErrorText(body, resp.status));
   return body;
 }
 

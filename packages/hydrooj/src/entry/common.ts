@@ -65,15 +65,34 @@ export async function locale(pending: Record<string, string>, fail: string[]) {
             try {
                 const files = await fs.readdir(p);
                 for (const file of files) {
-                    const content = await fs.readFile(path.resolve(p, file), 'utf-8');
-                    const dict = yaml.load(content);
-                    if (typeof dict !== 'object' || !dict) throw new Error('Invalid locale file');
-                    app.i18n.load(file.split('.')[0], dict as any);
+                    // PTA fork: locale problems are contained per FILE and are
+                    // never fatal. Upstream pushed the addon into `fail` here,
+                    // which excluded its models, handlers and TEMPLATES from
+                    // every later boot stage — one duplicated yaml key turned
+                    // every page on the site into a raw JSON dump.
+                    try {
+                        const content = await fs.readFile(path.resolve(p, file), 'utf-8');
+                        let dict: any;
+                        try {
+                            dict = yaml.load(content);
+                        } catch (e) {
+                            // js-yaml's default schema hard-fails on duplicated
+                            // mapping keys; the JSON schema resolves them
+                            // last-wins, which is the right behavior for a
+                            // human-edited string table.
+                            dict = yaml.load(content, { json: true } as any);
+                            logger.warn('Locale %s/%s: %s (loaded leniently)', i, file, String((e as any)?.message || e).split('\n')[0]);
+                        }
+                        if (typeof dict !== 'object' || !dict) throw new Error('Invalid locale file');
+                        app.i18n.load(file.split('.')[0], dict as any);
+                    } catch (e) {
+                        app.injectUI('Notification', 'Locale load fail: {0}', { args: [`${i}/${file}`], type: 'warn' }, PRIV.PRIV_VIEW_SYSTEM_NOTIFICATION);
+                        logger.error('Locale file load fail: %s/%s', i, file);
+                        logger.error(e);
+                    }
                 }
                 logger.info('Locale init: %s', i);
             } catch (e) {
-                fail.push(i);
-                app.injectUI('Notification', 'Locale load fail: {0}', { args: [i], type: 'warn' }, PRIV.PRIV_VIEW_SYSTEM_NOTIFICATION);
                 logger.error('Locale Load Fail: %s', i);
                 logger.error(e);
             }

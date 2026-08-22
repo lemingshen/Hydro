@@ -29,6 +29,7 @@ import { promises as fsp } from 'fs';
 import { dump as yamlDump } from 'js-yaml';
 import { Collection, ObjectId } from 'mongodb';
 import { STATUS, STATUS_TEXTS } from '@hydrooj/common';
+import { inflateRawSync, inflateSync } from 'zlib';
 import { Context } from '../context';
 import { Logger } from '../logger';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../error';
@@ -463,16 +464,115 @@ function extractDocx(buf: Buffer): string {
     return [...xml.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map((m) => decodeXmlEntities(m[1])).join(' ');
 }
 
-async function extractPdf(buf: Buffer): Promise<string> {
-    let pdfParse: any = null;
-    try {
-        pdfParse = require('pdf-parse'); // eslint-disable-line
-    } catch (e) { /* optional dependency */ }
-    if (!pdfParse) {
-        throw new BadRequestError('PDF text extraction is not installed on this server. Export the slides as .pptx, or ask the administrator to run: yarn workspace hydrooj add pdf-parse');
+/** One PDF string literal -> text (escapes, octal codes, UTF-16BE BOM). */
+function pdfLiteralToText(lit: string): string {
+    let out = '';
+    for (let i = 0; i < lit.length; i++) {
+        const c = lit[i];
+        if (c !== '\\') { out += c; continue; }
+        const n = lit[++i];
+        if (n === undefined) break;
+        if (n === 'n') out += '\n';
+        else if (n === 'r' || n === 't' || n === 'b' || n === 'f') out += ' ';
+        else if (n >= '0' && n <= '7') {
+            let oct = n;
+            while (oct.length < 3 && lit[i + 1] >= '0' && lit[i + 1] <= '7') oct += lit[++i];
+            out += String.fromCharCode(parseInt(oct, 8) & 0xff);
+        } else out += n; // \( \) \\ and folded newlines
     }
-    const res = await pdfParse(buf);
-    return String(res?.text || '');
+    if (out.length >= 2 && out.charCodeAt(0) === 0xfe && out.charCodeAt(1) === 0xff) {
+        let s = '';
+        for (let i = 2; i + 1 < out.length; i += 2) s += String.fromCharCode((out.charCodeAt(i) << 8) | out.charCodeAt(i + 1));
+        return s;
+    }
+    return out;
+}
+
+function pdfHexToText(hex0: string): string {
+    const hex = hex0.replace(/\s+/g, '');
+    const utf16 = hex.slice(0, 4).toUpperCase() === 'FEFF';
+    const step = utf16 ? 4 : 2;
+    let s = '';
+    for (let i = utf16 ? 4 : 0; i + step <= hex.length; i += step) {
+        const code = parseInt(hex.slice(i, i + step), 16);
+        if (!Number.isNaN(code)) s += String.fromCharCode(code);
+    }
+    return s;
+}
+
+/** Text-showing operators (Tj / ' / " / TJ) of one decoded content stream. */
+function pdfChunkText(src: string): string {
+    const out: string[] = [];
+    const pushStr = (tok: string) => {
+        out.push(tok[0] === '(' ? pdfLiteralToText(tok.slice(1, -1)) : pdfHexToText(tok.slice(1, -1)));
+    };
+    const re = /\[((?:\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|[-\d.\s])*)\]\s*TJ|(\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>)\s*(?:Tj|'|")|(T\*|(?:TD|Td)\b)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src))) {
+        if (m[3]) { out.push('\n'); continue; }
+        if (m[2]) { pushStr(m[2]); out.push(' '); continue; }
+        const arr = m[1] || '';
+        const sre = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|-?\d+(?:\.\d+)?/g;
+        let sm: RegExpExecArray | null;
+        while ((sm = sre.exec(arr))) {
+            const t = sm[0];
+            if (t[0] === '(' || t[0] === '<') pushStr(t);
+            else if (parseFloat(t) < -120) out.push(' '); // large kern = word gap
+        }
+        out.push(' ');
+    }
+    return out.join('');
+}
+
+/**
+ * Dependency-free PDF text recovery: inflate every FlateDecode stream and
+ * read the text-showing operators. Covers the common case — slide exports
+ * and LaTeX handouts with standard encodings — so context upload works out
+ * of the box on an offline server. pdf-parse, when installed, is still
+ * preferred for trickier files (CID / ToUnicode fonts).
+ */
+function extractPdfBuiltin(buf: Buffer): string {
+    const bin = buf.toString('latin1');
+    const chunks: string[] = [];
+    const streamRe = /stream\r?\n/g;
+    let m: RegExpExecArray | null;
+    while ((m = streamRe.exec(bin))) {
+        const start = m.index + m[0].length;
+        const end = bin.indexOf('endstream', start);
+        if (end < 0) break;
+        let raw = bin.slice(start, end);
+        if (raw.endsWith('\n')) raw = raw.slice(0, -1);
+        if (raw.endsWith('\r')) raw = raw.slice(0, -1);
+        streamRe.lastIndex = end + 9;
+        const head = bin.slice(Math.max(0, m.index - 600), m.index);
+        if (!/FlateDecode/.test(head)) { chunks.push(raw); continue; }
+        const rawBuf = Buffer.from(raw, 'latin1');
+        try { chunks.push(inflateSync(rawBuf).toString('latin1')); } catch (e) {
+            try { chunks.push(inflateRawSync(rawBuf).toString('latin1')); } catch (e2) { /* not a content stream */ }
+        }
+    }
+    const text = chunks.map(pdfChunkText).filter((t) => t.trim()).join('\n');
+    return text
+        .replace(/[^\S\n]+/g, ' ')
+        .replace(/ ?\n ?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+async function extractPdf(buf: Buffer): Promise<string> {
+    let viaLib = '';
+    try {
+        // Optional, preferred when present (handles CID/ToUnicode fonts).
+        const pdfParse = typeof require === 'function' ? require('pdf-parse') : null; // eslint-disable-line
+        if (pdfParse) viaLib = String((await pdfParse(buf))?.text || '');
+    } catch (e) { /* fall through to the built-in extractor */ }
+    if (viaLib.trim()) return viaLib;
+    const builtin = extractPdfBuiltin(buf);
+    if (builtin) return builtin;
+    if (/\/Encrypt\b/.test(buf.toString('latin1'))) {
+        throw new BadRequestError('This PDF is encrypted — remove the password protection and upload it again.');
+    }
+    return '';
 }
 
 async function extractContextText(name: string, buf: Buffer): Promise<string> {
@@ -1330,7 +1430,11 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
     }
 
     async postUploadContext({ domainId }) {
-        const file = this.request.files?.file;
+        // formidable can deliver a single file or an array depending on the
+        // client — the framework's own cleanup middleware handles both, so
+        // accept both here as well.
+        let file: any = this.request.files?.file;
+        if (Array.isArray(file)) file = file[0];
         if (!file || !file.size) throw new BadRequestError('No file received.');
         if (file.size > CTX_MAX_SIZE) throw new BadRequestError('The file exceeds the 15 MB limit.');
         const name = cleanCtxName((file as any).originalFilename || (file as any).newFilename);
@@ -1444,5 +1548,10 @@ export function registerAiStudioTemplates(ctx: Context) {
  * intentionally lives in self_learning.ts (see the note above).
  */
 export async function apply(ctx: Context) {
+    // Deployment heartbeat: makes it obvious in the boot log which context
+    // extractor this process is actually running (see the PDF upload fix).
+    let pdfLib = false;
+    try { pdfLib = !!(typeof require === 'function' && require('pdf-parse')); } catch (e) { /* optional */ }
+    logger.info('[ai-studio] context extraction ready: built-in PDF reader%s', pdfLib ? ' + pdf-parse' : ' (pdf-parse not installed — optional)');
     registerAiStudioTemplates(ctx);
 }
