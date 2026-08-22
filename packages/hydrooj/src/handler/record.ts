@@ -45,7 +45,14 @@ export class RecordListHandler extends ContestDetailBaseHandler {
         let invalid = false;
         this.response.template = 'record_main.html';
         const q: Filter<RecordDoc> = { contest: tid };
-        if (full) uidOrName = this.user._id.toString();
+        // PTA fork: submission history is private. Only root
+        // (PRIV_EDIT_SYSTEM) may browse other people's records; every other
+        // account — whatever its domain role happens to grant — is hard-scoped
+        // to its own submissions, crafted uidOrName= URLs included. The rule
+        // deliberately does NOT consult domain-role permissions, so it holds
+        // in pre-existing domains without any role editing or data migration.
+        const selfOnly = !this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM);
+        if (full || selfOnly) uidOrName = this.user._id.toString();
         if (uidOrName) {
             const udoc = await user.getById(domainId, +uidOrName)
                 || await user.getByUname(domainId, uidOrName)
@@ -53,12 +60,16 @@ export class RecordListHandler extends ContestDetailBaseHandler {
             if (udoc) q.uid = udoc._id;
             else invalid = true;
         }
-        if (q.uid !== this.user._id) this.checkPerm(PERM.PERM_VIEW_RECORD);
         if (tid) {
             tdoc = await contest.get(domainId, tid);
             this.tdoc = tdoc;
             if (!tdoc) throw new ContestNotFoundError(domainId, pid);
-            if (!contest.canShowScoreboard.call(this, tdoc, true)) throw new PermissionError(PERM.PERM_VIEW_CONTEST_HIDDEN_SCOREBOARD);
+            // PTA fork: the scoreboard gate is staff-only now, but a
+            // self-only viewer is already pinned to their own records —
+            // their own contest submission list must keep working, so the
+            // coarse gate is skipped for them (canShowSelfRecord below
+            // still governs contests that hide even one's own verdicts).
+            if (!selfOnly && !contest.canShowScoreboard.call(this, tdoc, true)) throw new PermissionError(PERM.PERM_VIEW_CONTEST_HIDDEN_SCOREBOARD);
             if (!contest[q.uid === this.user._id ? 'canShowSelfRecord' : 'canShowRecord'].call(this, tdoc, true)) {
                 throw new PermissionError(PERM.PERM_VIEW_CONTEST_HIDDEN_SCOREBOARD);
             }
@@ -121,6 +132,7 @@ export class RecordListHandler extends ContestDetailBaseHandler {
             filterUidOrName: uidOrName,
             filterLang: lang,
             filterStatus: status,
+            selfOnly,
             notification,
         };
         if (this.user.hasPriv(PRIV.PRIV_VIEW_JUDGE_STATISTICS) && stat) {
@@ -136,7 +148,9 @@ export class RecordDetailHandler extends ContestDetailBaseHandler {
     async prepare(domainId: string, rid: ObjectId) {
         this.rdoc = await record.get(domainId, rid);
         if (!this.rdoc) throw new RecordNotFoundError(rid);
-        if (this.rdoc.uid !== this.user._id) this.checkPerm(PERM.PERM_VIEW_RECORD);
+        // PTA fork: only the submitter — or root — may open a record,
+        // status pages included.
+        if (this.rdoc.uid !== this.user._id) this.checkPriv(PRIV.PRIV_EDIT_SYSTEM);
     }
 
     async download() {
@@ -281,7 +295,11 @@ export class RecordMainConnectionHandler extends ConnectionHandler {
         if (tid) {
             this.tdoc = await contest.get(domainId, tid);
             if (!this.tdoc) throw new ContestNotFoundError(domainId, tid);
-            if (pretest || contest.canShowScoreboard.call(this, this.tdoc, true)) this.tid = tid.toHexString();
+            // PTA fork: same relaxation as the list — non-root subscriptions
+            // are pinned to the viewer's own uid below, so their own live
+            // stream inside a contest keeps working; staff pass the gate.
+            const selfPinned = !this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM);
+            if (pretest || selfPinned || contest.canShowScoreboard.call(this, this.tdoc, true)) this.tid = tid.toHexString();
             else throw new PermissionError(PERM.PERM_VIEW_CONTEST_HIDDEN_SCOREBOARD);
             if (!this.user.own(this.tdoc) && !this.user.hasPerm(PERM.PERM_EDIT_CONTEST)) {
                 this.applyProjection = true;
@@ -299,7 +317,10 @@ export class RecordMainConnectionHandler extends ConnectionHandler {
                 else throw new UserNotFoundError(uidOrName);
             }
         }
-        if (this.uid !== this.user._id) this.checkPerm(PERM.PERM_VIEW_RECORD);
+        // PTA fork: the live record stream is personal too — every non-root
+        // subscription is pinned to the viewer, whatever uidOrName/all
+        // filters the client asked for.
+        if (!this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM)) this.uid = this.user._id;
         if (pid) {
             const pdoc = await problem.get(domainId, pid);
             if (pdoc) this.pid = pdoc.docId;
@@ -393,6 +414,9 @@ export class RecordDetailConnectionHandler extends ConnectionHandler {
     async prepare(domainId: string, rid: ObjectId, noTemplate = false) {
         const rdoc = await record.get(domainId, rid);
         if (!rdoc) return;
+        // PTA fork: live-following a record needs the same authority as
+        // opening it — the submitter or root.
+        if (rdoc.uid !== this.user._id) this.checkPriv(PRIV.PRIV_EDIT_SYSTEM);
         if (rdoc.contest && ![record.RECORD_GENERATE, record.RECORD_PRETEST].some((i) => i.toHexString() === rdoc.contest.toHexString())) {
             this.tdoc = await contest.get(domainId, rdoc.contest);
             let canView = this.user.own(this.tdoc);

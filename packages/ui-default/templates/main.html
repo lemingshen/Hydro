@@ -4,6 +4,27 @@
 {% import "components/problem.html" as problem with context %}
 {% import "components/user.html" as user with context %}
 {% block content %}
+{# PTA fork (pass 2): every domain home opens with its course banner. #}
+<div class="row"><div class="columns">
+  <div class="pta-hero">
+    <div class="pta-hero__glyph">{{ (handler.domain.name or handler.domain._id)[0]|upper }}</div>
+    <div class="pta-hero__main">
+      <div class="pta-hero__over">{{ _('Course space') }}</div>
+      <h1 class="pta-hero__title">{{ handler.domain.name or handler.domain._id }}</h1>
+      <p class="pta-hero__sub">
+        {%- if handler.user.hasPriv(model.builtin.PRIV.PRIV_USER_PROFILE) -%}
+          {{ _('Welcome back') }}, {{ handler.user.uname }} — {{ _('pick up where you left off.') }}
+        {%- else -%}
+          {{ _('Sign in to start practicing.') }}
+        {%- endif -%}
+      </p>
+    </div>
+    <div class="pta-hero__actions">
+      <a class="pta-hero__btn" href="{{ url('problem_main') }}">{{ _('Problem Set') }}</a>
+      <a class="pta-hero__btn pta-hero__btn--ghost" href="{{ url('self_learning') }}">{{ _('self_learning') }}</a>
+    </div>
+  </div>
+</div></div>
 <div class="row">
   {% for column in contents %}
     <div class="large-{{ column.width }} columns">

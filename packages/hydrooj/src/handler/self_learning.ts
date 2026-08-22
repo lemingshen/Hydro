@@ -846,8 +846,20 @@ const logger = new Logger('self-learning');
 /* ------------------------------------------------------------------------ */
 
 /** Kind + title for each listed problem (config arrives as a raw YAML string). */
-async function activityKinds(domainId: string, pids: number[]) {
+async function activityKinds(domainId: string, pids: number[], uid?: number) {
     const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'pid', 'title', 'config'], true);
+    // Rail verdict states: the requester's OWN problem-status docs. The judge
+    // updates these for contest/homework submissions too (handler/judge.ts
+    // calls problem.updateStatus before contest.updateStatus), so accepted /
+    // tried decorations are correct inside activities as well.
+    const psdict: Record<number, { status?: number, score?: number }> = {};
+    if (uid && uid > 1) {
+        try {
+            const rows = await problem.getMultiStatus(domainId, { uid, docId: { $in: pids } })
+                .project({ docId: 1, status: 1, score: 1 }).toArray();
+            for (const r of rows) psdict[r.docId] = r as any;
+        } catch (e) { /* status decoration is optional */ }
+    }
     return pids.map((pid) => {
         const p: any = pdict[pid] || {};
         let conf: any = p.config;
@@ -866,7 +878,8 @@ async function activityKinds(domainId: string, pids: number[]) {
         if (/^s/i.test(disp)) kind = 'subjective';
         else if (/^o/i.test(disp)) kind = 'objective';
         else if (/^p/i.test(disp)) kind = 'programming';
-        return { pid, kind, title: p.title || String(pid) };
+        const st = psdict[pid] || {};
+        return { pid, kind, title: p.title || String(pid), status: st.status || 0, score: st.score };
     });
 }
 
@@ -940,7 +953,7 @@ class ActivityProblemKindsHandler extends Handler {
     async get({ domainId }, tid: ObjectId) {
         const tdoc = await contest.get(domainId, tid);
         if (!tdoc) throw new NotFoundError(tid);
-        this.response.body = { pids: await activityKinds(domainId, tdoc.pids || []) };
+        this.response.body = { pids: await activityKinds(domainId, tdoc.pids || [], this.user?._id) };
     }
 }
 
@@ -1773,7 +1786,7 @@ export async function apply(ctx: Context) {
         if (!tdoc && h.args?.tid) tdoc = await contest.get(h.args.domainId, h.args.tid).catch(() => null);
         if (tdoc && Array.isArray(tdoc.pids) && tdoc.pids.length > 1) {
             try {
-                h.UiContext.tdocKinds = await activityKinds(h.args.domainId, tdoc.pids);
+                h.UiContext.tdocKinds = await activityKinds(h.args.domainId, tdoc.pids, h.user?._id);
                 logger.info('[pta-ui] rail kinds injected via %s: %d problem(s) for tid=%s', source, tdoc.pids.length, tdoc.docId);
             } catch (e) {
                 logger.warn('[pta-ui] rail kinds failed via %s: %s', source, e.message);
@@ -1792,7 +1805,7 @@ export async function apply(ctx: Context) {
                     h.UiContext.trainingRail = {
                         trid: String(trid),
                         title: ttdoc.title || '',
-                        kinds: await activityKinds(h.args.domainId, pids),
+                        kinds: await activityKinds(h.args.domainId, pids, h.user?._id),
                     };
                     logger.info('[pta-ui] rail kinds injected via %s (training): %d problem(s) for trid=%s', source, pids.length, trid);
                     return;
@@ -1818,7 +1831,7 @@ export async function apply(ctx: Context) {
             ]);
             const pids = [...before.reverse(), ...after].map((p: any) => p.docId);
             if (pids.length < 2) return;
-            h.UiContext.psetRail = { kinds: await activityKinds(h.args.domainId, pids) };
+            h.UiContext.psetRail = { kinds: await activityKinds(h.args.domainId, pids, h.user?._id) };
             logger.info('[pta-ui] rail kinds injected via %s (problem set): %d problem(s) around #%d', source, pids.length, cur);
         } catch (e) {
             logger.warn('[pta-ui] problem-set rail kinds failed via %s: %s', source, e.message);
@@ -1911,5 +1924,40 @@ export async function apply(ctx: Context) {
         }
         h.response.body.value = '{}\n';
     });
+    // ---- Privacy self-heal: personal submission history & ranking ----
+    // The 'default' role of PRE-EXISTING domains was minted when PERM_DEFAULT
+    // still contained PERM_VIEW_RECORD, so students there can browse the whole
+    // class's submissions. New domains no longer grant it (see
+    // @hydrooj/common/permission.ts); this one-time boot sweep strips the bit
+    // from the two builtin role names in every existing domain too. Custom
+    // roles (teacher / TA / ...) are deliberately untouched — granting "View
+    // other's records" to a role is the supported way to give course staff
+    // full record and ranking visibility.
+    if (!(global as any).__ptaRecordPrivacySweepDone) {
+        (global as any).__ptaRecordPrivacySweepDone = true;
+        setTimeout(async () => {
+            try {
+                const ddocs = await domain.getMulti().project({ _id: 1, roles: 1 }).toArray();
+                let fixed = 0;
+                for (const ddoc of ddocs) {
+                    const patch: Record<string, bigint> = {};
+                    for (const role of ['default', 'guest']) {
+                        const cur = (ddoc as any).roles?.[role];
+                        if (cur === undefined) continue;
+                        const perm = BigInt(cur);
+                        if (perm & PERM.PERM_VIEW_RECORD) patch[role] = perm & ~PERM.PERM_VIEW_RECORD;
+                    }
+                    if (Object.keys(patch).length) {
+                        // eslint-disable-next-line no-await-in-loop
+                        await domain.setRoles((ddoc as any)._id, patch);
+                        fixed += 1;
+                    }
+                }
+                if (fixed) logger.info('[pta-ui] record privacy: removed "View other\'s records" from builtin roles in %d domain(s)', fixed);
+            } catch (e) {
+                logger.warn('[pta-ui] record privacy sweep failed: %s', e.message);
+            }
+        }, 3000);
+    }
     await SelfLearningModel.apply();
 }

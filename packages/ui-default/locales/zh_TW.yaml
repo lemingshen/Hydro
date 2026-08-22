@@ -1260,3 +1260,11 @@ Subjective: 主觀題
 "Project-level task: students submit files and a Markdown report; graded by the teacher, no OJ judging.": 專案級任務：學生提交檔案和 Markdown 報告，由教師批改，無 OJ 判題。
 "The problem ID must start with {0} for this problem type.": 此題目類型的題目 ID 必須以 {0} 開頭。
 "The problem ID is prefixed automatically.": 題目 ID 會自動添加前綴。
+'Submission history is private — you are seeing only your own records.': 評測記錄僅對本人可見——這裡只顯示你自己的提交。
+'Course space': 課程空間
+'Welcome back': 歡迎回來
+'pick up where you left off.': 繼續上次的練習吧。
+'Sign in to start practicing.': 登入後開始練習。
+'Earlier attempts': 更早的提交
+'Best': 最佳
+'solved': 已解決

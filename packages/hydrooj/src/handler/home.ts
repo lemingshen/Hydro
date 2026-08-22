@@ -110,7 +110,11 @@ export class HomeHandler extends Handler {
     }
 
     async getRanking(domainId: string, limit = 50) {
-        if (!this.user.hasPerm(PERM.PERM_VIEW_RANKING)) return [];
+        // PTA fork: the ranking is root-only, matching /ranking and the
+        // scoreboards. Returning an empty payload makes the homepage widget
+        // disappear entirely for everyone else (the partial guards on
+        // payload.length), whatever the domain's homepage layout lists.
+        if (!this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM)) return [];
         const dudocs = await domain.getMultiUserInDomain(domainId, { uid: { $gt: 1 }, rp: { $gt: 0 } })
             .sort({ rp: -1 }).project({ uid: 1 }).limit(limit).toArray();
         const uids = dudocs.map((dudoc) => dudoc.uid);

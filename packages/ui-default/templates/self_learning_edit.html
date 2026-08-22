@@ -1,10 +1,9 @@
 {% extends "layout/basic.html" %}
 {% block content %}
 <style>
-  .sle-tip { display: flex; gap: 10px; align-items: flex-start; border: 1px solid #e2e9f4; border-radius: 12px; background: linear-gradient(135deg, #f4f8ff, #f6f2ff); padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: #4a5b78; }
+  .sle-tip { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--pta-line); border-radius: 12px; background: linear-gradient(135deg, var(--pta-blue-soft), var(--pta-violet-soft)); padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: var(--pta-ink-soft); animation: ptaFadeUp .28s var(--pta-ease) backwards; }
   .sle-tip__icon { font-size: 20px; line-height: 1.2; }
   .sle-form input[name="pids"] { font-family: var(--code-font-family); }
-  .theme--dark .sle-tip { background: linear-gradient(135deg, #1b2431, #241f33); border-color: #333a41; color: #aab4be; }
 </style>
 <div class="row">
   <div class="medium-9 columns">

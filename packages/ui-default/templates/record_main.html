@@ -10,6 +10,12 @@
   + ("&allDomain=1" if allDomain else "")
 ) }}
 {{ set(UiContext, 'rids', rdocs.map(eval("rdoc=>rdoc._id.toString()"))) }}
+{% if selfOnly %}
+<style>
+  .rec-selfonly { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 9px 14px; border-radius: 12px; background: var(--pta-blue-soft); border: 1px solid var(--pta-blue-line); color: var(--pta-blue-text); font-size: 12.5px; animation: ptaFadeUp .26s var(--pta-ease) backwards; }
+</style>
+<div class="rec-selfonly">🔒 {{ _('Submission history is private — you are seeing only your own records.') }}</div>
+{% endif %}
 <div class="row">
   <div class="medium-12 columns">
     <form method="get">
@@ -23,12 +29,14 @@
         </div>
         <div class="section__body">
           <div class="row">
+            {% if not selfOnly %}
             <div class="medium-2 columns">
               <label class="filter-user">
                 {{ _('By Username / UID') }}
                 <input name="uidOrName" type="text" class="textbox" value="{{ filterUidOrName }}" autocomplete="off" data-autofocus>
               </label>
             </div>
+            {% endif %}
             <div class="medium-2 columns">
               <label>
                 {{ _('By Problem') }}

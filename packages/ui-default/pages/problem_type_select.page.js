@@ -28,34 +28,34 @@ const TYPES = [
 
 const STYLE = [
   '.pts { margin: 0 0 18px; }',
-  '.pts__title { font-weight: bold; font-size: 14px; margin-bottom: 8px; color: #34405a; }',
-  '.pts__title small { font-weight: normal; color: #8a94a6; margin-left: 8px; }',
+  '.pts__title { font-weight: bold; font-size: 14px; margin-bottom: 8px; color: var(--pta-ink); }',
+  '.pts__title small { font-weight: normal; color: var(--pta-ink-faint); margin-left: 8px; }',
   '.pts__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }',
   '@media (max-width: 780px) { .pts__grid { grid-template-columns: 1fr; } }',
-  '.ptsc { display: block; cursor: pointer; margin: 0; }',
+  '.ptsc { display: block; cursor: pointer; margin: 0; animation: ptaFadeUp .28s var(--pta-ease) backwards; }',
+  '.ptsc:nth-of-type(2) { animation-delay: .06s; }',
+  '.ptsc:nth-of-type(3) { animation-delay: .12s; }',
   '.ptsc input { position: absolute; opacity: 0; pointer-events: none; }',
-  '.ptsc__body { display: block; position: relative; border: 1.5px solid #e3e8f4; border-radius: 12px; background: #fff; padding: 13px 15px 12px; height: 100%; box-sizing: border-box; transition: border-color .15s, box-shadow .15s, background .15s; }',
-  '.ptsc:hover .ptsc__body { border-color: #b9c3da; box-shadow: 0 2px 10px rgba(52,64,90,.08); }',
+  '.ptsc__body { display: block; position: relative; border: 1.5px solid var(--pta-line); border-radius: 12px; background: var(--pta-card); padding: 13px 15px 12px; height: 100%; box-sizing: border-box; transition: border-color .15s, box-shadow .15s, background .15s, transform .15s var(--pta-ease); }',
+  '.ptsc:hover .ptsc__body { border-color: var(--pta-blue-line); box-shadow: var(--pta-shadow-hover); transform: translateY(-2px); }',
   '.ptsc input:focus-visible + .ptsc__body { outline: 2px solid #4c6ef5; outline-offset: 2px; }',
   '.ptsc__row { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }',
 
-  '.ptsc__name { font-weight: bold; font-size: 13.5px; color: #2b3448; }',
+  '.ptsc__name { font-weight: bold; font-size: 13.5px; color: var(--pta-ink); }',
   '.ptsc__key { font: bold 11px/1 ui-monospace, Consolas, monospace; color: #fff; border-radius: 6px; padding: 3px 7px; letter-spacing: .04em; }',
-  '.ptsc__check { position: absolute; top: 9px; right: 11px; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 12px; line-height: 18px; text-align: center; opacity: 0; transform: scale(.6); transition: opacity .15s, transform .15s; }',
-  '.ptsc__desc { display: block; color: #67718a; font-size: 12px; line-height: 1.5; }',
+  '.ptsc__check { position: absolute; top: 9px; right: 11px; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 12px; line-height: 18px; text-align: center; opacity: 0; transform: scale(.6); transition: opacity .15s, transform .18s var(--pta-ease); }',
+  '.ptsc__desc { display: block; color: var(--pta-ink-soft); font-size: 12px; line-height: 1.5; }',
   '.ptsc input:checked + .ptsc__body { box-shadow: 0 3px 14px rgba(52,64,90,.10); }',
   '.ptsc input:checked + .ptsc__body .ptsc__check { opacity: 1; transform: scale(1); }',
-  // dark theme
-  '.pta-dark .pts__title { color: #cfd6dd; }',
-  '.pta-dark .pts__title small { color: #8b97a3; }',
-  '.pta-dark .ptsc__body { background: #23272c; border-color: #333a41; }',
-  '.pta-dark .ptsc:hover .ptsc__body { border-color: #4a525b; box-shadow: 0 2px 10px rgba(0,0,0,.35); }',
-  '.pta-dark .ptsc__name { color: #d5dade; }',
-  '.pta-dark .ptsc__desc { color: #98a2ac; }',
   // Selection is pure CSS per type and per theme — no inline styles, so the
-  // cards follow whichever theme the page is in.
-  ...TYPES.map((t) => `.ptsc input[value="${t.key}"]:checked + .ptsc__body { border-color: ${t.color}; background: ${t.tint}; }`),
-  ...TYPES.map((t) => `.pta-dark .ptsc input[value="${t.key}"]:checked + .ptsc__body { background: ${t.darkTint}; }`),
+  // cards follow whichever theme the page is in. (Values mirror TYPES above;
+  // keep the two in sync if a type color ever changes.)
+  '.ptsc input[value="P"]:checked + .ptsc__body { border-color: #1c7ed6; background: #e8f2fd; }',
+  '.ptsc input[value="O"]:checked + .ptsc__body { border-color: #0ca678; background: #e6f7f1; }',
+  '.ptsc input[value="S"]:checked + .ptsc__body { border-color: #845ef7; background: #f3edff; }',
+  '.pta-dark .ptsc input[value="P"]:checked + .ptsc__body { background: #152a40; }',
+  '.pta-dark .ptsc input[value="O"]:checked + .ptsc__body { background: #0f2f26; }',
+  '.pta-dark .ptsc input[value="S"]:checked + .ptsc__body { background: #251d3d; }',
 ].join('\n');
 
 export default new NamedPage(['problem_create', 'problem_edit'], () => {

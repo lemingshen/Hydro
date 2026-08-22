@@ -149,8 +149,12 @@ PERM.PERM_DEFAULT = PERM.PERM_VIEW
     | PERM.PERM_ATTEND_CONTEST
     | PERM.PERM_CREATE_TRAINING
     | PERM.PERM_ATTEND_HOMEWORK
-    | PERM.PERM_VIEW_RANKING
-    | PERM.PERM_VIEW_RECORD;
+    | PERM.PERM_VIEW_RANKING;
+
+// PTA fork: PERM_VIEW_RECORD ("View other's records") is deliberately NOT
+// part of the default role — submission history is private to each user.
+// Grant it to a teacher/TA role explicitly when course staff need to review
+// the whole class; the record pages and the ranking both key off this bit.
 
 PERM.PERM_ADMIN = PERM.PERM_ALL;
 

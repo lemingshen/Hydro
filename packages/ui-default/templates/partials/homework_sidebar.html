@@ -50,7 +50,7 @@
       <li class="menu__item"><a class="menu__link" href="{{ url('homework_scoreboard', tid=tdoc.docId) }}">
         <span class="icon icon-statistics"></span> {{ _('Scoreboard') }}
       </a></li>
-    {% elif model.contest.canViewHiddenScoreboard(handler, tdoc) %}
+    {% elif model.contest.canViewHiddenScoreboard.call(handler, tdoc) %}
       <li class="menu__item"><a class="menu__link" href="{{ url('homework_scoreboard', tid=tdoc.docId) }}">
         <span class="icon icon-statistics"></span> {{ _('Scoreboard (Hidden)') }}
       </a></li>

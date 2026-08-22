@@ -25,6 +25,11 @@ import { log2 } from '../utils';
 class DomainRankHandler extends Handler {
     @query('page', Types.PositiveInt, true)
     async get(domainId: string, page = 1) {
+        // PTA fork: the ranking is root-only. The route itself is registered
+        // behind PRIV_EDIT_SYSTEM and the nav entry is hidden for everyone
+        // else; this in-handler check keeps the page safe even if another
+        // plugin ever re-routes it.
+        this.checkPriv(PRIV.PRIV_EDIT_SYSTEM);
         const [dudocs, upcount, ucount] = await this.paginate(
             domain.getMultiUserInDomain(domainId, { uid: { $gt: 1 }, rp: { $gt: 0 }, join: true }).sort({ rp: -1 }),
             page,
@@ -477,7 +482,8 @@ declare module '@hydrooj/framework' {
 }
 
 export async function apply(ctx: Context) {
-    ctx.Route('ranking', '/ranking', DomainRankHandler, PERM.PERM_VIEW_RANKING);
+    // PTA fork: the ranking is visible to root only.
+    ctx.Route('ranking', '/ranking', DomainRankHandler, PRIV.PRIV_EDIT_SYSTEM);
     ctx.Route('domain_dashboard', '/domain/dashboard', DomainDashboardHandler);
     ctx.Route('domain_edit', '/domain/edit', DomainEditHandler);
     ctx.Route('domain_user', '/domain/user', DomainUserHandler);

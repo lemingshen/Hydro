@@ -33,12 +33,22 @@ const page = new NamedPage('record_main', async () => {
       $newTr.trigger('vjContentNew');
     }
   };
-  UserSelectAutoComplete.getOrConstruct($('[name="uidOrName"]'), {
-    clearDefaultValue: false,
-  });
-  ProblemSelectAutoComplete.getOrConstruct($('[name="pid"]'), {
-    clearDefaultValue: false,
-  });
+  // PTA fork: the uidOrName filter is not rendered for self-only viewers,
+  // and constructing an autocomplete on a missing input crashes its React
+  // wrapper ($dom.val() is undefined -> undefined.split(',')). Mount each
+  // filter only when its input actually exists on the page.
+  const $uidOrName = $('[name="uidOrName"]');
+  if ($uidOrName.length) {
+    UserSelectAutoComplete.getOrConstruct($uidOrName, {
+      clearDefaultValue: false,
+    });
+  }
+  const $pid = $('[name="pid"]');
+  if ($pid.length) {
+    ProblemSelectAutoComplete.getOrConstruct($pid, {
+      clearDefaultValue: false,
+    });
+  }
   const domain = await getDomainInfo();
   const langs = domain.langs?.split(',').map((i) => i.trim()).filter((i) => i);
   const availableLangs = getAvailableLangs(langs?.length ? langs : undefined);

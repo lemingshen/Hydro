@@ -18,7 +18,7 @@ import bus from '../service/bus';
 import db from '../service/db';
 import type { Handler } from '../service/server';
 import { Optional } from '../typeutils';
-import { PERM, STATUS, STATUS_SHORT_TEXTS } from './builtin';
+import { PERM, PRIV, STATUS, STATUS_SHORT_TEXTS } from './builtin';
 import * as document from './document';
 import MessageModel from './message';
 import problem, { ProblemModel } from './problem';
@@ -1004,6 +1004,11 @@ export async function unlockScoreboard(domainId: string, tid: ObjectId) {
 }
 
 export function canViewHiddenScoreboard(this: { user: User }, tdoc: Tdoc) {
+    // PTA fork: templates historically sometimes invoked these helpers as
+    // plain functions (handler passed as an argument instead of as `this`,
+    // e.g. the stock homework sidebar) — degrade to "no access" instead of
+    // crashing the whole page render on `undefined.user`.
+    if (!(this as any)?.user) return false;
     if (this.user.own(tdoc)) return true;
     if (tdoc.rule === 'homework') return this.user.hasPerm(PERM.PERM_VIEW_HOMEWORK_HIDDEN_SCOREBOARD);
     return this.user.hasPerm(PERM.PERM_VIEW_CONTEST_HIDDEN_SCOREBOARD);
@@ -1022,9 +1027,15 @@ export function canShowSelfRecord(this: { user: User }, tdoc: Tdoc, allowPermOve
 }
 
 export function canShowScoreboard(this: { user: User }, tdoc: Tdoc, allowPermOverride = true) {
-    if (RULES[tdoc.rule].showScoreboard(tdoc, new Date())) return true;
-    if (allowPermOverride && canViewHiddenScoreboard.call(this, tdoc)) return true;
-    return false;
+    // PTA fork: contest & homework scoreboards are STAFF-ONLY — visible to
+    // root (PRIV_EDIT_SYSTEM) and to the activity's owner, never to normal
+    // participants, whatever the rule, the timing, or the viewer's domain
+    // role says. This mirrors the root-only domain ranking. The function is
+    // the single gate for the scoreboard pages, the export views, the
+    // contest tab checkers and getScoreboard(), so every surface follows.
+    if (!(this as any)?.user) return false;
+    if (this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM)) return true;
+    return this.user.own(tdoc);
 }
 
 export async function getScoreboard(

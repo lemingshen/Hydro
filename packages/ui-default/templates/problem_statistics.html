@@ -10,6 +10,11 @@
       <div class="section__header">
         <h1 class="section__title">{{ _('Statistics') }}</h1>
       </div>
+      {% if selfOnly %}
+      <div class="section__body" style="padding-bottom: 0;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 12px; background: var(--pta-blue-soft); border: 1px solid var(--pta-blue-line); color: var(--pta-blue-text); font-size: 12.5px;">🔒 {{ _('Submission history is private — you are seeing only your own records.') }}</div>
+      </div>
+      {% endif %}
       <div class="row">
         <div class="medium-6 columns" id="submission-status-placeholder" style="height:230px"></div>
         <div class="medium-6 columns" id="submission-score-placeholder" style="height:230px"></div>

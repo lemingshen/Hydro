@@ -1052,9 +1052,14 @@ export class ProblemStatisticsHandler extends ProblemDetailHandler {
     @param('page', Types.PositiveInt, true)
     async get(domainId: string, sort = 'time', direction: 1 | -1 = 1, lang?: string, page = 1) {
         if (this.tdoc) throw new ContestNotEndedError();
+        // PTA fork: submission history is private — for everyone but root
+        // the per-problem statistics table only lists the viewer's own
+        // submissions (same rule as /record).
+        const selfOnly = !this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM);
         const [rsdocs, pcount, rscount] = await this.paginate(
             record.getMultiStat(domainId, {
                 pid: this.pdoc.docId,
+                ...selfOnly ? { uid: this.user._id } : {},
                 ...lang ? { lang } : {},
             }, record.STAT_QUERY[sort][Math.max(direction, 0)]),
             page,
@@ -1066,7 +1071,7 @@ export class ProblemStatisticsHandler extends ProblemDetailHandler {
         ]);
         this.response.template = 'problem_statistics.html';
         this.response.body = {
-            rsdocs, page, pcount, rscount, sort, direction, pdoc: this.pdoc, udict, types: Object.keys(record.STAT_QUERY), udoc,
+            rsdocs, page, pcount, rscount, sort, direction, pdoc: this.pdoc, udict, types: Object.keys(record.STAT_QUERY), udoc, selfOnly,
         };
     }
 }

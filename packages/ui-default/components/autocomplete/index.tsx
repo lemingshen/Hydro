@@ -66,7 +66,10 @@ export default class AutoComplete<Options extends Record<string, any> = object, 
   attach() {
     const Component = this.options.component || AutoCompleteFC;
     const Wrapper = (props) => {
-      const [value, setValue] = React.useState(props.value);
+      // PTA fork: $dom.val() is undefined when the component is constructed
+      // on an empty selection (e.g. a filter input a template chose not to
+      // render) — fall back to '' so selectedKeys.split() cannot crash.
+      const [value, setValue] = React.useState(props.value ?? '');
       return <Component
         ref={(ref) => { this.ref = ref; }}
         onChange={(v) => {
