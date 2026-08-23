@@ -252,6 +252,12 @@ export class TemplateService extends Service {
       priority: 1,
       render: (name, args, context) => render(name, { ...context, ...args }),
     });
+    // PTA deployment banner: this line printing at boot is the definitive
+    // proof that HTML rendering is live — if any page still returns raw
+    // JSON, either this line is absent from the log (the process is running
+    // old code, or an old process survived the restart) or the path below
+    // is not the checkout you deployed to (the server mounts another copy).
+    console.info('[pta] ui-default renderer registered · templates @ %s', path.resolve(__dirname, '..', 'templates'));
   }
 
   async [Service.init]() {

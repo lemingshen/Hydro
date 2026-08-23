@@ -46,8 +46,30 @@ export const AIS_STYLE = [
   '.ais__table td { padding: 9px 10px; border-bottom: 1px solid #f1eefb; font-size: 12.5px; }',
   '.ais__table tr:hover td { background: #faf8ff; }',
   '.ais__empty { color: #98a2ac; padding: 10px 2px; font-size: 12.5px; }',
-  '.ais__banner { display: flex; align-items: center; gap: 10px; border: 1px dashed #c7b8f5; border-radius: 12px; padding: 10px 14px; margin: 0 0 14px; background: #faf8ff; font-size: 13px; }',
-  '.ais__banner a { color: #7048e8; font-weight: bold; }',
+  '.ais__banner { position: relative; display: flex; align-items: center; gap: 12px; border: 1px solid transparent; border-radius: var(--pta-radius-lg); padding: 13px 16px; margin: 0 0 16px; background: linear-gradient(var(--pta-card), var(--pta-card)) padding-box, linear-gradient(120deg, #4dabf7, #845ef7, #4dabf7) border-box; background-size: 100% 100%, 220% 100%; box-shadow: 0 10px 28px -14px rgba(132, 94, 247, .45); font-size: 13.5px; color: var(--pta-ink); overflow: hidden; animation: ptaFadeUp .3s var(--pta-ease) backwards, ptaSheen 9s ease infinite; }',
+  '.ais__banner-ic { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 10px; background: var(--pta-grad-violet); color: #fff; font-size: 16px; flex: 0 0 auto; box-shadow: 0 6px 14px -6px rgba(112, 72, 232, .6); }',
+  '.ais__banner-text { flex: 1 1 auto; min-width: 0; line-height: 1.5; color: var(--pta-ink-soft); }',
+  '.ais__banner-cta { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: #fff !important; text-decoration: none !important; background: linear-gradient(120deg, #4c6ef5, #845ef7); box-shadow: 0 6px 16px -6px rgba(76, 110, 245, .6); transition: filter .12s ease, transform .12s var(--pta-ease), box-shadow .12s ease; }',
+  '.ais__banner-cta:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 9px 20px -6px rgba(76, 110, 245, .7); }',
+  '.ais__banner-arrow { font-style: normal; transition: transform .15s var(--pta-ease); }',
+  '.ais__banner-cta:hover .ais__banner-arrow { transform: translateX(3px); }',
+  '@media (max-width: 640px) { .ais__banner { flex-wrap: wrap; } .ais__banner-cta { width: 100%; justify-content: center; } }',
+  '.ais__kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 12px; }',
+  '@media (max-width: 640px) { .ais__kinds { grid-template-columns: 1fr; } }',
+  '.ais__kind { display: block; cursor: pointer; margin: 0; position: relative; }',
+  '.ais__kind input { position: absolute; opacity: 0; pointer-events: none; }',
+  '.ais__kind-body { display: block; border: 1.5px solid var(--pta-line); border-radius: 12px; background: var(--pta-card); padding: 11px 13px; transition: border-color .15s, box-shadow .15s, background .15s, transform .15s var(--pta-ease); }',
+  '.ais__kind:hover .ais__kind-body { border-color: var(--pta-violet-line); box-shadow: var(--pta-shadow-hover); transform: translateY(-1px); }',
+  '.ais__kind input:checked + .ais__kind-body { border-color: #845ef7; background: var(--pta-violet-soft); box-shadow: 0 4px 16px -8px rgba(112, 72, 232, .5); }',
+  '.ais__kind-name { font-weight: bold; font-size: 13.5px; color: var(--pta-ink); display: flex; align-items: center; gap: 7px; }',
+  '.ais__kind-desc { display: block; margin-top: 3px; color: var(--pta-ink-soft); font-size: 12px; line-height: 1.45; }',
+  '.ais__qts { display: flex; flex-wrap: wrap; gap: 7px; margin: 2px 0 4px; }',
+  '.ais__qt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--pta-violet-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; color: var(--pta-violet-text); background: var(--pta-card); cursor: pointer; user-select: none; transition: background .13s, border-color .13s; }',
+  '.ais__qt:hover { background: var(--pta-violet-soft); }',
+  '.ais__qt input { accent-color: #845ef7; margin: 0; }',
+  '.ais__kindchip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; font: bold 11px/1 ui-monospace, Consolas, monospace; color: #fff; margin-right: 7px; flex: 0 0 auto; vertical-align: -4px; }',
+  '.ais__kindchip--p { background: linear-gradient(120deg, #339af0, #1c7ed6); }',
+  '.ais__kindchip--o { background: linear-gradient(120deg, #20c997, #0ca678); }',
   '.ais__drop { border: 2px dashed #cdb9f7; border-radius: 12px; padding: 14px 12px; text-align: center; color: #7a6fae; cursor: pointer; background: #fcfbff; transition: background .15s, border-color .15s; user-select: none; }',
   '.ais__drop:hover, .ais__drop--over { background: #f6f1ff; border-color: #9775fa; }',
   '.ais__drop--busy { opacity: .6; pointer-events: none; }',
@@ -97,7 +119,7 @@ export const AIS_STYLE = [
   '.pta-dark .ais__table td { border-bottom-color: #2c3238; }',
   '.pta-dark .ais__table tr:hover td { background: #2a2536; }',
   '.pta-dark .ais__empty { color: #7f8b97; }',
-  '.pta-dark .ais__banner { background: #221f2c; border-color: #4d4070; }',
+  '.pta-dark .ais__banner { box-shadow: 0 12px 30px -14px rgba(0, 0, 0, .65); }',
   '.pta-dark .ais__drop { background: #221f2c; border-color: #4d4070; color: #a99ed0; }',
   '.pta-dark .ais__drop:hover, .pta-dark .ais__drop--over { background: #292339; border-color: #7a5fd0; }',
   '.pta-dark .ais__drop-sub { color: #7f75a8; }',
@@ -211,8 +233,8 @@ function badge(d) {
 function renderList($root, data) {
   const provider = data.provider || {};
   const rows = (data.drafts || []).map((d) => `<tr>`
-    + `<td><b>${esc(d.title || d.topic)}</b></td>`
-    + `<td><span class="ais__chip">${esc(d.language)}</span></td>`
+    + `<td><span class="ais__kindchip ais__kindchip--${d.kind === 'objective' ? 'o' : 'p'}" title="${esc(i18n(d.kind === 'objective' ? 'Objective task' : 'Programming task'))}">${d.kind === 'objective' ? 'O' : 'P'}</span><b>${esc(d.title || d.topic)}</b></td>`
+    + `<td>${d.kind === 'objective' ? '—' : `<span class="ais__chip">${esc(d.language)}</span>`}</td>`
     + `<td>${esc(i18n(d.difficulty))}</td>`
     + `<td>${badge(d)}</td>`
     + `<td>${esc(fmtTs(d.updateAt))}</td>`
@@ -225,19 +247,38 @@ function renderList($root, data) {
       <div class="ais__body">
         <div class="ais__label">🧠 ${esc(i18n('New draft'))}</div>
         <div class="ais__label" style="text-transform:none;letter-spacing:0;font-weight:normal;">${esc(i18n('Describe the task you want and attach the relevant slides below. The AI drafts the statement, solutions and tests — then the judge verifies everything before you can publish.'))}</div>
+        <div class="ais__label">${esc(i18n('What kind of task?'))}</div>
+        <div class="ais__kinds">
+          <label class="ais__kind"><input type="radio" name="ais-kind" value="programming" checked>
+            <span class="ais__kind-body"><span class="ais__kind-name">💻 ${esc(i18n('Programming task'))}</span>
+            <span class="ais__kind-desc">${esc(i18n('Statement + reference solution + tests — the judge verifies everything in the sandbox before publishing.'))}</span></span></label>
+          <label class="ais__kind"><input type="radio" name="ais-kind" value="objective">
+            <span class="ais__kind-body"><span class="ais__kind-name">📝 ${esc(i18n('Objective task'))}</span>
+            <span class="ais__kind-desc">${esc(i18n('Auto-graded quiz — true/false, choice, fill-in-the-blank — generated together with its answer key.'))}</span></span></label>
+        </div>
         <textarea class="ais__topic" rows="2" placeholder="${esc(i18n('e.g. A problem practicing prefix sums, based on the attendance example from today\'s lecture'))}"></textarea>
         <div class="ais__row" style="margin-top:10px;">
-          <div><div class="ais__label">${esc(i18n('Language'))}</div>
+          <div class="ais__prog-only"><div class="ais__label">${esc(i18n('Language'))}</div>
             <select class="ais__lang">${langOptionsHtml(data.langs)}</select></div>
           <div><div class="ais__label">${esc(i18n('Difficulty'))}</div>
             <select class="ais__diff"><option value="intro">${esc(i18n('intro'))}</option><option value="medium">${esc(i18n('medium'))}</option><option value="challenge">${esc(i18n('challenge'))}</option></select></div>
-          <div><div class="ais__label">${esc(i18n('Cross-check'))}</div>
+          <div class="ais__prog-only"><div class="ais__label">${esc(i18n('Cross-check'))}</div>
             <select class="ais__cross"><option value="1">${esc(i18n('On (recommended)'))}</option><option value="0">${esc(i18n('Off'))}</option></select></div>
+          <div class="ais__prog-only" style="min-width:230px;"><div class="ais__label">${esc(i18n('Allowed languages for students'))}</div>
+            ${renderAllowLangsDd(langEntries(data.langs), [], false)}
+            <div class="aisd__meta">${esc(i18n('Empty = every judge language.'))}</div></div>
+        </div>
+        <div class="ais__obj-only" hidden>
+          <div class="ais__label">${esc(i18n('Question types (optional — the AI mixes them sensibly)'))}</div>
+          <div class="ais__qts">
+            ${[['tf', 'True / False'], ['single', 'Single choice'], ['multi', 'Multiple choice'], ['fill', 'Fill in the blank'], ['dropdown', 'Dropdown'], ['short', 'Short answer']]
+    .map(([v, lb]) => `<label class="ais__qt"><input type="checkbox" class="ais__qt-cb" value="${v}"> ${esc(i18n(lb))}</label>`).join('')}
+          </div>
         </div>
         <div class="ais__label">📚 ${esc(i18n('Context files (slides, notes)'))}</div>
         <div class="ais__drop">
-          <div class="ais__drop-main">${esc(i18n('Drop the relevant slides / notes here, or click to choose'))}</div>
-          <div class="ais__drop-sub">${esc(i18n('PPTX / DOCX / PDF / plain text · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.'))}</div>
+          <div class="ais__drop-main">${esc(i18n('Drop the course files here, or click to choose'))}</div>
+          <div class="ais__drop-sub">${esc(i18n('Slides, documents, spreadsheets, PDFs, notebooks and source code (.pptx .docx .xlsx .pdf .txt .ipynb .py .cpp …) · legacy .doc / .ppt / .xls are read best-effort · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.'))}</div>
         </div>
         <input type="file" class="ais__pick" multiple style="display:none">
         <div class="ais__pills"></div>
@@ -249,6 +290,17 @@ function renderList($root, data) {
     : `<div class="ais__empty">${esc(i18n('No drafts yet.'))}</div>`}
       </div>
     </div>`);
+  let allowSel = [];
+  wireAllowLangsDd($root, (langs) => { allowSel = langs; });
+  const OBJ_PLACEHOLDER = i18n("e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides");
+  const PROG_PLACEHOLDER = i18n('e.g. A problem practicing prefix sums, based on the attendance example from today\'s lecture');
+  $root.find('input[name="ais-kind"]').on('change', function onKind() {
+    const isObj = $root.find('input[name="ais-kind"]:checked').val() === 'objective';
+    $root.find('.ais__prog-only').toggle(!isObj);
+    $root.find('.ais__obj-only').prop('hidden', !isObj);
+    $root.find('.ais__topic').attr('placeholder', isObj ? OBJ_PLACEHOLDER : PROG_PLACEHOLDER);
+  });
+
   const pending = []; // File objects picked before the draft exists
   const $pills = $root.find('.ais__pills');
   const renderPills = () => {
@@ -285,13 +337,23 @@ function renderList($root, data) {
     }
     const $b = $(this).prop('disabled', true);
     try {
+      let kind = $root.find('input[name="ais-kind"]:checked').val() || 'programming';
+      const smellsObjective = /single[- ]?choice|multiple[- ]?choice|true[/ ]?(?:or )?false|fill[- ]?in[- ]?the[- ]?blank|\bquiz(?:zes)?\b|\bmcqs?\b|判断题|选择题|填空题|单选|多选|小测|测验|問答題|選擇題|判斷題|填空題|單選|多選/i.test(topic);
+      if (kind === 'programming' && smellsObjective
+        && window.confirm(i18n('This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)'))) {
+        kind = 'objective';
+        $root.find('input[name="ais-kind"][value="objective"]').prop('checked', true).trigger('change');
+      }
+      const qtypes = $root.find('.ais__qt-cb:checked').map(function qv() { return $(this).val(); }).get();
       const res = await request.post(window.location.pathname, {
         operation: 'create',
+        kind,
         topic,
         language: $root.find('.ais__lang').val(),
         difficulty: $root.find('.ais__diff').val(),
         crosscheck: $root.find('.ais__cross').val() === '1',
         notes: String($root.find('.ais__notes').val() || ''),
+        ...(kind === 'programming' ? { allowLangs: allowSel.join(',') } : { qtypes: qtypes.join(',') }),
       });
       const url = res.url || `${domainPrefix()}/ai-studio/${res.id}`;
       for (let k = 0; k < pending.length; k++) {
@@ -316,8 +378,10 @@ export default new NamedPage(['ai_studio', 'problem_create'], (pagename) => {
     // Entry banner on the (already teacher-gated) create-problem page.
     const $host = $('.medium-9.columns, .medium-12.columns').first();
     if ($host.length && !document.getElementById('ais-entry')) {
-      $host.prepend(`<div class="ais__banner" id="ais-entry">✨ <span>${esc(i18n('Creating a programming task? Let the AI draft it from your slides — the judge verifies everything before publishing.'))}</span>
-        <a href="${domainPrefix()}/ai-studio" style="margin-left:auto;">${esc(i18n('Open AI Studio'))} →</a></div>`);
+      $host.prepend(`<div class="ais__banner" id="ais-entry">
+        <span class="ais__banner-ic" aria-hidden="true">✨</span>
+        <span class="ais__banner-text">${esc(i18n('Creating a programming task? Let the AI draft it from your slides — the judge verifies everything before publishing.'))}</span>
+        <a class="ais__banner-cta" href="${domainPrefix()}/ai-studio">${esc(i18n('Open AI Studio'))} <i class="ais__banner-arrow">→</i></a></div>`);
     }
     return;
   }

@@ -2,7 +2,7 @@ import $ from 'jquery';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { i18n, request } from 'vj/utils';
-import { ensureAisStyle, fmtSize, langOptionsHtml, uploadContextFile } from 'vj/pages/ai_studio.page';
+import { ensureAisStyle, fmtSize, langEntries, langOptionsHtml, renderAllowLangsDd, uploadContextFile, wireAllowLangsDd } from 'vj/pages/ai_studio.page';
 
 /**
  * AI Studio — draft detail. Left: artifact tabs (statement / reference
@@ -57,6 +57,40 @@ const STAGES = [
   ['report', 'Teacher report'],
 ];
 
+/** Objective drafts skip the sandbox entirely: validate -> assemble -> report. */
+const OBJ_STAGES = [
+  ['generate', 'Generate'],
+  ['precheck', 'Validate'],
+  ['materialize', 'Assemble quiz'],
+  ['report', 'Teacher report'],
+];
+const isObjDraft = (d) => ((d?.brief?.kind) === 'objective');
+const stageListFor = (d) => (isObjDraft(d) ? OBJ_STAGES : STAGES);
+const QT_LABEL = { tf: 'True / False', single: 'Single choice', multi: 'Multiple choice', fill: 'Fill in the blank', dropdown: 'Dropdown', short: 'Short answer' };
+const answersCount = (yaml) => (String(yaml || '').match(/^\s*['"]?\d+(?:-\d+)?['"]?:/gm) || []).length;
+
+/** Read-only per-question digest under the Answers editor. */
+function answersPreview(d) {
+  const yaml = (d.artifacts && d.artifacts.answers && d.artifacts.answers.yaml) || '';
+  const body = (d.artifacts && d.artifacts.statement && d.artifacts.statement.body) || '';
+  const kinds = {};
+  let fence = false;
+  for (const line of body.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; continue; }
+    if (fence) continue;
+    const re = /\{\{ (input|select|multiselect|textarea|dropdown)\((\d+(?:-\d+)?)\)(?:\[[^\]]*\])? \}\}/g;
+    let m;
+    while (m = re.exec(line)) kinds[m[2]] = m[1]; // eslint-disable-line no-cond-assign
+  }
+  const rows = [];
+  for (const line of yaml.split('\n')) {
+    const m = /^\s*['"]?([\d-]+)['"]?:\s*\[(.*)\]\s*$/.exec(line);
+    if (!m) continue;
+    rows.push(`<div class="aisd__case"><b>Q${esc(m[1])}</b> <span class="ais__chip">${esc(kinds[m[1]] || '?')}</span> <span class="aisd__meta">[${esc(m[2])}]</span></div>`);
+  }
+  return rows.length ? rows.join('') : `<div class="ais__empty">${esc(i18n('No answer key yet.'))}</div>`;
+}
+
 let state = null; // the draft
 let lastFp = ''; // artifact fingerprint: re-render tabs when it changes
 const artifactFp = (d) => JSON.stringify([
@@ -66,6 +100,8 @@ const artifactFp = (d) => JSON.stringify([
   d?.artifacts?.alt?.code?.length,
   (d?.artifacts?.tests || []).length,
   !!d?.artifacts?.report,
+  d?.artifacts?.answers?.yaml?.length || 0,
+  d?.brief?.kind || 'programming',
 ]);
 let langsMap = {}; // judge languages from the server (scratchpad-identical set)
 let activePane = null; // which tab survives re-renders
@@ -84,9 +120,9 @@ function j(v) {
 
 /* --------------------------- rendering ---------------------------- */
 
-function stageDots(p) {
-  const idx = STAGES.findIndex(([k]) => k === p.stage);
-  return STAGES.map(([k, label], i) => {
+function stageDots(p, list = STAGES) {
+  const idx = list.findIndex(([k]) => k === p.stage);
+  return list.map(([k, label], i) => {
     let cls = '';
     if (p.status === 'running') {
       if (i < idx) cls = 'aisd__dot--ok';
@@ -104,6 +140,7 @@ function stageDots(p) {
 
 function sideHtml(d) {
   const p = d.pipeline || {};
+  const list = stageListFor(d);
   const badgeCls = { idle: 'ais__badge--idle', running: 'ais__badge--running', passed: 'ais__badge--passed', failed: 'ais__badge--failed' }[p.status] || 'ais__badge--idle';
   const measured = d.measured ? `
     <div class="ais__label">⏱ ${esc(i18n('Measured (reference solution)'))}</div>
@@ -118,13 +155,13 @@ function sideHtml(d) {
         <span class="ais__hint"><span class="ais__badge ${badgeCls}" style="background:rgba(255,255,255,.18);color:#fff;">${esc(i18n(p.status || 'idle'))}</span></span></div>
       <div class="ais__body">
         ${(() => {
-    const idx = STAGES.findIndex(([k]) => k === p.stage);
+    const idx = list.findIndex(([k]) => k === p.stage);
     if (!['running', 'failed', 'passed'].includes(p.status)) return '';
-    const pct = p.status === 'passed' ? 100 : Math.round((Math.max(0, idx) / STAGES.length) * 100);
+    const pct = p.status === 'passed' ? 100 : Math.round((Math.max(0, idx) / list.length) * 100);
     const mod = p.status === 'running' ? ' ais__progress--live' : p.status === 'failed' ? ' ais__progress--bad' : '';
     return `<div class="ais__progress${mod}"><i style="width:${Math.max(pct, p.status === 'running' ? 6 : 3)}%"></i></div>`;
   })()}
-        ${stageDots(p)}
+        ${stageDots(p, list)}
         ${p.message ? `<div class="aisd__meta${p.status === 'running' ? ' ais__msg--live' : ''}" style="margin-top:6px;">${esc(p.message)}</div>` : ''}
         ${p.evidence ? `<div class="ais__label">🔍 ${esc(i18n('Judge evidence'))}</div><div class="aisd__ev">${esc(p.evidence)}</div>` : ''}
         ${p.status === 'failed' && p.stage === 'crosscheck' ? `<div class="aisd__meta" style="margin-top:6px;">💡 ${esc(i18n('If the statement is ambiguous for this input (e.g. negative values), clarify it in the Statement tab and verify again — or edit either solution directly.'))}</div>
@@ -173,10 +210,20 @@ function render($root) {
   const alt = d.artifacts.alt || { language: d.brief.language, code: '' };
   const busy = d.pipeline.status === 'running';
   const langSel = (cls, cur) => `<select class="${cls}" style="max-width:240px;">${langOptionsHtml(langsMap, cur)}</select>`;
+  const isObj = isObjDraft(d);
+  const progTabs = isObj ? '' : [
+    '<button class="aisd__tab" data-pane="sol">✅ ' + esc(i18n('Reference solution')) + '</button>',
+    '<button class="aisd__tab" data-pane="alt">🔁 ' + esc(i18n('Cross-check solution')) + '</button>',
+    '<button class="aisd__tab" data-pane="tests">🧾 ' + esc(i18n('Tests')) + ' (' + (d.artifacts.tests || []).length + ')</button>',
+  ].join('\n          ');
+  const ansTab = isObj
+    ? '<button class="aisd__tab" data-pane="ans">🔑 ' + esc(i18n('Answers')) + ' (' + answersCount(d.artifacts.answers && d.artifacts.answers.yaml) + ')</button>'
+    : '';
+  const stmtRefine = isObj ? '' : '<button class="ais__btn ais__btn--ghost ais__btn--sm aisd__refine" data-t="statement" ' + (busy ? 'disabled' : '') + '>💬 ' + esc(i18n('AI refine…')) + '</button>';
   $root.html(`
   <div class="ais__banner">← <a href="${domainPrefix()}/ai-studio">${esc(i18n('All drafts'))}</a>
     <span style="margin-left:6px;">${esc(d.brief.topic)}</span>
-    <span class="ais__chip" style="margin-left:auto;">${esc(d.brief.language)} · ${esc(i18n(d.brief.difficulty))} · 📚 ${(d.brief.files || []).length}</span></div>
+    <span class="ais__chip" style="margin-left:auto;">${isObj ? `📝 ${esc(i18n('Objective'))}` : `💻 ${esc(d.brief.language)}`} · ${esc(i18n(d.brief.difficulty))} · 📚 ${(d.brief.files || []).length}</span></div>
   <div class="aisd">
     <div class="aisd__main">
       <div class="ais">
@@ -184,9 +231,8 @@ function render($root) {
           <span class="ais__hint">${esc(i18n('Every artifact is editable — your edits go through the same verification.'))}</span></div>
         <div class="aisd__tabs">
           <button class="aisd__tab" data-pane="stmt">📝 ${esc(i18n('Statement'))}</button>
-          <button class="aisd__tab" data-pane="sol">✅ ${esc(i18n('Reference solution'))}</button>
-          <button class="aisd__tab" data-pane="alt">🔁 ${esc(i18n('Cross-check solution'))}</button>
-          <button class="aisd__tab" data-pane="tests">🧾 ${esc(i18n('Tests'))} (${(d.artifacts.tests || []).length})</button>
+          ${ansTab}
+          ${progTabs}
           <button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Teacher report'))}</button>
           <button class="aisd__tab" data-pane="ctx">📚 ${esc(i18n('Context'))} (${(d.brief.files || []).length})</button>
         </div>
@@ -207,13 +253,16 @@ function render($root) {
                 <select class="aisd__difficulty" style="max-width:180px;">
                   ${['intro', 'medium', 'challenge'].map((x) => `<option value="${x}" ${d.brief.difficulty === x ? 'selected' : ''}>${esc(i18n(x))}</option>`).join('')}
                 </select></div>
+              ${isObj
+    ? '<div><div class="ais__label" style="margin-top:0;">' + esc(i18n('Question types')) + '</div><div class="aisd__meta" style="margin-top:6px;">' + esc(((d.brief.qtypes || []).map((q) => i18n(QT_LABEL[q] || q)).join(' · ')) || i18n('AI decides')) + '</div></div>'
+    : '<div style="min-width:230px;"><div class="ais__label" style="margin-top:0;">' + esc(i18n('Allowed languages for students')) + '</div>' + renderAllowLangsDd(langEntries(langsMap), d.brief.allowLangs || [], false) + '<div class="aisd__meta">' + esc(i18n('Empty = every judge language. Saved instantly.')) + '</div></div>'}
               <button class="ais__btn ais__btn--sm aisd__brief-save" style="align-self:flex-end;">💾 ${esc(i18n('Save requirement'))}</button>
             </div>
             <div class="aisd__meta" style="margin:6px 0 14px;">${esc(i18n('After changing the requirement, click Generate & verify to synthesize the task against it.'))}</div>
             <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('Slides and notes uploaded here ground the generated task. Text is extracted on upload; the original files are not stored.'))}</div>
             <div class="ais__drop aisd__ctx-drop">
-              <div class="ais__drop-main">${esc(i18n('Drop the relevant slides / notes here, or click to choose'))}</div>
-              <div class="ais__drop-sub">${esc(i18n('PPTX / DOCX / PDF / plain text · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.'))}</div>
+              <div class="ais__drop-main">${esc(i18n('Drop the course files here, or click to choose'))}</div>
+              <div class="ais__drop-sub">${esc(i18n('Slides, documents, spreadsheets, PDFs, notebooks and source code (.pptx .docx .xlsx .pdf .txt .ipynb .py .cpp …) · legacy .doc / .ppt / .xls are read best-effort · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.'))}</div>
             </div>
             <input type="file" class="aisd__ctx-pick" multiple style="display:none">
             <div class="ais__pills aisd__ctx-list" style="margin-top:10px;">
@@ -231,16 +280,30 @@ function render($root) {
           <div class="aisd__pane" data-pane="stmt">
             <div class="ais__label">${esc(i18n('Title'))}</div>
             <input type="text" class="aisd__title" value="${esc(s.title)}">
-            <div class="ais__label">${esc(i18n('Statement (markdown, no samples — samples are computed by the judge)'))}</div>
+            <div class="ais__label">${isObj
+    ? esc(i18n('Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)'))
+    : esc(i18n('Statement (markdown, no samples — samples are computed by the judge)'))}</div>
             <textarea class="aisd__body-md" rows="14">${esc(s.body)}</textarea>
             <div class="aisd__bar" style="margin-top:10px;">
-              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="statement" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate'))}</button>
-              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__refine" data-t="statement" ${busy ? 'disabled' : ''}>💬 ${esc(i18n('AI refine…'))}</button>
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="statement" ${busy ? 'disabled' : ''}>✨ ${esc(i18n(isObj ? 'Regenerate quiz + key' : 'Regenerate'))}</button>
+              ${stmtRefine}
               <button class="ais__btn ais__btn--sm aisd__save" data-t="statement">💾 ${esc(i18n('Save'))}</button>
             </div>
           </div>
 
-          <div class="aisd__pane" data-pane="sol">
+          <div class="aisd__pane" data-pane="ans" ${isObj ? '' : 'hidden'}>
+            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('The answer key the judge grades with. YAML: one line per question — id: [answer, score].'))}</div>
+            <div class="ais__label">🔑 ${esc(i18n('Answer key (YAML)'))}</div>
+            <textarea class="aisd__answers" rows="10" spellcheck="false">${esc((d.artifacts.answers && d.artifacts.answers.yaml) || '')}</textarea>
+            <div class="aisd__bar" style="margin-top:10px;">
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="statement" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate quiz + key'))}</button>
+              <button class="ais__btn ais__btn--sm aisd__save" data-t="answers">💾 ${esc(i18n('Validate & save'))}</button>
+            </div>
+            <div class="ais__label">👁 ${esc(i18n('Preview'))}</div>
+            ${answersPreview(d)}
+          </div>
+
+          <div class="aisd__pane" data-pane="sol" ${isObj ? 'hidden' : ''}>
             <div class="ais__label">${esc(i18n('Language'))}</div>${langSel('aisd__sol-lang', sol.language)}
             <div class="ais__label">${esc(i18n('Reference solution (must read stdin, write stdout only)'))}</div>
             <textarea class="aisd__sol-code" rows="18" spellcheck="false">${esc(sol.code)}</textarea>
@@ -251,7 +314,7 @@ function render($root) {
             </div>
           </div>
 
-          <div class="aisd__pane" data-pane="alt">
+          <div class="aisd__pane" data-pane="alt" ${isObj ? 'hidden' : ''}>
             <div class="aisd__meta" style="margin-bottom:8px;">${d.brief.crosscheck
     ? `${esc(i18n('Cross-check is ON: a second, independently written solution must agree with the reference on every test.'))} <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__cc-toggle" data-on="0">${esc(i18n('Turn off'))}</button>`
     : `${esc(i18n('Cross-check is OFF: the reference solution\u2019s outputs are trusted as-is \u2014 read it yourself before publishing.'))} <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__cc-toggle" data-on="1">${esc(i18n('Turn on'))}</button>`}</div>
@@ -265,7 +328,7 @@ function render($root) {
             </div>
           </div>
 
-          <div class="aisd__pane" data-pane="tests">
+          <div class="aisd__pane" data-pane="tests" ${isObj ? 'hidden' : ''}>
             <div class="ais__label">${esc(i18n('Cases (JSON — inputs only; outputs come from running the reference solution)'))}</div>
             <textarea class="aisd__tests" rows="12" spellcheck="false">${esc(j(d.artifacts.tests || []))}</textarea>
             <div class="aisd__bar" style="margin-top:10px;">
@@ -330,6 +393,9 @@ async function mountStatementEditor($root) {
 /* ---------------------------- actions ----------------------------- */
 
 function collectPayload($root, target) {
+  if (target === 'answers') {
+    return { yaml: String($root.find('.aisd__answers').val() || '') };
+  }
   if (target === 'statement') {
     return { title: String($root.find('.aisd__title').val() || ''), body: String($root.find('.aisd__body-md').val() || '') };
   }
@@ -462,6 +528,16 @@ function wire($root) {
       Notification.error(e.message);
     } finally {
       $b.prop('disabled', false);
+    }
+  });
+
+  wireAllowLangsDd($root, async (langs) => {
+    try {
+      const res = await request.post(base(), { operation: 'save', target: 'allowLangs', payload: JSON.stringify({ langs }) });
+      state = res.draft;
+      Notification.success(i18n('Allowed languages saved.'));
+    } catch (e) {
+      Notification.error(e.message);
     }
   });
 

@@ -1203,8 +1203,6 @@ running: 运行中
 passed: 已通过
 failed: 未通过
 "Context files (slides, notes)": 参考材料（课件、笔记）
-"Drop the relevant slides / notes here, or click to choose": 将相关课件 / 笔记拖到此处，或点击选择
-"PPTX / DOCX / PDF / plain text · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.": PPTX / DOCX / PDF / 纯文本 · 最多 8 个文件，每个不超过 15 MB。上传时提取文字；不保存原始文件。
 "Extra requirements (optional)": 额外要求（可选）
 "e.g. must use a loop and no arrays; write the statement in English": 例如：必须使用循环、不允许使用数组；题面用英文
 "Describe the task you want and attach the relevant slides below. The AI drafts the statement, solutions and tests — then the judge verifies everything before you can publish.": 描述你想要的题目，并在下方附上相关课件。AI 将起草题面、参考解答与测试数据——随后评测机会先验证一切，通过后才能发布。
@@ -1287,3 +1285,33 @@ challenges cleared: 次挑战通关
 'Sign in to start practicing.': 登录后开始练习。
 'Earlier attempts': 更早的提交
 'Best': 最佳
+"Drop the course files here, or click to choose": 把课程文件拖到这里，或点击选择
+"Slides, documents, spreadsheets, PDFs, notebooks and source code (.pptx .docx .xlsx .pdf .txt .ipynb .py .cpp …) · legacy .doc / .ppt / .xls are read best-effort · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.": 支持幻灯片、文档、表格、PDF、Notebook 与源代码（.pptx .docx .xlsx .pdf .txt .ipynb .py .cpp 等）· 旧版 .doc / .ppt / .xls 尽力解析 · 最多 8 个文件，每个不超过 15 MB。上传时提取文字；不保存原始文件。
+"What kind of task?": 选择任务类型
+"Programming task": 编程任务
+"Objective task": 客观题任务
+"Statement + reference solution + tests — the judge verifies everything in the sandbox before publishing.": 题面 + 参考解答 + 测试数据——发布前评测机在沙箱中全程验证。
+"Auto-graded quiz — true/false, choice, fill-in-the-blank — generated together with its answer key.": 自动判分的客观题——判断、选择、填空——连同答案一并生成。
+"Empty = every judge language.": 留空 = 允许所有评测语言。
+"Empty = every judge language. Saved instantly.": 留空 = 允许所有评测语言。修改即时保存。
+"Question types (optional — the AI mixes them sensibly)": 题型（可选——AI 会合理搭配）
+"Question types": 题型
+"True / False": 判断题
+"Single choice": 单选题
+"Multiple choice": 多选题
+"Fill in the blank": 填空题
+"Dropdown": 下拉选择
+"Short answer": 简答题
+"Answers": 答案
+"Answer key (YAML)": 答案键（YAML）
+"The answer key the judge grades with. YAML: one line per question — id: [answer, score].": '评测机据此判分。YAML 格式：每题一行——题号: [答案, 分值]。'
+"Validate & save": 校验并保存
+"Regenerate quiz + key": 重新生成题目与答案
+"Validate": 校验
+"Assemble quiz": 组装题目
+"Allowed languages saved.": 已保存允许的语言。
+"AI decides": 由 AI 决定
+"No answer key yet.": 暂无答案键。
+"e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides": 例如：基于本周课件出一份 6 题的循环与条件小测
+"Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)": '题面（Markdown，使用 {{ input/select/multiselect/dropdown }} 题目标记）'
+"This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)": 这个需求看起来像客观题（判断 / 选择 / 填空）。要改为创建客观题任务吗？（确定 = 客观题任务，取消 = 保持编程任务）

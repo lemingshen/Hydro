@@ -1200,8 +1200,6 @@ running: 執行中
 passed: 已通過
 failed: 未通過
 "Context files (slides, notes)": 參考資料（簡報、筆記）
-"Drop the relevant slides / notes here, or click to choose": 將相關簡報 / 筆記拖曳到此處，或點擊選擇
-"PPTX / DOCX / PDF / plain text · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.": PPTX / DOCX / PDF / 純文字 · 最多 8 個檔案，每個不超過 15 MB。上傳時擷取文字；不保存原始檔案。
 "Extra requirements (optional)": 額外要求（可選）
 "e.g. must use a loop and no arrays; write the statement in English": 例如：必須使用迴圈、不允許使用陣列；題面用英文
 "Describe the task you want and attach the relevant slides below. The AI drafts the statement, solutions and tests — then the judge verifies everything before you can publish.": 描述你想要的題目，並在下方附上相關簡報。AI 將起草題面、參考解答與測試資料——隨後評測機會先驗證一切，通過後才能發布。
@@ -1267,3 +1265,33 @@ Subjective: 主觀題
 'Sign in to start practicing.': 登入後開始練習。
 'Earlier attempts': 更早的提交
 'Best': 最佳
+"Drop the course files here, or click to choose": 把課程檔案拖曳到這裡，或點擊選擇
+"Slides, documents, spreadsheets, PDFs, notebooks and source code (.pptx .docx .xlsx .pdf .txt .ipynb .py .cpp …) · legacy .doc / .ppt / .xls are read best-effort · up to 8 files · 15 MB each. Text is extracted on upload; the original files are not stored.": 支援簡報、文件、試算表、PDF、Notebook 與原始碼（.pptx .docx .xlsx .pdf .txt .ipynb .py .cpp 等）· 舊版 .doc / .ppt / .xls 盡力解析 · 最多 8 個檔案，每個不超過 15 MB。上傳時擷取文字；不保存原始檔案。
+"What kind of task?": 選擇任務類型
+"Programming task": 編程任務
+"Objective task": 客觀題任務
+"Statement + reference solution + tests — the judge verifies everything in the sandbox before publishing.": 題面 + 參考解答 + 測試資料——發布前評測機在沙箱中全程驗證。
+"Auto-graded quiz — true/false, choice, fill-in-the-blank — generated together with its answer key.": 自動判分的客觀題——判斷、選擇、填空——連同答案一併生成。
+"Empty = every judge language.": 留空 = 允許所有評測語言。
+"Empty = every judge language. Saved instantly.": 留空 = 允許所有評測語言。修改即時保存。
+"Question types (optional — the AI mixes them sensibly)": 題型（可選——AI 會合理搭配）
+"Question types": 題型
+"True / False": 判斷題
+"Single choice": 單選題
+"Multiple choice": 多選題
+"Fill in the blank": 填空題
+"Dropdown": 下拉選擇
+"Short answer": 簡答題
+"Answers": 答案
+"Answer key (YAML)": 答案鍵（YAML）
+"The answer key the judge grades with. YAML: one line per question — id: [answer, score].": '評測機據此判分。YAML 格式：每題一行——題號: [答案, 分值]。'
+"Validate & save": 校驗並保存
+"Regenerate quiz + key": 重新生成題目與答案
+"Validate": 校驗
+"Assemble quiz": 組裝題目
+"Allowed languages saved.": 已保存允許的語言。
+"AI decides": 由 AI 決定
+"No answer key yet.": 暫無答案鍵。
+"e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides": 例如：基於本週簡報出一份 6 題的迴圈與條件小測
+"Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)": '題面（Markdown，使用 {{ input/select/multiselect/dropdown }} 題目標記）'
+"This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)": 這個需求看起來像客觀題（判斷 / 選擇 / 填空）。要改為建立客觀題任務嗎？（確定 = 客觀題任務，取消 = 保持程式任務）

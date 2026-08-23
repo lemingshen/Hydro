@@ -347,7 +347,7 @@ export interface ObjectiveAnalysis {
 }
 
 /** Scan the markdown statement for question markers and, for choice questions, the option list that follows. */
-function extractQuestionMeta(statement: string): Record<string, { kind: string; options?: string[] }> {
+export function extractQuestionMeta(statement: string): Record<string, { kind: string; options?: string[] }> {
     const lines = (statement || '').split('\n');
     const found: { id: string; marker: string; ddOptions?: string[]; line: number }[] = [];
     let inFence = false;
@@ -390,7 +390,7 @@ function extractQuestionMeta(statement: string): Record<string, { kind: string; 
     return result;
 }
 
-function questionIdCompare(a: string, b: string) {
+export function questionIdCompare(a: string, b: string) {
     const pa = a.split('-').map(Number);
     const pb = b.split('-').map(Number);
     return (pa[0] - pb[0]) || ((pa[1] || 0) - (pb[1] || 0));
