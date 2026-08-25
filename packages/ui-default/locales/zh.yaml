@@ -1463,3 +1463,14 @@ Answer: 作答
 Submitted — results are revealed when this assessment ends.: 已提交——成绩将在本次测评结束后公布。
 Results are withheld until this assessment ends.: 成绩将在本次测评结束后公布。
 Answers are saved on this device as you type — close the page and pick up where you left off.: 答案会随输入自动保存在本设备上——关闭页面后再次打开可继续作答。
+
+# Problem picker (Test / Homework / Self-Learning editors) hover preview.
+ID: 编号
+AC rate: 通过率
+Loading preview...: 正在加载预览……
+Preview unavailable.: 无法加载预览。
+No statement provided.: 该题目暂无题面。
+Statement truncated.: 题面较长，此处仅显示开头部分。
+Add tag: 添加标签
+Clear filters: 清除筛选
+No matching tags: 没有匹配的标签

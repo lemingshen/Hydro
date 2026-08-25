@@ -2,9 +2,10 @@ import './autocomplete.scss';
 
 import { debounce, uniqueId } from 'lodash';
 import React, {
-  forwardRef, useEffect,
+  forwardRef, useCallback, useEffect, useLayoutEffect,
   useImperativeHandle, useRef, useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import Icon from '../Icon';
@@ -22,6 +23,21 @@ export interface AutoCompleteProps<Item> {
   listStyle?: React.CSSProperties;
   cacheKey?: string;
   renderItem?: (item: Item) => any;
+  /**
+   * Optional detail panel for the item the user is currently on (hover OR
+   * keyboard focus). When supplied, the panel is portalled to <body> and
+   * positioned beside the dropdown, because `.autocomplete-list` is a
+   * scrolling `overflow: auto` box that would otherwise clip it.
+   * Autocompletes that omit this prop are completely unaffected.
+   */
+  renderPreview?: (item: Item) => React.ReactNode;
+  /**
+   * Opaque token describing consumer-owned state that changes what
+   * queryItems() returns (filters, scopes...). Changing it re-runs the query
+   * and segments the result cache, so filtered and unfiltered results for
+   * the same text never collide. Consumers that omit it are unaffected.
+   */
+  queryKey?: string | number;
   queryItems?: (query: string) => Promise<Item[]> | Item[];
   fetchItems?: (ids: string[]) => Promise<Item[]> | Item[];
   itemText?: (item: Item) => string;
@@ -50,6 +66,12 @@ export interface AutoCompleteHandle<Item> {
 }
 
 const superCache = {};
+
+/** Hover-preview panel geometry (see AutoCompleteProps.renderPreview). */
+const PREVIEW_WIDTH = 380;
+const PREVIEW_GAP = 8;
+const PREVIEW_MIN_HEIGHT = 160;
+const PREVIEW_DELAY = 160;
 
 function DraggableSelection({
   type, id, move, children, ...props
@@ -112,11 +134,15 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
       setCurrentItem(null);
       return;
     }
+    // Cache per (queryKey, query): the same text yields different results
+    // under different filters. valueCache stays shared so the labels of
+    // already-selected items survive a filter change.
+    const cacheId = `${props.queryKey ?? ''}\u0000${query}`;
     try {
-      queryCache[query] ||= await queryItems(query);
-      for (const item of queryCache[query]) valueCache[itemKey(item)] = item;
-      setItemList(queryCache[query]);
-      setCurrentItem((!freeSolo && queryCache[query].length) ? 0 : null);
+      queryCache[cacheId] ||= await queryItems(query);
+      for (const item of queryCache[cacheId]) valueCache[itemKey(item)] = item;
+      setItemList(queryCache[cacheId]);
+      setCurrentItem((!freeSolo && queryCache[cacheId].length) ? 0 : null);
     } catch (e) {
       console.error('Failed to query items', e);
       setItemList([]);
@@ -147,6 +173,25 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
   }, [selectedKeys, multi]);
 
   const handleInputChange = debounce((e?) => queryList(e ? e.target.value : ''), 300);
+
+  /*
+   * Re-query when the consumer's filters change. Defined in the current
+   * render on purpose, so it closes over the CURRENT queryList (and thus the
+   * current queryItems and cache bucket) — routing this through the
+   * imperative handle instead would capture a stale closure, because that
+   * handle is only rebuilt when selectedKeys/multi change.
+   */
+  const queryKeyMounted = useRef(false);
+  useEffect(() => {
+    if (props.queryKey === undefined) return;
+    if (!queryKeyMounted.current) {
+      queryKeyMounted.current = true;
+      return;
+    }
+    // Nothing is on screen while the dropdown is closed; the next focus
+    // re-queries anyway via allowEmptyQuery.
+    if (focused) queryList(inputRef.current?.value ?? '');
+  }, [props.queryKey]);
 
   const toggleItem = (item: T, key = itemKey(item), preserve = false) => {
     const shouldKeepOpen = multi && allowEmptyQuery && inputRef.current.value === '';
@@ -248,6 +293,49 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
     },
   }), [selectedKeys, inputRef, multi]);
 
+  /* ----------------------------- hover preview ----------------------------- */
+  // `currentItem` already tracks hover (li onMouseMove) and keyboard focus
+  // (ArrowUp / ArrowDown), so the preview simply follows it.
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [previewPos, setPreviewPos] = useState<{ top: number, left: number, maxHeight: number } | null>(null);
+
+  useEffect(() => {
+    if (!props.renderPreview || currentItem === null || !itemList.length) {
+      setPreviewIndex(null);
+      return () => { };
+    }
+    // Settle first: holding ArrowDown through a few hundred rows should not
+    // mount (and fire a request for) a preview of every row it passes.
+    const timer = setTimeout(() => setPreviewIndex(currentItem), PREVIEW_DELAY);
+    return () => clearTimeout(timer);
+  }, [currentItem, itemList, !props.renderPreview]);
+
+  const positionPreview = useCallback(() => {
+    const rect = listRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    // Prefer the right of the dropdown; flip left when the viewport is too
+    // narrow, and clamp so the panel is never pushed off-screen either way.
+    const left = window.innerWidth - rect.right - PREVIEW_GAP >= PREVIEW_WIDTH
+      ? rect.right + PREVIEW_GAP
+      : Math.max(PREVIEW_GAP, rect.left - PREVIEW_WIDTH - PREVIEW_GAP);
+    const top = Math.max(PREVIEW_GAP, Math.min(rect.top, window.innerHeight - PREVIEW_MIN_HEIGHT - PREVIEW_GAP));
+    setPreviewPos({ top, left, maxHeight: Math.max(PREVIEW_MIN_HEIGHT, window.innerHeight - top - PREVIEW_GAP) });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (previewIndex === null) return () => { };
+    positionPreview();
+    window.addEventListener('resize', positionPreview);
+    // Capture phase: the dropdown may sit inside a scrolling form panel.
+    window.addEventListener('scroll', positionPreview, true);
+    return () => {
+      window.removeEventListener('resize', positionPreview);
+      window.removeEventListener('scroll', positionPreview, true);
+    };
+  }, [previewIndex, positionPreview]);
+
+  const previewItem = previewIndex === null ? null : itemList[previewIndex];
+
   const move = (dragId: string, hoverId: string) => {
     if (dragId === hoverId || !draggable) return;
     const dragIndex = selectedKeys.indexOf(dragId);
@@ -334,6 +422,20 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
             </li>;
           })}
         </ul>
+      )}
+      {focused && itemList.length > 0 && previewItem && previewPos && createPortal(
+        <div
+          className="autocomplete-preview"
+          style={{
+            top: previewPos.top, left: previewPos.left, width: PREVIEW_WIDTH, maxHeight: previewPos.maxHeight,
+          }}
+          // Same guard the list uses: clicking or dragging inside the panel
+          // must not blur the input and tear the dropdown down.
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {props.renderPreview(previewItem)}
+        </div>,
+        document.body,
       )}
     </div>
   );

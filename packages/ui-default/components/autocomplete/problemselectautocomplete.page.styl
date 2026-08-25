@@ -1,6 +1,366 @@
-.menu.problem-select
-  width: rem(200px)
+// PTA UI: problem picker used by the Test / Homework / Self-Learning editors.
+// Rows are single-line and scannable; the statement lives in the hover
+// preview panel (base geometry ships from @hydrooj/components).
+//
+// Loaded globally: theme/default.js pulls in every *.page.styl via
+// require.context, and it does so AFTER theme/dark.styl, so the
+// .theme--dark blocks at the bottom win without needing !important.
 
 .problem-select__id
   font-size: rem($font-size-small)
   color: $userselect-uid-color
+
+// The list item is a flex row; without min-width:0 a long title refuses to
+// ellipsise and stretches the dropdown instead.
+.autocomplete-list li > div
+  min-width: 0
+
+.problem-select__row
+  display: flex
+  align-items: center
+  gap: rem(8px)
+  min-width: 0
+
+.problem-select__kind
+  flex: 0 0 auto
+  font-size: rem(11px)
+  line-height: 1.5
+  padding: 0 rem(6px)
+  border-radius: rem(3px)
+  border: 1px solid transparent
+  font-weight: bold
+  white-space: nowrap
+
+.problem-select__kind--programming
+  color: #1971c2
+  background: #e7f5ff
+  border-color: #c8e1f9
+
+.problem-select__kind--objective
+  color: #0f8a68
+  background: #e6faf4
+  border-color: #bdece0
+
+.problem-select__kind--subjective
+  color: #b3541e
+  background: #fff3e6
+  border-color: #f5d9bd
+
+.problem-select__pid
+  flex: 0 0 auto
+  font-family: var(--code-font-family)
+  font-size: rem(12px)
+  color: $userselect-uid-color
+
+.problem-select__name
+  flex: 1 1 auto
+  min-width: 0
+  overflow: hidden
+  white-space: nowrap
+  text-overflow: ellipsis
+
+.problem-select__chip
+  flex: 0 0 auto
+  font-size: rem(11px)
+  color: $userselect-uid-color
+  white-space: nowrap
+
+/* -------------------------------- filter bar -------------------------------- */
+
+.problem-select__shell
+  position: relative
+
+.problem-filter
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: rem(6px) rem(14px)
+  margin-bottom: rem(6px)
+  padding: rem(6px) rem(8px)
+  background: #f8f9fa
+  border: 1px solid #e6e8ea
+  border-radius: rem(4px)
+  font-size: rem(12px)
+
+// A group is one logical control: it must stay on a single line. Letting a
+// group wrap is what previously stacked the difficulty bounds vertically and
+// pushed their label onto its own row. The BAR wraps between groups instead.
+.problem-filter__group
+  display: flex
+  flex-wrap: nowrap
+  align-items: center
+  gap: rem(4px)
+  flex: 0 0 auto
+
+// Tags are the exception: chips accumulate, so this one group may wrap, and
+// it takes the leftover width on the row.
+.problem-filter__group--tags
+  flex: 1 1 rem(240px)
+  min-width: rem(240px)
+  flex-wrap: wrap
+
+.problem-filter__label
+  color: $userselect-uid-color
+  margin-right: rem(2px)
+  white-space: nowrap
+
+.problem-filter__seg
+  border: 1px solid #d9dde1
+  background: #fff
+  color: #495057
+  border-radius: rem(3px)
+  padding: rem(2px) rem(8px)
+  font-size: rem(12px)
+  line-height: 1.6
+  cursor: pointer
+  white-space: nowrap
+
+  &:hover
+    border-color: #40a9ff
+
+  &.is-active
+    background: #1971c2
+    border-color: #1971c2
+    color: #fff
+
+.problem-filter__tag
+  display: inline-flex
+  align-items: center
+  gap: rem(4px)
+  border: 1px solid #c8e1f9
+  background: #e7f5ff
+  color: #1971c2
+  border-radius: rem(3px)
+  padding: rem(2px) rem(6px)
+  font-size: rem(12px)
+  line-height: 1.6
+  cursor: pointer
+
+.problem-filter__x
+  opacity: .65
+  font-weight: bold
+
+.problem-filter__tagbox
+  position: relative
+  flex: 1 1 rem(120px)
+  min-width: rem(120px)
+
+.problem-filter__taginput
+  width: 100%
+  height: rem(24px)
+  padding: 0 rem(6px)
+  font-size: rem(12px)
+  border: 1px solid #d9dde1
+  border-radius: rem(3px)
+  background: #fff
+  color: #495057
+  outline: 0
+
+  &:focus
+    border-color: #40a9ff
+
+// Above the results dropdown, which is z-index 999 and starts lower down.
+.problem-filter__suggest
+  position: absolute
+  z-index: 1001
+  top: calc(100% + 2px)
+  left: 0
+  min-width: 100%
+  max-height: rem(220px)
+  overflow-y: auto
+  margin: 0
+  padding: 0
+  list-style: none
+  background: #fff
+  border-radius: rem(4px)
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .15)
+
+  li button
+    display: flex
+    justify-content: space-between
+    gap: rem(10px)
+    width: 100%
+    border: 0
+    background: none
+    text-align: left
+    padding: rem(4px) rem(10px)
+    font-size: rem(12px)
+    color: #495057
+    cursor: pointer
+
+    &:hover
+      background: #e6f7ff
+
+.problem-filter__empty
+  padding: rem(4px) rem(10px)
+  font-size: rem(12px)
+  color: $userselect-uid-color
+
+.problem-filter__count
+  color: $userselect-uid-color
+
+.problem-filter__clear
+  border: 0
+  background: none
+  color: #1971c2
+  font-size: rem(12px)
+  cursor: pointer
+  padding: 0
+
+  &:hover
+    text-decoration: underline
+
+/* ------------------------------ preview panel ------------------------------ */
+
+.problem-preview__head
+  display: flex
+  align-items: center
+  gap: rem(6px)
+  margin-bottom: rem(4px)
+
+.problem-preview__pid
+  font-family: var(--code-font-family)
+  font-size: rem(12px)
+  color: $userselect-uid-color
+
+.problem-preview__hidden
+  font-size: rem(11px)
+  padding: 0 rem(6px)
+  border-radius: rem(3px)
+  color: #b3541e
+  background: #fff3e6
+  border: 1px solid #f5d9bd
+
+.problem-preview__title
+  font-size: rem(15px)
+  font-weight: bold
+  line-height: 1.35
+  margin-bottom: rem(4px)
+
+.problem-preview__meta
+  display: flex
+  flex-wrap: wrap
+  gap: rem(10px)
+  font-size: rem(11px)
+  color: $userselect-uid-color
+
+.problem-preview__tags
+  display: flex
+  flex-wrap: wrap
+  gap: rem(4px)
+  margin-top: rem(6px)
+
+.problem-preview__tag
+  font-size: rem(11px)
+  padding: 0 rem(6px)
+  border-radius: rem(3px)
+  background: #f1f3f5
+  color: #495057
+
+.problem-preview__body
+  margin-top: rem(8px)
+  padding-top: rem(8px)
+  border-top: 1px solid #eceef0
+
+.problem-preview__dim
+  color: $userselect-uid-color
+  font-size: rem(12px)
+  margin: 0
+
+.problem-preview__dim + .problem-preview__dim
+  margin-top: rem(6px)
+
+// The statement is untrusted authored markdown: clamp anything that could
+// blow the panel's width or height out.
+.problem-preview__statement
+  font-size: rem(12.5px)
+  word-break: break-word
+
+  p, ul, ol, pre, blockquote, table
+    margin: 0 0 rem(6px)
+
+  h1, h2, h3, h4, h5, h6
+    font-size: rem(13px)
+    margin: rem(8px) 0 rem(4px)
+
+  img
+    max-width: 100%
+    max-height: rem(140px)
+
+  pre
+    max-height: rem(160px)
+    overflow: auto
+    font-size: rem(11.5px)
+
+  table
+    display: block
+    max-width: 100%
+    overflow-x: auto
+
+/* --------------------------------- dark ---------------------------------- */
+
+.theme--dark
+  .autocomplete-preview
+    background-color: #1f1f1f
+    color: #ddd
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .55)
+
+  .problem-select__kind--programming
+    color: #4dabf7
+    background: #16283a
+    border-color: #24435f
+
+  .problem-select__kind--objective
+    color: #3dd6a5
+    background: #12241f
+    border-color: #1d5c49
+
+  .problem-select__kind--subjective
+    color: #ffa94d
+    background: #2b1e12
+    border-color: #5c4022
+
+  .problem-preview__hidden
+    color: #ffa94d
+    background: #2b1e12
+    border-color: #5c4022
+
+  .problem-preview__tag
+    background: #2b2b2b
+    color: #c9ced4
+
+  .problem-preview__body
+    border-top-color: #2b2b2b
+
+  .problem-filter
+    background: #1a1a1a
+    border-color: #2b2b2b
+
+  .problem-filter__seg,
+  .problem-filter__taginput
+    background: #1f1f1f
+    border-color: #333
+    color: #c9ced4
+
+  .problem-filter__seg.is-active
+    background: #1971c2
+    border-color: #1971c2
+    color: #fff
+
+  .problem-filter__tag
+    background: #16283a
+    border-color: #24435f
+    color: #4dabf7
+
+  .problem-filter__suggest
+    background: #1f1f1f
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .55)
+
+    li button
+      color: #c9ced4
+
+      &:hover
+        background: #101829
+
+  .problem-filter__clear
+    color: #4dabf7

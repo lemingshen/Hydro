@@ -1443,3 +1443,14 @@ Answer: 作答
 Submitted — results are revealed when this assessment ends.: 已提交——成績將在本次測評結束後公布。
 Results are withheld until this assessment ends.: 成績將在本次測評結束後公布。
 Answers are saved on this device as you type — close the page and pick up where you left off.: 答案會隨輸入自動儲存在本裝置上——關閉頁面後再次開啟可繼續作答。
+
+# Problem picker (Test / Homework / Self-Learning editors) hover preview.
+ID: 編號
+AC rate: 通過率
+Loading preview...: 正在載入預覽……
+Preview unavailable.: 無法載入預覽。
+No statement provided.: 該題目暫無題面。
+Statement truncated.: 題面較長，此處僅顯示開頭部分。
+Add tag: 新增標籤
+Clear filters: 清除篩選
+No matching tags: 沒有符合的標籤

@@ -113,6 +113,50 @@ const PROBLEM_KIND_FILTERS: Record<string, any> = {
     },
 };
 
+export type ProblemKind = 'programming' | 'objective' | 'subjective';
+
+/**
+ * Single-document twin of PROBLEM_KIND_FILTERS above: same precedence (pid
+ * letter first, config only as the legacy fallback) applied in JS instead of
+ * as a mongo query. Used by the `quick` picker payload and by the statement
+ * preview so the kind badge a teacher sees always agrees with the tab the
+ * problem is listed under.
+ */
+export function problemKindOf(pdoc: Pick<ProblemDoc, 'pid' | 'config'>): ProblemKind {
+    const pid = String(pdoc.pid || '');
+    if (/^s/i.test(pid)) return 'subjective';
+    if (/^o/i.test(pid)) return 'objective';
+    if (/^p/i.test(pid)) return 'programming';
+    return typeof pdoc.config === 'string' && KIND_OBJECTIVE_RE.test(pdoc.config) ? 'objective' : 'programming';
+}
+
+/**
+ * Fields the autocomplete picker (`quick=true`) needs. Upstream projected
+ * title/pid/docId only, which left the dropdown showing two nearly identical
+ * lines per row — unreadable once a course has a few hundred tasks. The
+ * extra fields drive the kind badge, the difficulty chip and the AC ratio.
+ *
+ * `config` is fetched ONLY to classify the problem and is stripped again
+ * before the response is written, so the judge configuration never reaches
+ * the picker.
+ */
+const QUICK_PROJECTION = ['title', 'pid', 'domainId', 'docId', 'tag', 'difficulty', 'nSubmit', 'nAccept', 'config'];
+
+/** Statements are stored either as markdown or as JSON of { lang: markdown }. */
+function resolveStatement(content: any, preferLang?: string): string {
+    let c: any = content || '';
+    if (typeof c === 'string' && c.trim().startsWith('{')) {
+        try {
+            const parsed = JSON.parse(c);
+            if (parsed && typeof parsed === 'object') c = parsed;
+        } catch (e) { /* a statement that merely starts with a brace */ }
+    }
+    if (c && typeof c === 'object') {
+        c = c[preferLang] || c[String(preferLang || '').split('_')[0]] || c.zh || c.en || Object.values(c)[0] || '';
+    }
+    return String(c || '');
+}
+
 export class ProblemMainHandler extends Handler {
     queryContext: QueryContext = {
         query: {},
@@ -133,7 +177,13 @@ export class ProblemMainHandler extends Handler {
     @param('quick', Types.Boolean)
     @param('sort', Types.Range(['default', 'recent']), true)
     @param('kind', Types.Range(['programming', 'objective', 'subjective']), true)
-    async get(domainId: string, page = 1, q = '', limit: number, pjax = false, quick = false, sortStrategy = 'default', kind?: string) {
+    @param('tags', Types.Content, true)
+    @param('difficultyMin', Types.UnsignedInt, true)
+    @param('difficultyMax', Types.UnsignedInt, true)
+    async get(
+        domainId: string, page = 1, q = '', limit: number, pjax = false, quick = false, sortStrategy = 'default',
+        kind?: string, tags = '', difficultyMin = 0, difficultyMax = 0,
+    ) {
         this.response.template = 'problem_main.html';
         if (!limit || limit > this.ctx.setting.get('pagination.problem') || page > 1) limit = this.ctx.setting.get('pagination.problem');
         this.queryContext.query = buildQuery(this.user);
@@ -172,6 +222,31 @@ export class ProblemMainHandler extends Handler {
             this.queryContext.hint = 'basic';
             this.queryContext.sort = result.hits;
         }
+        /*
+         * PTA UI: explicit picker filters (Test / Homework / Self-Learning
+         * problem selector). These are deliberately SEPARATE params rather
+         * than `category:`/`difficulty:` tokens folded into `q` — a tag may
+         * contain a space, a comma or a colon, and round-tripping such a tag
+         * through the search-string grammar silently mangles it. They append
+         * to $and, so they compose with the tag/difficulty/namespace tokens a
+         * teacher may also have typed, and are in place BEFORE the per-tab counts below snapshot $and, so the
+         * tab badges keep agreeing with the list they label.
+         */
+        const tagList = [...new Set(parseCategory(tags).filter((i) => i))].slice(0, 16);
+        // AND semantics: each added tag narrows the result, which is what a
+        // teacher assembling a topic-specific activity expects.
+        if (tagList.length) query.$and = [...(query.$and || []), ...tagList.map((tag) => ({ tag }))];
+        // Difficulty is 1..10; 0 means "unset" on the problem AND "no bound"
+        // as a filter parameter, so an unrated problem is only excluded once
+        // a real lower bound is asked for.
+        const dMin = Math.min(Math.max(difficultyMin, 0), 10);
+        const dMax = Math.min(Math.max(difficultyMax, 0), 10);
+        if (dMin || dMax) {
+            const range: any = {};
+            if (dMin) range.$gte = dMin;
+            if (dMax) range.$lte = dMax;
+            query.$and = [...(query.$and || []), { difficulty: range }];
+        }
         // PTA UI tabs: the plain HTML view always lands on one of the three
         // tabs (Programming by default). pjax refreshes carry the active tab
         // in their query string themselves; quick (autocomplete) and other
@@ -203,7 +278,7 @@ export class ProblemMainHandler extends Handler {
         let [pdocs, ppcount, pcount] = this.queryContext.fail
             ? [[], 0, 0]
             : await this.paginate(
-                problem.getMulti(domainId, query, quick ? ['title', 'pid', 'domainId', 'docId'] : undefined)
+                problem.getMulti(domainId, query, quick ? QUICK_PROJECTION : undefined)
                     .sort(sortKey).hint(this.queryContext.hint),
                 sort.length ? 1 : page, limit,
             );
@@ -213,6 +288,14 @@ export class ProblemMainHandler extends Handler {
         }
         if (sort.length) pdocs = pdocs.sort((a, b) => sort.indexOf(`${a.domainId}/${a.docId}`) - sort.indexOf(`${b.domainId}/${b.docId}`));
         if (text && pcount > pdocs.length) pcount = pdocs.length;
+        // See QUICK_PROJECTION: resolve the kind badge here, then drop the raw
+        // config so it never leaves the server for a mere picker row.
+        if (quick) {
+            for (const pdoc of pdocs) {
+                (pdoc as any).kind = problemKindOf(pdoc);
+                delete (pdoc as any).config;
+            }
+        }
         if (this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
             Object.assign(psdict, await problem.getListStatus(
                 domainId, this.user._id,
@@ -1104,6 +1187,107 @@ export class ProblemStatisticsHandler extends ProblemDetailHandler {
     }
 }
 
+/**
+ * PTA UI: the tag vocabulary offered by the picker's filter bar.
+ *
+ * Deliberately NOT the `problem.categories` setting: that is a curated,
+ * site-wide taxonomy, while a course's problems are tagged with whatever the
+ * teacher actually typed ("loops", "while", "Lab 3"). Filtering by a tag that
+ * matches nothing is useless, so the facet is derived from the problems
+ * themselves and carries a count per tag.
+ *
+ * Scoped by buildQuery, so tags that exist only on hidden problems are not
+ * disclosed to users without PERM_VIEW_PROBLEM_HIDDEN.
+ */
+const TAG_FACET_TTL = 60 * 1000;
+const TAG_FACET_SCAN_LIMIT = 5000;
+/**
+ * Per-process memo. Unlike a correctness guard, a cache may safely be
+ * process-local: with several workers the worst case is each one computing
+ * the same facet once per TTL, and a tag added in the meantime shows up a
+ * minute later.
+ */
+const tagFacetCache = new Map<string, { at: number, tags: { name: string, count: number }[] }>();
+
+export class ProblemTagsHandler extends Handler {
+    async get({ domainId }) {
+        const key = `${domainId}/${this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) ? 'all' : this.user._id}`;
+        const cached = tagFacetCache.get(key);
+        if (cached && Date.now() - cached.at < TAG_FACET_TTL) {
+            this.response.body = { tags: cached.tags };
+            return;
+        }
+        const counts = new Map<string, number>();
+        // Bounded scan: a projection of one field over an indexed sort
+        // streams cheaply, but the cap keeps a pathologically large domain
+        // from turning a filter-bar render into a full collection walk.
+        const cursor = problem.getMulti(domainId, buildQuery(this.user), ['tag']).limit(TAG_FACET_SCAN_LIMIT);
+        for await (const pdoc of cursor) {
+            for (const tag of pdoc.tag || []) {
+                const name = String(tag).trim();
+                if (name) counts.set(name, (counts.get(name) || 0) + 1);
+            }
+        }
+        const tags = [...counts.entries()]
+            .map(([name, count]) => ({ name, count }))
+            // Most-used first so the chips a teacher wants are within reach;
+            // ties alphabetical so the list is stable between requests.
+            .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+            .slice(0, 200);
+        tagFacetCache.set(key, { at: Date.now(), tags });
+        this.response.body = { tags };
+    }
+}
+
+/** How much statement the hover preview is allowed to pull down per problem. */
+const PREVIEW_STATEMENT_LIMIT = 2500;
+
+/**
+ * PTA UI: statement preview for the problem picker in the Test / Homework /
+ * Self-Learning editors.
+ *
+ * A teacher assembling an activity has to recognise a task from a one-line
+ * dropdown row; this endpoint backs the panel that opens beside the row so
+ * they can read the actual statement without leaving the form.
+ *
+ * Deliberately NOT the problem_detail JSON: that handler also loads the
+ * owner, the personal status document, the discussion counters and fires the
+ * problem/detail hooks — far too much for something that runs on hover. This
+ * is one problem.get plus a truncation, and it returns JSON only (no
+ * template), so there is no HTML representation for a cache to confuse it
+ * with.
+ */
+export class ProblemPreviewHandler extends Handler {
+    @route('pid', Types.ProblemId)
+    async get(domainId: string, pid: number | string) {
+        const pdoc = await problem.get(domainId, pid);
+        if (!pdoc) throw new ProblemNotFoundError(domainId, pid);
+        // Same visibility rule as the problem page: hidden problems stay
+        // invisible to anyone without PERM_VIEW_PROBLEM_HIDDEN, so the picker
+        // cannot be used to read a draft statement.
+        if (!problem.canViewBy(pdoc, this.user)) throw new PermissionError(PERM.PERM_VIEW_PROBLEM_HIDDEN);
+        // Same resolution order (and the same optional chaining) the core's
+        // own translate() uses: `session` is not guaranteed to be populated
+        // on every request path.
+        const preferLang = this.user?.viewLang || this.session?.viewLang || system.get('server.language') || 'en';
+        const statement = resolveStatement(pdoc.content, preferLang);
+        const truncated = statement.length > PREVIEW_STATEMENT_LIMIT;
+        this.response.body = {
+            docId: pdoc.docId,
+            pid: pdoc.pid || '',
+            title: pdoc.title,
+            kind: problemKindOf(pdoc),
+            tag: pdoc.tag || [],
+            difficulty: pdoc.difficulty || 0,
+            nSubmit: pdoc.nSubmit || 0,
+            nAccept: pdoc.nAccept || 0,
+            hidden: !!pdoc.hidden,
+            statement: truncated ? statement.slice(0, PREVIEW_STATEMENT_LIMIT) : statement,
+            truncated,
+        };
+    }
+}
+
 export class ProblemCreateHandler extends Handler {
     async get() {
         this.response.body.statementLangs = this.ctx.i18n.langs(false);
@@ -1194,6 +1378,11 @@ export async function apply(ctx: Context) {
     ctx.Route('problem_solution_raw', '/p/:pid/solution/:psid/raw', ProblemSolutionRawHandler, PERM.PERM_VIEW_PROBLEM);
     ctx.Route('problem_solution_reply_raw', '/p/:pid/solution/:psid/:psrid/raw', ProblemSolutionRawHandler, PERM.PERM_VIEW_PROBLEM);
     ctx.Route('problem_statistics', '/p/:pid/stat', ProblemStatisticsHandler, PERM.PERM_VIEW_PROBLEM);
+    // Hover preview for the problem picker (contest / homework / self-learning editors).
+    ctx.Route('problem_preview', '/p/:pid/preview', ProblemPreviewHandler, PERM.PERM_VIEW_PROBLEM);
+    // Tag vocabulary for the picker's filter bar. Registered under /problem/
+    // rather than /p/ so it cannot ever be swallowed by the /p/:pid route.
+    ctx.Route('problem_tags', '/problem/tags', ProblemTagsHandler, PERM.PERM_VIEW_PROBLEM);
     ctx.Route('problem_create', '/problem/create', ProblemCreateHandler, PERM.PERM_CREATE_PROBLEM);
     await ctx.inject(['api'], ({ api }) => {
         api.provide(ProblemApi);
