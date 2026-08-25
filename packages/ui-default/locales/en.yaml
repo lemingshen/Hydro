@@ -11,13 +11,13 @@ ai_tutor.provider: AI Provider
 ai_tutor.temperature: Sampling Temperature
 ai_tutor.timeout: Request Timeout (seconds)
 Can be Extended For: Extension
-contest_create: Contest Create
-contest_detail_problem_submit: Submit Contest Problem
+contest_create: Test Create
+contest_detail_problem_submit: Submit Test Problem
 contest_detail_problem: Problem Detail
-contest_detail: Contest Detail
-contest_edit: Contest Edit
-contest_main: Contest
-contest_manage: Contest Management
+contest_detail: Test Detail
+contest_edit: Test Edit
+contest_main: Test
+contest_manage: Test Management
 contest_print: Print
 contest_problemlist: Problem List
 contest_scoreboard: Scoreboard
@@ -70,7 +70,7 @@ pager_first: « First
 pager_last: Last »
 pager_next: Next ›
 pager_previous: ‹ Previous
-perm_contest: Contests
+perm_contest: Test
 perm_discussion: Discussions
 perm_general: General
 perm_homework: Homework
@@ -138,3 +138,62 @@ wiki_help: Help
 'Earlier attempts': Earlier attempts
 'Best': Best
 'solved': solved
+
+# Site vocabulary: this deployment calls contests "tests"
+All Contests: All Tests
+All {0} Contests: All {0} Tests
+Allow user to print during contest: Allow user to print during test
+Allow user view others code after contest: Allow user view others code after test
+Attend Contest: Attend Test
+Attend contests: Attend tests
+Auto hide problems during the contest: Auto hide problems during the test
+Back to contest list: Back to test list
+By Contest: By Test
+Confirm end contest early? You will not be able to submit after this.: Confirm end test early? You will not be able to submit after this.
+Contest: Test
+Contest Clarifications: Test Clarifications
+Contest Invitation: Test Invitation
+Contest Management: Test Management
+Contest Scoreboard: Test Scoreboard
+Contest Settings: Test Settings
+Contest not found: Test not found
+Contest scoreboard is not visible.: Test scoreboard is not visible.
+Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: Test {0} has a new clarification about {1}, please go to test clarifications page to reply.
+Contest {0} jury replied to your clarification, please go to contest page to view.: Test {0} jury replied to your clarification, please go to test page to view.
+Contest {1} not found.: Test {1} not found.
+Contests per page: Tests per page
+Create Contest: Create Test
+Create a contest: Create a test
+Create contests: Create tests
+Edit Contest: Edit Test
+Edit any contests: Edit any tests
+Edit own contests: Edit own tests
+End Contest Early: End Test Early
+In following contests: In following tests
+Join Domain to Attend Contest: Join Domain to Attend Test
+Keep scoreboard hidden even after contest ends: Keep scoreboard hidden even after test ends
+Limit user to finish contest within N hours: Limit user to finish test within N hours
+Login to Attend Contest: Login to Attend Test
+No Permission to Attend Contest: No Permission to Attend Test
+Please attend contest to see the problems.: Please attend test to see the problems.
+Please wait until contest host unfreeze the scoreboard.: Please wait until test host unfreeze the scoreboard.
+Search contests...: Search tests...
+Set Score for Contest: Set Score for Test
+The contest is a flexible time contest. You need to complete the contest within a specified time after you attended.: The test is a flexible time test. You need to complete the test within a specified time after you attended.
+The contest is ended. New submissions will be treated as correction submissions and will not be counted in the contest.: The test is ended. New submissions will be treated as correction submissions and will not be counted in the test.
+? The scoreboard was frozen with {0} minutes remaining at {1} - submissions in the last {0} minutes of the contest are still shown as pending.
+: The scoreboard was frozen with {0} minutes remaining at {1} - submissions in the last {0} minutes of the test are still shown as pending.
+There are no contests...: There are no tests...
+This contest has already started.: This test has already started.
+This contest is not live.: This test is not live.
+View Contest: View Test
+View all contests: View all tests
+View contest scoreboard: View test scoreboard
+View contests: View tests
+View hidden contest submission status and scoreboard: View hidden test submission status and scoreboard
+We will check code similarity after this contest.: We will check code similarity after this test.
+? You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.
+: You cannot submit for this problem because the test is ended. You can click "Open in Problem Set" to view this problem in normal mode.
+You haven't attended this contest yet.: You haven't attended this test yet.
+You've already attended this contest.: You've already attended this test.
+contest: test

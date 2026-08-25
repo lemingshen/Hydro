@@ -92,7 +92,7 @@
               <span class="slp-st" title="{{ _('Not started') }}">○</span>
             {% endif %}
             <span class="slp-pid">{{ pdoc.pid|default(pid) }}</span>
-            <a class="slp-title" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ pdoc.title }}</a>
+            {%- if pdoc.pid and (pdoc.pid|lower|first) == 'o' -%}<a class="slp-title" href="{{ url('self_learning_paper', ssid=sdoc.docId) }}#q-{{ pdoc.docId }}">{{ pdoc.title }}</a>{%- else -%}<a class="slp-title" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ pdoc.title }}</a>{%- endif -%}
             {% if pdoc.config and pdoc.config.type == 'objective' %}
               <span class="slp-kind slp-kind--o">{{ _('Quiz') }}</span>
             {% elif pdoc.config and pdoc.config.type == 'submit_answer' %}
@@ -100,7 +100,7 @@
             {% else %}
               <span class="slp-kind slp-kind--p">{{ _('Programming') }}</span>
             {% endif %}
-            <a class="slp-go" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ _('Practice') }}</a>
+            {%- if pdoc.pid and (pdoc.pid|lower|first) == 'o' -%}<a class="slp-go" href="{{ url('self_learning_paper', ssid=sdoc.docId) }}#q-{{ pdoc.docId }}">📝 {{ _('Answer') }}</a>{%- else -%}<a class="slp-go" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ _('Practice') }}</a>{%- endif -%}
           </div>
           {% else %}
           <div class="slp-row slp-row--gone">
@@ -118,6 +118,7 @@
       <div class="section__body sld-meta">
         <div class="sld-chip">👤 <span>{{ _('Owner') }}: <a href="{{ url('user_detail', uid=sdoc.owner) }}">{{ udict[sdoc.owner].uname }}</a></span></div>
         <div class="sld-chip">🕒 <span>{{ _('Created') }}: {{ datetimeSpan(sdoc._id)|safe }}</span></div>
+        <a href="{{ url('self_learning_paper', ssid=sdoc.docId) }}" class="expanded rounded primary button">📝 {{ _('Answer as one paper') }}</a>
         {% if canEdit %}
         <a href="{{ url('self_learning_edit', ssid=sdoc.docId) }}" class="expanded rounded button">✏️ {{ _('Edit') }}</a>
         {% endif %}

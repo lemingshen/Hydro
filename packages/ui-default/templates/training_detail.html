@@ -1,46 +1,16 @@
 {% extends "layout/basic.html" %}
 {% block content %}
 <div class="row" data-sticky-parent>
-  {%- if Object.keys(udict).length -%}
-  <div class="medium-2 columns mobile--hide">
-    <div data-sticky="large"><div class="section side">
-      <ol class="menu">
-        <li class="menu__item nojs--hide">
-          <form method="get" id="searchForm">
-            <select name="group" class="select"{% if not groups.length %} style="display:none"{% endif %}>
-              <option value="all" selected>{{ _('All') }}</option>
-              {% for group in groups %}
-                <option value="{{ group.uids.join(',') }}">{{ group.name }}</option>
-              {% endfor %}
-            </select>
-            <input name="uid" type="text" class="search__input textbox" placeholder="{{ _('Select User') }}">
-          </form>
-        </li>
-        <ul class="enroll_user_menu">
-        {%- for uid, udoc in udict -%}
-        <li class="menu__item enroll_user_menu_item" data-uid="{{ uid }}" data-uname="{{ udoc.uname }}" {% if handler.user.hasPerm(perm.PERM_VIEW_USER_PRIVATE_INFO) and udoc.displayName %}data-displayname="{{ udoc.displayName }}"{% endif %}>
-          <a href="./{{ tdoc._id }}?uid={{ uid }}" class="menu__link{% if (handler.request.query.uid or handler.user._id) == uid %} active{% endif %}">
-            <span class="user-profile-link">
-              <img class="small user-profile-avatar v-center" loading="lazy" src="{{ avatarUrl(udoc.avatar|default('')) }}" width="20" height="20">
-              <span class="user-profile-name">
-                {% if handler.user.hasPerm(perm.PERM_VIEW_USER_PRIVATE_INFO) and udoc.displayName and udoc.displayName != udoc.uname %}
-                  {{ udoc.displayName }} ({{ udoc.uname }})
-                {% else %}
-                  {{ udoc.uname }}
-                {% endif %}
-              </span>
-            </span>
-          </a>
-        </li>
-        {%- endfor -%}
-        </ul>
-      </ol>
-    </div></div>
-  </div>
-  <div class="medium-7 columns">
-  {%- else -%}
+  {#-
+    The enrolled-user browser (group filter + "Select User" search + the
+    enroll_user_menu listing every student with a link to their progress)
+    used to render here whenever udict was non-empty. Removed for this
+    deployment: students should not see the course roster, and the teacher
+    reviews progress from the scoreboard/records pages instead. The
+    ?uid=<id> query the links produced still works if entered manually.
+    To restore, see git history for this block.
+  -#}
   <div class="medium-9 columns">
-  {%- endif -%}
     <div class="section">
       <div class="section__body typo">
         {{ tdoc['content'] }}
@@ -83,6 +53,9 @@
           </li>
         {% endif %}
         {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_TRAINING) %}
+          <li class="menu__item"><a class="menu__link" href="{{ url('training_paper', tid=tdoc.docId) }}">
+            <span class="icon icon-edit"></span> {{ _('Answer as one paper') }}
+          </a></li>
           <li class="menu__item"><a class="menu__link" href="{{ url('training_edit', tid=tdoc.docId) }}">
             <span class="icon icon-edit"></span>  {{ _('Edit') }}
           </a></li>

@@ -272,6 +272,41 @@ function buildTdocGroups(kinds) {
  */
 async function getRailGroups() {
   const uc = window.UiContext || {};
+  /*
+   * Combined objective paper: the handler ships explicit per-item hrefs —
+   * objective chips anchor to #q-<docId> INSIDE the paper while other kinds
+   * link out to their own pages — so this branch honors item.href verbatim
+   * instead of rebuilding it. The 'current' ring is driven live by the
+   * paper's scrollspy rather than set here.
+   */
+  if (uc.paperRail && Array.isArray(uc.paperRail.items) && uc.paperRail.items.length) {
+    const quizzes = [];
+    const subj = [];
+    const programming = [];
+    for (const p of uc.paperRail.items) {
+      const kindCls = p.kind === 'objective' ? ' quiz' : (p.kind === 'subjective' ? ' subj' : '');
+      const st = p.status || 0;
+      const item = {
+        pid: String(p.pid),
+        accepted: st === 1,
+        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${kindCls}`,
+        name: p.title || String(p.pid),
+        href: p.href,
+      };
+      (p.kind === 'programming' ? programming : (p.kind === 'subjective' ? subj : quizzes)).push(item);
+    }
+    const groups = [];
+    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
+    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
+    if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
+    for (const g of groups) {
+      g.items.forEach((it, i) => {
+        it.label = it.accepted ? '✓' : String(i + 1);
+        it.title = `${i + 1}. ${it.name}`;
+      });
+    }
+    return groups;
+  }
   if (Array.isArray(uc.slProblems) && uc.slProblems.length) {
     const prefix = window.location.pathname.split('/self-learning/')[0];
     const quizzes = [];

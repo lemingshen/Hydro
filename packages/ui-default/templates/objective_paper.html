@@ -1,0 +1,46 @@
+{% extends "layout/basic.html" %}
+{% block content %}
+{#-
+  Combined objective paper. Server renders every task's markdown; the page
+  script (objective_paper.page.js) then turns the {{ input/select/... }}
+  markers of each section into form controls, exactly as the single-problem
+  page does — but namespaced per section, because after the one-question-
+  per-task split every task's marker is (1) and the ids would collide.
+  Submission stays per-problem underneath: one record per task.
+-#}
+{#-
+  The container's problems rail (sl-rail, injected by the page script)
+  replaces the paper's own sidebar: same chips, statuses and progress as the
+  scratchpad view, so moving between questions and programming tasks never
+  needs the detail page. The rail squeezes .main's left margin by itself.
+-#}
+<div class="row">
+  <div class="medium-12 columns">
+    <div class="section paper-top">
+      <div class="section__body paper-top__bar">
+        <h1 class="section__title paper-top__title">{{ heading }}</h1>
+        <span class="paper-top__saved" aria-live="polite"></span>
+        <a class="menu__link paper-top__back" href="{{ backUrl }}">&larr; {{ _('Back') }}</a>
+      </div>
+      <div class="section__body paper-top__note">{{ _('Answers are saved on this device as you type — close the page and pick up where you left off.') }}</div>
+    </div>
+    {%- if not tasks.length -%}
+      <div class="section"><div class="section__body typo"><p>{{ _('This set contains no objective tasks.') }}</p></div></div>
+    {%- endif -%}
+    {%- for t in tasks -%}
+    <div class="section paper-q" id="q-{{ t.docId }}" data-docid="{{ t.docId }}" data-submit-url="{{ t.submitUrl }}">
+      <div class="section__header">
+        <h1 class="section__title paper-q__title">
+          <span class="paper-q__num">{{ t.index }}</span> {{ t.title }}
+          <small class="paper-q__pid">{{ t.pid }}</small>
+          <span class="paper-q__status" data-status-for="{{ t.docId }}"></span>
+        </h1>
+      </div>
+      <div class="section__body typo richmedia paper-q__content">
+        {{ t.content|content(handler.user.viewLang|default(''), false)|safe }}
+      </div>
+    </div>
+    {%- endfor -%}
+  </div>
+</div>
+{% endblock %}

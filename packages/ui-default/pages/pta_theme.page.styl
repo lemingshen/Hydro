@@ -1350,3 +1350,258 @@ html.layout--immersive .supplementary a:hover { color: #fff; }
 .sl-attempts__rest[hidden] { display: none; }
 .sl-attempts__more { display: block; width: 100%; margin-top: 10px; padding: 8px 10px; font-size: 12.5px; color: var(--pta-ink-soft); background: var(--pta-card-2); border: 1px dashed var(--pta-line); border-radius: 12px; cursor: pointer; transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
 .sl-attempts__more:hover { background: var(--pta-blue-soft); color: var(--pta-blue-text); border-color: var(--pta-blue-line); }
+
+
+/* ----------------------- page-scoped: user profile ------------------------ */
+
+html.page--user_detail .profile-header {
+  border-radius: var(--pta-radius-lg) var(--pta-radius-lg) 0 0;
+  position: relative;
+  overflow: hidden;
+  min-height: 190px;
+}
+/* readability scrim so any custom background image stays calm and text-safe */
+html.page--user_detail .profile-header::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(18, 20, 33, .48) 0%, rgba(18, 20, 33, .80) 100%);
+}
+html.page--user_detail .profile-header__content {
+  position: relative;
+  z-index: 1;
+  padding: 26px 28px 20px;
+}
+html.page--user_detail .user-profile-avatar {
+  border-radius: 22px;
+  border: 3px solid rgba(255, 255, 255, .85);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .35);
+}
+html.page--user_detail .up-name {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-wrap: wrap;
+  margin: 2px 0 10px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: #fff;
+}
+html.page--user_detail .up-id {
+  font: 600 12.5px/1 ui-monospace, Consolas, monospace;
+  letter-spacing: .04em;
+  color: #efeaff;
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .26);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: default;
+}
+html.page--user_detail .up-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 12px;
+}
+html.page--user_detail .up-chip {
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, .86);
+  background: rgba(255, 255, 255, .10);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+html.page--user_detail .up-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+html.page--user_detail .up-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  background: rgba(255, 255, 255, .13);
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #fff;
+}
+html.page--user_detail .up-stat b {
+  font-size: 15px;
+  font-weight: 700;
+}
+html.page--user_detail .profile-header__contact-bar {
+  margin-top: 2px;
+}
+html.page--user_detail .profile-header__contact-item {
+  background: rgba(255, 255, 255, .12);
+  border-radius: 9px;
+  transition: background .15s ease;
+}
+html.page--user_detail .profile-header__contact-item:hover {
+  background: rgba(255, 255, 255, .26);
+}
+
+
+/* ------------------- page-scoped: combined objective paper ------------------- */
+
+html.page--contest_paper .paper-q, html.page--homework_paper .paper-q, html.page--training_paper .paper-q, html.page--self_learning_paper .paper-q {
+  scroll-margin-top: 56px;
+  border-left: 3px solid var(--pta-line);
+}
+html.page--contest_paper .paper-q:target, html.page--homework_paper .paper-q:target, html.page--training_paper .paper-q:target, html.page--self_learning_paper .paper-q:target {
+  border-left-color: #0ca678;
+}
+html.page--contest_paper .paper-q__num, html.page--homework_paper .paper-q__num, html.page--training_paper .paper-q__num, html.page--self_learning_paper .paper-q__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: #0ca678;
+  color: #fff;
+  font: bold 13px/1 ui-monospace, Consolas, monospace;
+  margin-right: 6px;
+}
+html.page--contest_paper .paper-q__pid, html.page--homework_paper .paper-q__pid, html.page--training_paper .paper-q__pid, html.page--self_learning_paper .paper-q__pid {
+  font: 600 11.5px/1 ui-monospace, Consolas, monospace;
+  color: var(--pta-ink-faint);
+  margin-left: 8px;
+}
+html.page--contest_paper .paper-q__status, html.page--homework_paper .paper-q__status, html.page--training_paper .paper-q__status, html.page--self_learning_paper .paper-q__status {
+  float: right;
+  font-size: 12.5px;
+}
+html.page--contest_paper .paper-verdict--ok, html.page--homework_paper .paper-verdict--ok, html.page--training_paper .paper-verdict--ok, html.page--self_learning_paper .paper-verdict--ok, html.page--training_paper .paper-verdict--ok, html.page--self_learning_paper .paper-verdict--ok { color: #2b8a3e; font-weight: bold; }
+html.page--contest_paper .paper-verdict--bad, html.page--homework_paper .paper-verdict--bad, html.page--training_paper .paper-verdict--bad, html.page--self_learning_paper .paper-verdict--bad, html.page--training_paper .paper-verdict--bad, html.page--self_learning_paper .paper-verdict--bad { color: #c92a2a; font-weight: bold; }
+html.page--contest_paper .paper-nav__num, html.page--homework_paper .paper-nav__num, html.page--training_paper .paper-nav__num, html.page--self_learning_paper .paper-nav__num {
+  display: inline-block;
+  min-width: 20px;
+  font: bold 12px/1.6 ui-monospace, Consolas, monospace;
+  color: var(--pta-ink-soft);
+}
+html.page--contest_paper .paper-nav__pid, html.page--homework_paper .paper-nav__pid, html.page--training_paper .paper-nav__pid, html.page--self_learning_paper .paper-nav__pid {
+  font: 12px/1.6 ui-monospace, Consolas, monospace;
+}
+html.page--contest_paper .paper-nav__state, html.page--homework_paper .paper-nav__state, html.page--training_paper .paper-nav__state, html.page--self_learning_paper .paper-nav__state {
+  float: right;
+  color: #0ca678;
+  font-weight: bold;
+}
+html.page--contest_paper .paper-nav__item--on > a, html.page--homework_paper .paper-nav__item--on > a, html.page--training_paper .paper-nav__item--on > a, html.page--self_learning_paper .paper-nav__item--on > a {
+  background: rgba(12, 166, 120, .10);
+  border-radius: 8px;
+}
+html.page--contest_paper .paper-note, html.page--homework_paper .paper-note, html.page--training_paper .paper-note, html.page--self_learning_paper .paper-note {
+  font-size: 12px;
+  color: var(--pta-ink-soft);
+  margin: 8px 2px;
+  line-height: 1.5;
+}
+html.page--contest_paper .paper-blank, html.page--homework_paper .paper-blank, html.page--training_paper .paper-blank, html.page--self_learning_paper .paper-blank { display: inline-block; min-width: 160px; }
+html.page--contest_paper .paper-opt, html.page--homework_paper .paper-opt, html.page--training_paper .paper-opt, html.page--self_learning_paper .paper-opt { display: block; margin: 4px 0; }
+
+
+/* ---------------------- list-row delete affordance ------------------------ */
+
+.list-del {
+  display: inline-block;
+  float: right;
+  margin: 2px 0 0 10px;
+}
+/* A labeled destructive button — visible at rest, unmistakably red on hover,
+   never just an icon. */
+.list-del__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--pta-crimson-line);
+  background: var(--pta-card);
+  color: var(--pta-crimson-text);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.list-del__btn:hover {
+  background: var(--pta-crimson-soft);
+}
+.list-del__btn:active {
+  transform: translateY(1px);
+}
+.sll-cardwrap {
+  position: relative;
+}
+.sll-cardwrap .sll-card {
+  display: block;
+}
+.list-del--card {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  float: none;
+  margin: 0;
+  z-index: 2;
+}
+
+
+html.page--contest_paper .paper-top__bar, html.page--homework_paper .paper-top__bar, html.page--training_paper .paper-top__bar, html.page--self_learning_paper .paper-top__bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+html.page--contest_paper .paper-top__title, html.page--homework_paper .paper-top__title, html.page--training_paper .paper-top__title, html.page--self_learning_paper .paper-top__title {
+  flex: 1 1 auto;
+  margin: 0;
+}
+html.page--contest_paper .paper-top__back, html.page--homework_paper .paper-top__back, html.page--training_paper .paper-top__back, html.page--self_learning_paper .paper-top__back {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+html.page--contest_paper .paper-top__note, html.page--homework_paper .paper-top__note, html.page--training_paper .paper-top__note, html.page--self_learning_paper .paper-top__note {
+  padding-top: 0;
+  font-size: 12px;
+  color: var(--pta-ink-soft);
+}
+
+
+html.page--contest_paper .paper-top__saved, html.page--homework_paper .paper-top__saved, html.page--training_paper .paper-top__saved, html.page--self_learning_paper .paper-top__saved {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2b8a3e;
+  opacity: 0;
+  transition: opacity .25s ease;
+}
+html.page--contest_paper .paper-top__saved--on, html.page--homework_paper .paper-top__saved--on, html.page--training_paper .paper-top__saved--on, html.page--self_learning_paper .paper-top__saved--on {
+  opacity: 1;
+}
+
+
+/* "answered, saved on this device" stamp on assessment problem tables */
+.paper-draft-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2b8a3e;
+  background: #ebfbee;
+  border: 1px solid #b2f2bb;
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: default;
+}
+.theme--dark .paper-draft-chip {
+  color: #69db7c;
+  background: rgba(43, 138, 62, .15);
+  border-color: rgba(105, 219, 124, .35);
+}

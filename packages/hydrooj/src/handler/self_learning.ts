@@ -3,13 +3,14 @@ import { ObjectId } from 'mongodb';
 import { STATUS, STATUS_SHORT_TEXTS, STATUS_TEXTS } from '@hydrooj/common';
 import { Context } from '../context';
 import { Logger } from '../logger';
-import {
+import { ContestNotLiveError, ContestNotAttendedError,
     BadRequestError, ForbiddenError, NotFoundError, PermissionError,
     ProblemConfigError, ProblemNotAllowLanguageError, ValidationError,
 } from '../error';
 import type { ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
 import { AiStudioDetailHandler, AiStudioHandler, registerAiStudioTemplates } from './ai_author';
+import { ContestDetailBaseHandler } from './contest';
 import { PERM, PRIV } from '../model/builtin';
 import * as contest from '../model/contest';
 import domain from '../model/domain';
@@ -19,7 +20,6 @@ import storage from '../model/storage';
 import SelfLearningModel, { getClassReport, getSubjective, getSuggestionReportsIn, getTutorThreadsIn, listSubjective, removeSubjectiveFile, setClassReport, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
-import * as training from '../model/training';
 import user from '../model/user';
 import { Handler, param, Types } from '../service/server';
 
@@ -1084,6 +1084,38 @@ class BulkAddUsersHandler extends Handler {
                 for (const a of assignments) {
                     await domain.setUserRole(a.domainId, uid, a.role, true); // autojoin: membership + role
                 }
+                /*
+                 * The roster's real name becomes the domain displayName —
+                 * "First Last", e.g. "Leming Shen" — so the ID (22040929R)
+                 * stays the login/uname while people see a human name in the
+                 * nav and user cards. Written to every assigned domain PLUS
+                 * 'system' (the homepage renders under 'system', and a name
+                 * set only in course domains would vanish there). The roster
+                 * is authoritative: re-importing updates existing users too.
+                 */
+                const realName = [firstName, lastName].filter(Boolean).join(' ').slice(0, 255);
+                if (realName) {
+                    /*
+                     * The roster is AUTHORITATIVE for names, and (with the
+                     * settings fields now FLAG_DISABLED) this importer is
+                     * their only writer. Overwrite BOTH fields with exactly
+                     * what the row says — including setting the absent half
+                     * to '', so a corrected re-import clears a stale value
+                     * instead of merging with it. Rows with no name at all
+                     * skip this block and leave the account untouched.
+                     */
+                    await user.setById(uid, {
+                        firstName: firstName.slice(0, 120),
+                        lastName: lastName.slice(0, 120),
+                    });
+                    // Compatibility copy: components/user.html and rankings
+                    // already render the per-domain displayName, so keep it in
+                    // step wherever the student was assigned.
+                    const nameDomains = new Set(['system', ...assignments.map((a) => a.domainId)]);
+                    for (const dom of nameDomains) {
+                        await domain.setUserInDomain(dom, uid, { displayName: realName });
+                    }
+                }
                 (isNew ? created : existed).push(uname);
             } catch (e) {
                 errors.push({ uname, error: e.message || `${e}` });
@@ -1752,6 +1784,130 @@ class SubjectiveFileHandler extends Handler {
     }
 }
 
+
+/* ------------------------------------------------------------------ */
+/*  Combined objective paper for a test / homework                     */
+/* ------------------------------------------------------------------ */
+/**
+ * One page holding EVERY objective task of a contest ("Test") or homework,
+ * in problem order — the one-question-per-task model makes each section a
+ * single question, so the page reads like a paper. The sidebar lists the
+ * tasks and anchors into the page; answering and submitting stays strictly
+ * per-problem underneath (one record per task, exactly as if each problem
+ * page had been used), so scoreboards, records and rejudging all behave
+ * identically to individual submission.
+ *
+ * Extends ContestDetailBaseHandler: tdoc/tsdoc loading and the group-assign
+ * check are inherited, and the same class serves homework because both
+ * live in TYPE_CONTEST.
+ */
+class ObjectivePaperHandler extends ContestDetailBaseHandler {
+    @param('tid', Types.ObjectId)
+    async get(domainId: string, tid: ObjectId) {
+        const tdoc = this.tdoc!;
+        const canManage = this.user.own(tdoc) || this.user.hasPerm(PERM.PERM_EDIT_CONTEST) || this.user.role === 'root';
+        if (!canManage) {
+            if (contest.isNotStarted(tdoc)) throw new ContestNotLiveError(domainId, tid);
+            if (!this.tsdoc?.attend) throw new ContestNotAttendedError(domainId, tid);
+        }
+        const isHomework = tdoc.rule === 'homework';
+        // Verdicts for objective tasks are withheld until the container
+        // ends (contest.applyProjection masks the records); tell the paper
+        // so it neither polls for results nor pre-colors chips from the
+        // student's global problem status — either would leak.
+        const resultsWithheld = !canManage && !contest.isDone(tdoc, this.tsdoc);
+        await respondObjectivePaper(this, domainId, {
+            resultsWithheld,
+            heading: tdoc.title,
+            backUrl: this.url(isHomework ? 'homework_detail' : 'contest_detail', { tid }),
+            pageName: isHomework ? 'homework_paper' : 'contest_paper',
+            storeKey: tid.toHexString(),
+            docIds: tdoc.pids || [],
+            // ?tid keeps each record inside the contest, exactly as the
+            // single-problem page would.
+            submitUrlFor: (docId) => this.url('problem_submit', { pid: docId, query: { tid: tid.toHexString() } }),
+            chipHrefFor: (pdoc) => this.url('problem_detail', { pid: pdoc.docId, query: { tid: tid.toHexString() } }),
+        });
+    }
+}
+
+/** And from a self-learning session's problem list. */
+class SelfLearningPaperHandler extends Handler {
+    @param('ssid', Types.ObjectId)
+    async get({ domainId }, ssid: ObjectId) {
+        const sdoc = await loadSession(domainId, ssid);
+        await respondObjectivePaper(this, domainId, {
+            heading: sdoc.title,
+            backUrl: this.url('self_learning_detail', { ssid }),
+            pageName: 'self_learning_paper',
+            storeKey: ssid.toHexString(),
+            docIds: sdoc.pids || [],
+            submitUrlFor: (docId) => this.url('problem_submit', { pid: docId }),
+            chipHrefFor: (pdoc) => this.url('self_learning_solve', { ssid, pid: pdoc.docId }),
+        });
+    }
+}
+
+/**
+ * Shared renderer: the four containers differ only in where the problem
+ * list comes from, how records should be tagged, and where Back leads.
+ * Everything else — objective filtering by the O pid prefix, section
+ * assembly, UiContext for the page script — is identical by construction.
+ */
+async function respondObjectivePaper(h: Handler, domainId: string, opts: {
+    heading: string, backUrl: string, pageName: string, storeKey: string,
+    docIds: number[], submitUrlFor: (docId: number) => string,
+    chipHrefFor: (pdoc: any) => string,
+    resultsWithheld?: boolean,
+}) {
+    const pdocs = (await Promise.all((opts.docIds || []).map((docId) => problem.get(domainId, docId))))
+        .filter((x) => x);
+    const objective = pdocs.filter((pdoc) => /^o/i.test(String(pdoc.pid || '')));
+    const tasks = objective.map((pdoc, k) => ({
+        docId: pdoc.docId,
+        pid: pdoc.pid,
+        index: k + 1,
+        title: pdoc.title,
+        submitUrl: opts.submitUrlFor(pdoc.docId),
+        content: pdoc.content,
+    }));
+    h.response.template = 'objective_paper.html';
+    h.response.body = {
+        heading: opts.heading,
+        backUrl: opts.backUrl,
+        tasks,
+        othersCount: pdocs.length - objective.length,
+        page_name: opts.pageName,
+    };
+    h.UiContext.paperTasks = tasks.map(({ content, ...t }) => t);
+    h.UiContext.paperKey = opts.storeKey;
+    h.UiContext.paperWithheld = !!opts.resultsWithheld;
+    /*
+     * The fixed-left problems rail (auto_scratchpad's sl-rail) replaces the
+     * paper's own sidebar: every task of the container, all kinds, with the
+     * student's solve status. Objective chips anchor into the paper; other
+     * kinds carry the container context out to their own pages, so nobody
+     * has to hop back to the detail page to move around.
+     */
+    const psdict = await problem.getListStatus(domainId, (h as any).user._id, pdocs.map((p) => p.docId));
+    h.UiContext.paperRail = {
+        items: pdocs.map((pdoc) => {
+            const pidStr = String(pdoc.pid || '');
+            const kind = /^o/i.test(pidStr) ? 'objective' : (/^s/i.test(pidStr) ? 'subjective' : 'programming');
+            return {
+                pid: pdoc.pid || pdoc.docId,
+                kind,
+                // While results are withheld, objective chips stay neutral:
+                // the global problem status would reveal exactly what the
+                // record mask is hiding.
+                status: (opts.resultsWithheld && kind === 'objective') ? 0 : (psdict[pdoc.docId]?.status || 0),
+                title: pdoc.title,
+                href: kind === 'objective' ? `#q-${pdoc.docId}` : opts.chipHrefFor(pdoc),
+            };
+        }),
+    };
+}
+
 export async function apply(ctx: Context) {
     ctx.Route('self_learning', '/self-learning', SelfLearningMainHandler);
     ctx.Route('self_learning_create', '/self-learning/create', SelfLearningEditHandler, PRIV.PRIV_USER_PROFILE);
@@ -1777,6 +1933,9 @@ export async function apply(ctx: Context) {
     // ai_author.ts: new handler files are only discovered at boot and the
     // HMR watcher cannot see them, so their routes would 404 until a cold
     // restart. self_learning.ts is always loaded and hot-reloads.
+    ctx.Route('contest_paper', '/contest/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('homework_paper', '/homework/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_HOMEWORK);
+    ctx.Route('self_learning_paper', '/self-learning/:ssid/paper', SelfLearningPaperHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('ai_studio', '/ai-studio', AiStudioHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('ai_studio_detail', '/ai-studio/:id', AiStudioDetailHandler, PRIV.PRIV_USER_PROFILE);
     registerAiStudioTemplates(ctx); // template registry survives hot-reload; no cold restart needed
@@ -1793,27 +1952,8 @@ export async function apply(ctx: Context) {
             }
             return;
         }
-        // Training context: its problems link to the plain problem page, so
-        // the frontend carries the training id along as ?trid=... — resolve
-        // the training's DAG into a flat, ordered problem list here.
-        const trid = h.args?.trid;
-        if (trid && /^[0-9a-f]{24}$/i.test(String(trid))) {
-            try {
-                const ttdoc = await training.get(h.args.domainId, new ObjectId(String(trid)));
-                const pids: number[] = ttdoc ? training.getPids(ttdoc.dag || []) : [];
-                if (pids.length >= 2) {
-                    h.UiContext.trainingRail = {
-                        trid: String(trid),
-                        title: ttdoc.title || '',
-                        kinds: await activityKinds(h.args.domainId, pids, h.user?._id),
-                    };
-                    logger.info('[pta-ui] rail kinds injected via %s (training): %d problem(s) for trid=%s', source, pids.length, trid);
-                    return;
-                }
-            } catch (e) {
-                logger.warn('[pta-ui] training rail kinds failed via %s: %s', source, e.message);
-            }
-        }
+        // (Training removed for this deployment: the ?trid rail decorator
+        // that lived here went with it.)
         // Problem set: plain problem pages (no contest tid) get the same left
         // sidebar — a window of the problem list around the current problem,
         // in docId order, honoring hidden-problem visibility.

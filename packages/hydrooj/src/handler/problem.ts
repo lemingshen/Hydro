@@ -355,8 +355,21 @@ export class ProblemDetailHandler extends ContestDetailBaseHandler {
         if (!this.pdoc) throw new ProblemNotFoundError(domainId, pid);
         if (tid) {
             if (!this.tdoc?.pids?.includes(this.pdoc.docId)) throw new ContestNotFoundError(domainId, tid);
-            if (contest.isNotStarted(this.tdoc)) throw new ContestNotLiveError(tid);
-            if (!contest.isDone(this.tdoc, this.tsdoc) && (!this.tsdoc?.attend || !this.tsdoc.startAt)) throw new ContestNotAttendedError(tid);
+            /*
+             * Managers were previously held to the same claim-and-start rule
+             * as students, so the TEACHER clicking a task inside their own
+             * homework got ContestNotAttendedError — and, downstream, never
+             * reached the objective-paper redirect that students get. The
+             * bypass mirrors ObjectivePaperHandler's owner-or-root rule, so
+             * every role now travels the identical tid path.
+             */
+            const canManageTdoc = this.user.own(this.tdoc)
+                || this.user.hasPerm(PERM.PERM_EDIT_CONTEST)
+                || this.user.role === 'root';
+            if (!canManageTdoc) {
+                if (contest.isNotStarted(this.tdoc)) throw new ContestNotLiveError(tid);
+                if (!contest.isDone(this.tdoc, this.tsdoc) && (!this.tsdoc?.attend || !this.tsdoc.startAt)) throw new ContestNotAttendedError(tid);
+            }
             // Delete problem-related info in contest mode
             if (this.pdoc.tag) this.pdoc.tag.length = 0;
             delete this.pdoc.nAccept;
@@ -429,6 +442,21 @@ export class ProblemDetailHandler extends ContestDetailBaseHandler {
     @query('tid', Types.ObjectId, true)
     @query('pjax', Types.Boolean)
     async get(...args: any[]) {
+        /*
+         * Objective tasks inside a Test or Homework are answered on the
+         * COMBINED PAPER: its sidebar lists the container's own tasks and
+         * every question sits on one page. So a document navigation that
+         * carries a tid forwards there, anchored at this very question,
+         * instead of rendering the task alone with the problem-set-wide
+         * sidebar. XHR/json callers are untouched, and without a tid the
+         * plain problem page keeps working — that is where browsing, Edit
+         * and Judge Config live.
+         */
+        if (this.tdoc && !this.request.json && /^o/i.test(String(this.pdoc?.pid || ''))) {
+            const paper = this.tdoc.rule === 'homework' ? 'homework_paper' : 'contest_paper';
+            this.response.redirect = `${this.url(paper, { tid: this.tdoc.docId })}#q-${this.pdoc.docId}`;
+            return;
+        }
         // Navigate to current additional file download
         // e.g. ![img](file://a.jpg) will navigate to ![img](./pid/file/a.jpg)
         if (!this.request.json || args[2]) {

@@ -21,6 +21,10 @@
       <li class="menu__item"><a class="menu__link" href="{{ url('homework_detail', tid=tdoc.docId) }}">
         <span class="icon icon-homework"></span> {{ _('View Homework') }}
       </a></li>
+      {# Combined page for the objective (one-question) tasks of this set. #}
+      <li class="menu__item"><a class="menu__link" href="{{ url('homework_paper', tid=tdoc.docId) }}">
+        <span class="icon icon-edit"></span> {{ _('Answer as one paper') }}
+      </a></li>
     {% endif %}
     {% if not tsdoc.attend and not model.contest.isDone(tdoc) %}
       <li class="menu__item">

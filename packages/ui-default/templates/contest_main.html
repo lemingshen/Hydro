@@ -99,6 +99,12 @@
               </div>
               <div class="media__body medium">
                 <h1 class="contest__title"><a href="{{ url('contest_detail', tid=tdoc.docId) }}" data-emoji-enabled>{{ tdoc.title }}</a></h1>
+                {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_CONTEST) %}
+                <form class="list-del " method="post" action="{{ url('contest_edit', tid=tdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
+                  <input type="hidden" name="operation" value="delete">
+                  <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
+                </form>
+                {% endif %}
                 <ul class="supplementary list">
                   <li>
                     <a href="?rule={{ tdoc['rule'] }}" class="contest-type-tag"><span class="icon icon-award"></span>{{ _(model.contest.RULES[tdoc.rule].TEXT) }}</a>

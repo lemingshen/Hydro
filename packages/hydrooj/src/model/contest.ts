@@ -1085,6 +1085,28 @@ export function getMultiClarification(domainId: string, tid: ObjectId, owner?: n
 }
 
 export function applyProjection(tdoc: Tdoc, rdoc: RecordDoc, udoc: User) {
+    /*
+     * Objective / answer submissions (they carry lang '_') reveal NOTHING
+     * while the container is running, whatever the rule says: a Test or
+     * Homework may freely include instant-feedback quiz tasks without
+     * letting students brute-force the options mid-assessment. Judging
+     * still happens immediately — only the verdict is withheld — so the
+     * moment the container ends, every result is simply visible, with no
+     * end-of-contest batch job. Managers never reach this function: every
+     * call site skips projection for owner / PERM_EDIT_CONTEST.
+     */
+    if (rdoc.lang === '_' && !isDone(tdoc)) {
+        rdoc.status = STATUS.STATUS_WAITING;
+        delete rdoc.score;
+        delete rdoc.time;
+        delete rdoc.memory;
+        delete rdoc.progress;
+        delete rdoc.subtasks;
+        rdoc.testCases = [];
+        rdoc.judgeTexts = ['Results are withheld until this assessment ends.'];
+        rdoc.compilerTexts = [];
+        return rdoc;
+    }
     if (!RULES[tdoc.rule]) return rdoc;
     return RULES[tdoc.rule].applyProjection(tdoc, rdoc, udoc);
 }

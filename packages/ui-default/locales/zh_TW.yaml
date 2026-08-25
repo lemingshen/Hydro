@@ -72,8 +72,8 @@ Add: 新增
 Additional File: 附加檔案
 Admin {0} delete your discussion "{1}".: 管理員 {0} 刪除了你的討論 "{1}"。
 Admin {0} delete your discussion tail reply {1} in "{2}"({3}).: 管理員 {0} 從討論 {2}({3}) 中刪除了你的討論串回覆 {1}。
-All {0} Contests: 所有 {0} 比賽
-All Contests: 所有比賽
+All {0} Contests: 所有 {0} 測驗
+All Contests: 所有測驗
 All Homeworks: 所有功課
 All Submissions: 所有遞交
 All Training Plans: 所有訓練計劃
@@ -92,15 +92,15 @@ Argument {0} is invalid.: 非法的引數 {0} 。
 Arguments: 引數
 astyle formatting options: Astyle 格式化選項
 At least 4 characters: 至少 4 個字元
-Attend Contest: 參加比賽
-Attend contests: 參加比賽
+Attend Contest: 參加測驗
+Attend contests: 參加測驗
 Attended: 已參加
 author: 作者
 Auto adjust the format of line breaks and remove unnecessary whitespace characters.: 自動調整換行符格式，並移除不必要的空白字元。
 Auto format code: 自動格式化程式碼
 Auto organize input: 自動整理輸入
 Avatar: 頭像
-Back to contest list: 返回比賽列表
+Back to contest list: 返回測驗列表
 Background: 背景
 Be Copied: 被複制
 Begin at: 開始於
@@ -115,7 +115,7 @@ Browser: 瀏覽器
 Built-in: 內建
 Bulletin: 公告
 By clicking the button, you will become a member of the domain {0}.: 點選按鈕，您將成為域 {0} 的成員。
-By Contest: 由比賽
+By Contest: 由測驗
 By Problem: 由題目
 By Username / UID: 由使用者名稱或 UID
 Calculate rp of a domain, or all domains: 計算使用者的 RP
@@ -160,28 +160,28 @@ Contact Us: 聯絡我們
 Contact: 聯絡
 content: 內容
 Content: 內容
-Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 比賽 {0} 有一條關於 {1} 的新答疑，請前往比賽答疑頁面回覆。
-Contest {0} jury replied to your clarification, please go to contest page to view.: 比賽 {0} 的裁判回覆了您的答疑，請前往比賽頁面檢視。
+Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 測驗 {0} 有一條關於 {1} 的新答疑，請前往測驗答疑頁面回覆。
+Contest {0} jury replied to your clarification, please go to contest page to view.: 測驗 {0} 的裁判回覆了您的答疑，請前往測驗頁面檢視。
 Contest Clarifications: 賽時答疑
-Contest Management: 比賽管理
-Contest scoreboard is not visible.: 當前比賽成績表隱藏，暫不可顯示。
-Contest Scoreboard: 比賽成績表
+Contest Management: 測驗管理
+Contest scoreboard is not visible.: 當前測驗成績表隱藏，暫不可顯示。
+Contest Scoreboard: 測驗成績表
 contest_balloon: 氣球狀態
-contest_clarification: 賽時答疑
-contest_create: 建立比賽
-contest_detail_problem_submit: 遞交比賽程式碼
+contest_clarification: 測驗答疑
+contest_create: 建立測驗
+contest_detail_problem_submit: 遞交測驗程式碼
 contest_detail_problem: 題目詳情
-contest_detail: 比賽詳情
-contest_edit: 編輯比賽
-contest_main: 比賽
-contest_manage: 比賽管理
+contest_detail: 測驗詳情
+contest_edit: 編輯測驗
+contest_main: 測驗
+contest_manage: 測驗管理
 contest_print: 列印
 contest_problemlist: 題目列表
-contest_scoreboard: 比賽成績表
+contest_scoreboard: 測驗成績表
 contest_user: 參賽者管理
-contest: 比賽
-Contest: 比賽
-Contests per page: 每頁展示的比賽數量
+contest: 測驗
+Contest: 測驗
+Contests per page: 每頁展示的測驗數量
 Continue: 繼續
 Contributed Problems: 貢獻的題目
 Contributions: 貢獻
@@ -193,11 +193,11 @@ Copy WeChat Account: 複製微訊號
 Copy: 複製
 Copyright Complaint: 版權申訴
 CPU Info: CPU資訊
-Create a contest: 建立一個比賽
+Create a contest: 建立一個測驗
 Create a Discussion: 建立一個討論
 Create a problem: 建立一個題目
-Create Contest: 建立比賽
-Create contests: 建立比賽
+Create Contest: 建立測驗
+Create contests: 建立測驗
 Create Discussion in {0}: 在 {0} 下建立討論
 Create Discussion: 建立討論
 Create discussions: 建立討論
@@ -302,9 +302,9 @@ Download: 下載
 Downvote: 差評
 Duration (hours): 持續時間 (小時)
 Duration: 持續時間
-Edit any contests: 修改任意的比賽
+Edit any contests: 修改任意的測驗
 Edit any homework: 修改任意功課
-Edit Contest: 編輯比賽
+Edit Contest: 編輯測驗
 Edit description of this domain: 修改此域描述
 Edit discussion replies of own discussion: 修改自己討論中的回覆
 Edit discussion replies: 修改討論的回覆
@@ -312,7 +312,7 @@ Edit discussions: 修改討論
 Edit domain settings: 編輯域設定
 Edit Domain: 編輯域
 Edit Homework: 編輯功課
-Edit own contests: 修改自己的比賽
+Edit own contests: 修改自己的測驗
 Edit own discussion replies: 修改討論中自己的回覆
 Edit own discussions: 修改自己的討論
 Edit own homework: 修改自己的功課
@@ -418,7 +418,7 @@ In 1 month: 一個月後
 In 1 week: 一週後
 In 3 days: 三天後
 In 3 hours: 三個小時後
-In following contests: 在下列比賽中
+In following contests: 在下列測驗中
 In following homework: 在以下功課中
 In following training plans: 在下列訓練計劃中
 In Progress: 進行中
@@ -468,7 +468,7 @@ Live...: 正在進行…
 Location: 位置
 Lock discussions: 鎖定討論
 Lock Topic: 鎖定主題
-Login to Attend Contest: 登入後參加比賽
+Login to Attend Contest: 登入後參加測驗
 Login to Claim Homework: 登入以認領功課
 Login to Create a Discussion: 登入後建立討論
 Login to join training plan: 登入以參加訓練計劃
@@ -524,7 +524,7 @@ New: 建立
 No comments so far...: 目前還沒有評論...
 No dataset at present.: 暫無測試資料。
 No discussion yet...: 目前沒有討論…
-No Permission to Attend Contest: 您沒有許可權參加比賽
+No Permission to Attend Contest: 您沒有許可權參加測驗
 No Permission to Claim Homework: 您沒有許可權認領功課
 No Permission to Create a Discussion: 您沒有許可權建立討論
 No Permission to Submit: 您沒有許可權遞交
@@ -581,7 +581,7 @@ Passwords don't match.: 驗證密碼不匹配。
 Path {0} not found.: 路徑 {0} 不存在。
 Peak Memory: 峰值記憶體
 Penalty (Minutes): 罰時（分鐘）
-perm_contest: 比賽
+perm_contest: 測驗
 perm_discussion: 討論
 perm_general: 一般
 perm_homework: 作業
@@ -598,7 +598,7 @@ pid: 題目 ID
 Pin discussions: 置頂討論
 Pin training plans: 置頂訓練計劃
 Plan: 計劃
-Please attend contest to see the problems.: 請參加比賽來檢視題目。
+Please attend contest to see the problems.: 請參加測驗來檢視題目。
 Please claim the assignment to see the problems.: 認領功課後方可檢視題目。
 Please select at least one role to perform this operation.: 請選擇至少一個角色來進行操作。
 Please select at least one user to perform this operation.: 請選擇至少一個使用者來進行操作。
@@ -861,10 +861,10 @@ The uploaded file is too long.: 上傳的檔案太長。
 The user is already a member of the domain.: 該使用者已是域的成員。
 The user is too lazy to leave something here...: 該使用者太懶，這裡啥也沒寫 (´・ω・｀)
 theme: 主題
-There are no contests...: 沒有比賽…
+There are no contests...: 沒有測驗…
 There is no homework so far ╰(*°▽°*)╯: 目前沒有功課 ╰(*°▽°*)╯
-This contest is not live.: 比賽沒有開始。
-This contest has already started.: 比賽已開始。
+This contest is not live.: 測驗沒有開始。
+This contest has already started.: 測驗已開始。
 This email was sent by {0} automatically, and please do not reply directly.: 這封郵件由 {0} 自動傳送，請勿直接回復。
 This homework is not open and you cannot view problems.: 功課尚未開放，不能檢視題目。
 This homework is not open.: 功課尚未開放遞交。
@@ -946,15 +946,15 @@ Valid for registered users who are not members of the domain: 對域外註冊使
 Valid for visitors: 對未登入的遊客有效
 Verify register email: 註冊需郵件驗證
 Version: 版本
-View all contests: 檢視所有比賽
+View all contests: 檢視所有測驗
 View all homework: 檢視所有作業
-View contest scoreboard: 檢視比賽成績表
-View Contest: 檢視比賽
-View contests: 檢視比賽
+View contest scoreboard: 檢視測驗成績表
+View Contest: 檢視測驗
+View contests: 檢視測驗
 View Details: 檢視詳情
 View discussions: 檢視討論
 View domain user private info: 顯示域中使用者的私有資訊
-View hidden contest submission status and scoreboard: 檢視隱藏的比賽遞交狀態和成績表
+View hidden contest submission status and scoreboard: 檢視隱藏的測驗遞交狀態和成績表
 View hidden homework submission status and scoreboard: 翻閲隱藏的功課遞交狀態和成績表
 View hidden problems: 檢視隱藏的題目
 View homework scoreboard: 翻閲功課成績表
@@ -1008,11 +1008,11 @@ You have been kicked from domain {0} by {1}.: 您已被 {1} 從域 {0} 中移除
 You have not submitted any solutions for this problem: 您在該題下沒有遞交過任何解答
 You have permission to create problems for this domain.: 您有許可權為此域建立題目。
 You have uncompleted domain creation operation. You can click "Continue" to finish the creation.: 您有未完成的建立域操作。您可以點選“繼續”來完成建立。
-You haven't attended this contest yet.: 您還沒有參加本次比賽。
+You haven't attended this contest yet.: 您還沒有參加本次測驗。
 You haven't claimed this homework yet.: 您還未認領該功課。
 You need to enter the invitation code to join the domain.: 您需要輸入邀請碼來加入此域。
 You're not logged in.: 您沒有登入。
-You've already attended this contest.: 您已經參加本次比賽。
+You've already attended this contest.: 您已經參加本次測驗。
 You've already claimed this homework.: 您已認領該功課。
 You've already voted.: 您已經投過票。
 Your permission: 您的許可權
@@ -1295,3 +1295,151 @@ Subjective: 主觀題
 "e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides": 例如：基於本週簡報出一份 6 題的迴圈與條件小測
 "Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)": '題面（Markdown，使用 {{ input/select/multiselect/dropdown }} 題目標記）'
 "This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)": 這個需求看起來像客觀題（判斷 / 選擇 / 填空）。要改為建立客觀題任務嗎？（確定 = 客觀題任務，取消 = 保持程式任務）
+
+# AI Studio: three task kinds + statement-review phase
+AI Studio: AI 出題工作室
+Subjective task: 主觀題任務
+Questions: 題目
+Project-level assignment — students submit files and a report; you grade it. Written by chatting with the AI.: 專案型作業——學生提交檔案與報告，由你評分。透過與 AI 對話撰寫。
+Auto-graded quiz — true/false, choice, fill-in-the-blank — you approve the questions, then the AI writes the answer key.: 自動評分小考——判斷、選擇、填空——你確認題目後，AI 再生成答案。
+? Describe the task you want and attach the relevant slides below. The AI drafts the statement first — you review it, refine it by chat, and only then does it continue.
+: 描述你想要的題目，並在下方附上相關簡報。AI 會先起草題面——你審閱、透過對話修改，之後它才繼續。
+The language the questions are about.: 題目所涉及的程式語言。
+'e.g. A mini-project: build a command-line address book in C and report on your data-structure choices': 例如：小專案——用 C 實作命令列通訊錄，並就資料結構的選擇撰寫報告
+Generate statement: 生成題面
+Generate questions: 生成題目
+Regenerate from scratch: 重新生成
+Regenerate the key: 重新生成答案
+Save my edits: 儲存我的修改
+Happy with the statement? Continue — the AI then writes the solution, cross-check and tests.: 題面滿意了嗎？點擊「繼續」，AI 將接著生成參考解答、交叉校驗與測試資料。
+Happy with the questions? Continue — the AI then writes the answer key.: 題目滿意了嗎？點擊「繼續」，AI 將接著生成答案。
+Happy with the assignment? Continue to assemble and publish it.: 作業滿意了嗎？點擊「繼續」以組裝並發布。
+Review step — edit the text directly, or ask the AI below. Nothing else runs until you press Continue.: 審閱階段——可直接編輯文字，或在下方與 AI 對話。在你點擊「繼續」之前，不會執行任何後續步驟。
+Editing this sends the draft back to review — press Continue again afterwards.: 修改後草稿將回到審閱階段——請再次點擊「繼續」。
+Refine with the AI: 與 AI 一起修改
+Tell it what to change about: 告訴它要修改
+this statement: 這段題面
+these questions: 這些題目
+this assignment: 這份作業
+Clear chat: 清空對話
+Thinking…: 思考中…
+Describe the change you want, then press Send (Ctrl+Enter): 描述你想要的修改，然後點擊傳送（Ctrl+Enter）
+? 'Ask for a change and the AI rewrites the text above — for example: "make the constraints smaller", "add a worked example", "写成中文".'
+: 提出修改要求，AI 會重寫上方文字——例如：「把資料範圍調小」「加一個例子」「寫成中文」。
+The AI applied your change — check the text above.: AI 已套用你的修改——請查看上方文字。
+Regenerate from scratch? The current text and this conversation will be replaced.: 確定重新生成？目前文字與本次對話都將被替換。
+Statement approved — drafting the solution, cross-check and tests.: 題面已確認——正在生成參考解答、交叉校驗與測試資料。
+Questions approved — writing the answer key.: 題目已確認——正在生成答案。
+Assignment approved — assembling it now.: 作業已確認——正在組裝。
+No statement yet — press Generate statement above.: 尚無題面——請點擊上方的「生成題面」。
+No questions yet — press Generate questions above.: 尚無題目——請點擊上方的「生成題目」。
+Questions (markdown with {{ input/select/multiselect/dropdown }} markers): 題目（markdown，使用 {{ input/select/multiselect/dropdown }} 標記）
+'Assignment brief (markdown: deliverables, report contents, rubric)': 作業說明（markdown：交付物、報告內容、評分標準）
+'A briefing for you, not for students: what a strong submission looks like, and how to apply the rubric consistently.': 給你而非學生的說明：優秀提交是什麼樣子，以及如何一致地套用評分標準。
+Assemble assignment: 組裝作業
+Grading briefing: 評分說明
+Answer key: 答案
+Ready to publish.: 可以發布了。
+Task kind: 題目類型
+Wrong kind? Switch here — the requirement and uploaded files are kept, but every drafted artifact is cleared.: 類型選錯了？在此切換——需求與已上傳檔案會保留，但已生成的內容將全部清除。
+Published drafts keep their kind.: 已發布的草稿無法變更類型。
+Switch task kind? Everything drafted so far will be cleared — your requirement and uploaded files are kept.: 確定切換題目類型？目前已生成的內容將被清除——需求與已上傳檔案會保留。
+Task kind changed — generate again.: 題目類型已變更——請重新生成。
+Statement drafted — review it, then press Continue.: 題面已生成——請審閱後點擊「繼續」。
+Questions drafted — review them, then press Continue.: 題目已生成——請審閱後點擊「繼續」。
+Untitled quiz: 未命名小考
+Untitled assignment: 未命名作業
+Auto-graded quiz — Hydro objective format: 自動評分客觀題——Hydro 客觀題格式
+Check every question below. The answer key is written only after you press Continue.: 請逐題檢查下方內容。只有在你點擊「繼續」之後，AI 才會生成答案。
+Questions and key are set — publish when you are happy.: 題目與答案均已就緒——確認無誤後即可發布。
+Quiz title: 小考標題
+Edit the markdown source: 編輯 Markdown 原始碼
+'Hydro objective format: {{ input(n) }} · {{ select(n) }} + option list · {{ multiselect(n) }} · {{ dropdown(n)[a, b] }}': Hydro 客觀題格式：{{ input(n) }} · {{ select(n) }} 加選項列表 · {{ multiselect(n) }} · {{ dropdown(n)[a, b] }}
+Editing the questions sends the draft back to review — press Continue again afterwards.: 修改題目後草稿將回到審閱階段——請再次點擊「繼續」。
+? 'The key the judge grades with. One line per question — id: [answer, score]. Choice answers are option letters; scores must total 100.'
+: '評測機據此評分。每題一行——編號: [答案, 分值]。選擇題答案為選項字母；分值總和必須為 100。'
+No question markers found. Check the markdown source below — every question needs a {{ ... }} marker.: 未找到題目標記。請檢查下方原始碼——每道題都需要一個 {{ ... }} 標記。
+questions: 題
+points total: 分（合計）
+should be 100: 應為 100
+Answer key not written yet: 尚未生成答案
+pts: 分
+Expected: 期望答案
+Graded by you — students upload files and a report. No judge, no test data.: 由你評分——學生上傳檔案與報告。不經評測機，也無測試資料。
+Assignment: 作業
+What students will see: 學生看到的效果
+No assignment yet — press Draft the assignment above, or just start chatting once it exists.: 尚無作業——請點擊上方的「起草作業」。
+Draft the assignment: 起草作業
+Re-validate: 重新校驗
+? 'A briefing for you, not for students: what the quiz covers, the correct answer for each question and why, and the misconception each distractor targets.'
+: 給你而非學生的說明：小考涵蓋哪些內容、每題的正確答案及原因，以及每個干擾項針對的誤解。
+Quiz setup: 小考設定
+The generator reads exactly these settings.: 生成時嚴格依據以下設定。
+What should the quiz cover?: 這份小考要考查什麼？
+'e.g. the switch-case statement: syntax, fall-through, and when to prefer it over if-else': 例如：switch-case 陳述式的語法、貫穿（fall-through），以及何時優於 if-else
+How many questions?: 出幾道題？
+Let the AI decide: 由 AI 決定
+Questions are about: 題目涉及的語言
+Leave every type unchecked to let the AI mix them sensibly.: 全部不勾選則由 AI 自行搭配題型。
+Save setup: 儲存設定
+Then press Generate questions to rebuild the quiz against it.: 隨後點擊「生成題目」按新設定重建小考。
+Setup saved — press Generate questions to rebuild the quiz.: 設定已儲存——點擊「生成題目」重建小考。
+Course material: 課程材料
+build: 建置
+Backend build: 後端建置
+Draft questions: 生成題目
+Draft assignment: 生成作業
+Draft statement: 生成題面
+What the AI actually replied: AI 的原始回覆
+Statement: 題面
+Assignment brief: 作業說明
+Markdown. Leave out samples — the judge computes them from your tests.: Markdown。無需寫範例——評測機會依據測試資料自動生成。
+Markdown with {{ input / select / multiselect / dropdown }} markers.: Markdown，使用 {{ input / select / multiselect / dropdown }} 標記。
+'Markdown: the deliverables, what the report must contain, and the grading rubric.': Markdown：交付物、報告須包含的內容，以及評分標準。
+The preview toggle in the toolbar shows exactly what students will see.: 工具列中的預覽按鈕可查看學生看到的效果。
+Problem ID — its prefix marks the task kind: 題目 ID——前綴標識題目類型
+Solution language: 參考解答語言
+Language the questions are about: 題目涉及的語言
+Language the project is written in: 專案使用的語言
+Keep hidden after publishing: 發布後暫不對學生可見
+Published · hidden from students: 已發布 · 學生不可見
+Published · visible to students: 已發布 · 學生可見
+Reveal to students: 對學生開放
+Hide from students: 對學生隱藏
+Published · hidden: 已發布 · 隱藏
+Published but not yet visible to students: 已發布，但學生尚不可見
+hidden from students until you reveal it: 學生不可見，待你開放
+Students can now see this task.: 學生現在可以看到該題目了。
+Hidden — students can no longer see this task.: 已隱藏——學生將看不到該題目。
+Publishing finalizes the task. Tick the box to keep it invisible to students until you reveal it.: 發布即定稿。勾選後題目暫不對學生可見，直到你手動開放。
+Students cannot see or open this task yet. Reveal it when the class is ready.: 學生目前無法看到或開啟該題目。準備就緒後再開放。
+Hiding pulls the task from the student problem list without unpublishing it.: 隱藏會將題目從學生題庫中移除，但不會取消發布。
+? The server ignored "Keep hidden" — it is running an older backend build, so the task was published VISIBLE to students. Hide it from the problem's edit page, then restart hydrooj and check the build stamp in the Studio header.
+: 伺服器忽略了「發布後暫不可見」——後端仍是舊版本，題目已對學生可見。請先在題目編輯頁將其隱藏，然後重啟 hydrooj 並檢查工作室頁首中的建置號。
+? The running backend does not have this feature yet. Restart hydrooj, then confirm the Studio header shows build 2026-08-23c-sentinel or later. Until then, toggle visibility from the problem's own edit page.
+: 目前後端尚不支援此功能。請重啟 hydrooj，並確認工作室頁首顯示 build 2026-08-23c-sentinel 或更新版本。在此之前，可在題目編輯頁切換可見性。
+(applied via the problem list — the backend is running an older build; restart it when you can): （已透過題庫批次操作生效——後端仍為舊版本，方便時請重啟）
+First Name: 名字
+Last Name: 姓氏
+Login ID: 登入帳號
+Answer as one paper: 整卷作答
+Submit all answers: 提交全部答案
+'Each question is its own task: submitting sends one record per question, only for the ones you answered.': 每道題都是獨立題目：提交時會為你作答的每道題各生成一條記錄。
+'{0} non-objective task(s) in this set open from the task list as usual.': 本組還有 {0} 道非客觀題，請照常從題目列表開啟。
+This set contains no objective tasks.: 本組不包含客觀題。
+Nothing to submit — answer at least one question first.: 沒有可提交的內容——請先作答至少一題。
+answered, not yet submitted: 已作答，尚未提交
+submitting…: 提交中…
+submitted: 已提交
+submitted — view record: 已提交——查看記錄
+submit failed: 提交失敗
+Judged: 已評測
+publishes as: 將發布為
+separate tasks — each worth 100 points on its own: 道獨立題目——每題單獨計 100 分
+Draft problems (one per question): 草稿題目（每題一個）
+Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.: 確定永久刪除？既有的提交記錄會保留，但該項目本身無法復原。
+
+Answer: 作答
+Submitted — results are revealed when this assessment ends.: 已提交——成績將在本次測評結束後公布。
+Results are withheld until this assessment ends.: 成績將在本次測評結束後公布。
+Answers are saved on this device as you type — close the page and pick up where you left off.: 答案會隨輸入自動儲存在本裝置上——關閉頁面後再次開啟可繼續作答。

@@ -14,6 +14,113 @@ import { getAvailableLangs, getTheme, i18n, request } from 'vj/utils';
 const esc = (t) => $('<i>').text(String(t ?? '')).html();
 const fmtTs = (ts) => (ts ? new Date(ts).toLocaleString() : '-');
 
+/* ==================================================================
+ * AI Studio — visual system
+ *
+ * Direction: an instrument panel, not a marketing page. What the teacher
+ * is authoring — the statement, the questions, the code — is the hero;
+ * the chrome around it recedes.
+ *
+ * Signature: the KIND SPINE. Each workbench carries a 3px rule down its
+ * left edge whose colour encodes the task kind, and that same accent
+ * drives the tab underline, the question numerals and the pid chip.
+ * It replaces three competing full-width gradient headers with one quiet
+ * structural signal, so all three kinds share a calm identical layout and
+ * differ by exactly one thing.
+ *
+ * The accents are semantic, not decorative: indigo for code and logic,
+ * teal for right/wrong, amber for the one kind a human marks by hand.
+ * ================================================================== */
+export const AIS_POLISH = [
+  ':root { --ais-prog: #4c6ef5; --ais-obj: #0ca678; --ais-subj: #e8590c; --ais-accent: var(--ais-prog); --ais-accent-soft: rgba(76,110,245,.10); }',
+  '.aisd--obj { --ais-accent: var(--ais-obj); --ais-accent-soft: rgba(12,166,120,.10); }',
+  '.aisd--subj { --ais-accent: var(--ais-subj); --ais-accent-soft: rgba(232,89,12,.10); }',
+
+  /* ---- the card ---- */
+  // overflow:clip rounds the corners WITHOUT creating a scroll container —
+  // the inherited overflow:hidden would silently kill the sticky toolbar.
+  '.ais { border: 1px solid var(--pta-line); border-left: 3px solid var(--ais-accent); border-radius: var(--pta-radius-lg); background: var(--pta-card); box-shadow: var(--pta-shadow); margin: 0 0 16px; overflow: clip; }',
+  '.ais__head, .ais__head--obj, .ais__head--subj { background: var(--pta-card-2); color: var(--pta-ink); border-bottom: 1px solid var(--pta-line-soft); padding: 13px 18px; gap: 9px; }',
+  '.ais__title { font-size: 15px; font-weight: 650; letter-spacing: -.01em; color: var(--pta-ink); }',
+  '.ais__hint { color: var(--pta-ink-soft); opacity: 1; font-size: 12px; max-width: 46ch; line-height: 1.45; }',
+  '.ais__body { padding: 16px 18px 20px; }',
+
+  /* ---- type: labels label, they do not shout ---- */
+  '.ais__label { font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--pta-ink); margin: 16px 0 6px; }',
+  '.aisd__meta { font-size: 12px; color: var(--pta-ink-soft); line-height: 1.5; }',
+  '.ais__empty { color: var(--pta-ink-faint); padding: 18px 2px; font-size: 13px; line-height: 1.6; }',
+
+  /* ---- controls: quiet, square-ish, accent-driven ---- */
+  '.ais__btn { border-radius: 9px; padding: 7px 16px; font-size: 12.5px; font-weight: 600; background: var(--ais-accent); box-shadow: none; border: 1px solid transparent; transition: filter .12s ease, transform .12s var(--pta-ease); }',
+  '.ais__btn:hover:not(:disabled) { filter: brightness(1.07); transform: none; }',
+  '.ais__btn:active:not(:disabled) { transform: translateY(1px); }',
+  '.ais__btn--ghost { background: var(--pta-card); color: var(--ais-accent); border-color: var(--pta-line); }',
+  '.ais__btn--ghost:hover:not(:disabled) { background: var(--ais-accent-soft); border-color: var(--ais-accent); filter: none; }',
+  '.ais__btn--danger { background: var(--pta-card); color: var(--pta-crimson-text); border-color: var(--pta-crimson-line); }',
+  '.ais__btn--danger:hover:not(:disabled) { background: var(--pta-crimson-soft); filter: none; }',
+  '.ais__btn--sm { padding: 4px 12px; font-size: 12px; }',
+  '.ais__btn:disabled { opacity: .45; }',
+  '.ais :is(button, a, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ais-accent); outline-offset: 2px; border-radius: 6px; }',
+  '.ais :is(textarea, input[type=text], select) { border-color: var(--pta-line); border-radius: 8px; background: var(--pta-card); color: var(--pta-ink); transition: border-color .12s ease, box-shadow .12s ease; }',
+  '.ais :is(textarea, input[type=text], select):focus { border-color: var(--ais-accent); box-shadow: 0 0 0 3px var(--ais-accent-soft); outline: none; }',
+
+  /* ---- the action bar stays reachable in a long document ---- */
+  // 45px matches the fixed site nav, the same offset pta_theme already uses
+  // for sticky table headers on record_main.
+  '.aisd__bar { position: sticky; top: 45px; z-index: 5; padding: 10px 0; margin: 0 0 4px; background: linear-gradient(var(--pta-card) 78%, transparent); backdrop-filter: saturate(140%) blur(2px); }',
+  '.aisd__pane .aisd__bar { position: static; background: none; backdrop-filter: none; padding: 0; }',
+  '.aisd__toolhint { color: var(--pta-ink-soft); border-left: 2px solid var(--ais-accent); padding-left: 9px; margin: 2px 0 10px; }',
+
+  /* ---- tabs: the accent underlines the active one ---- */
+  '.aisd__tabs { border-bottom: 1px solid var(--pta-line-soft); padding: 0 18px; gap: 2px; }',
+  '.aisd__tab { border: none; background: none; border-radius: 8px 8px 0 0; padding: 10px 13px; font-size: 12.5px; font-weight: 550; color: var(--pta-ink-soft); box-shadow: none; }',
+  '.aisd__tab:hover { color: var(--pta-ink); background: var(--pta-card-2); }',
+  '.aisd--prog .aisd__tab--on, .aisd--obj .aisd__tab--on, .aisd--subj .aisd__tab--on, .aisd__tab--on { color: var(--ais-accent); background: none; box-shadow: inset 0 -2px 0 var(--ais-accent); }',
+
+  /* ---- banner: one calm line, no animated border ---- */
+  '.ais__banner { animation: ptaFadeUp .24s var(--pta-ease) backwards; background: var(--pta-card); border: 1px solid var(--pta-line); box-shadow: none; padding: 11px 15px; font-size: 13px; }',
+  '.ais__banner a { color: var(--ais-accent); text-decoration: none; font-weight: 600; }',
+  '.ais__banner a:hover { text-decoration: underline; }',
+  '.ais__chip { background: var(--pta-card-2); color: var(--pta-ink-soft); border: 1px solid var(--pta-line-soft); border-radius: 8px; padding: 3px 9px; }',
+  '.aisd__pidchip { background: var(--ais-accent-soft); color: var(--ais-accent); border-color: transparent; }',
+  '.aisd__hidebox { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--pta-ink-soft); cursor: pointer; user-select: none; padding: 4px 2px; }',
+  '.aisd__hidebox input { accent-color: var(--ais-accent); margin: 0; }',
+  '.aisd__vischip { font-weight: 600; }',
+
+  /* ---- kind cards on the create form ---- */
+  '.ais__kind-body { border-radius: 10px; border-width: 1px; padding: 13px 14px; }',
+  '.ais__kind:nth-child(1) { --ais-accent: var(--ais-prog); --ais-accent-soft: rgba(76,110,245,.10); }',
+  '.ais__kind:nth-child(2) { --ais-accent: var(--ais-obj); --ais-accent-soft: rgba(12,166,120,.10); }',
+  '.ais__kind:nth-child(3) { --ais-accent: var(--ais-subj); --ais-accent-soft: rgba(232,89,12,.10); }',
+  '.ais__kind:hover .ais__kind-body { border-color: var(--ais-accent); box-shadow: none; transform: none; }',
+  '.ais__kind input:checked + .ais__kind-body { border-color: var(--ais-accent); background: var(--ais-accent-soft); box-shadow: inset 3px 0 0 var(--ais-accent); }',
+  '.ais__kind-name { font-weight: 650; font-size: 13.5px; }',
+  '.ais__kindchip--p { background: var(--ais-prog); }',
+  '.ais__kindchip--o { background: var(--ais-obj); }',
+  '.ais__kindchip--s { background: var(--ais-subj); }',
+
+  /* ---- question cards inherit the objective accent ---- */
+  '.aisq__card { border-left: 2px solid var(--pta-line); transition: border-color .12s ease; }',
+  '.aisq__card:hover { border-left-color: var(--ais-accent); border-color: var(--pta-line); }',
+  '.aisq__num { background: var(--ais-accent); }',
+  '.aisq__setup { border-color: var(--pta-line); border-left: 3px solid var(--ais-accent); }',
+  '.aisq__type-chip--on { border-color: var(--ais-accent); background: var(--ais-accent-soft); color: var(--ais-accent); }',
+  '.aisq__src { border-color: var(--pta-line); border-style: solid; background: var(--pta-card-2); }',
+
+  /* ---- chat reads as a conversation, not a control panel ---- */
+  '.aisc { border-color: var(--pta-line); background: var(--pta-card-2); }',
+  '.aisc__head { background: none; border-bottom: 1px solid var(--pta-line-soft); color: var(--pta-ink); }',
+  '.aisc__turn--user { background: var(--ais-accent); }',
+  '.aisc__turn--ai { background: var(--pta-card); }',
+
+  /* ---- sidebar ---- */
+  '.aisd__side .ais { border-left-width: 3px; }',
+
+  /* ---- quality floor ---- */
+  '@media (prefers-reduced-motion: reduce) { .ais, .ais *, .aisd, .aisd * { animation: none !important; transition: none !important; } }',
+  '@media (max-width: 900px) { .aisd { grid-template-columns: 1fr; } .aisd__tabs { overflow-x: auto; } .ais__hint { display: none; } }',
+];
+
 export const AIS_STYLE = [
   '.ais { border: 1px solid #e9e2f9; border-radius: 14px; margin: 16px 0; background: #fff; overflow: hidden; box-shadow: 0 8px 28px rgba(95,61,196,.08); }',
   '.ais__head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; background: linear-gradient(100deg, #7048e8 0%, #845ef7 55%, #b197fc 100%); color: #fff; }',
@@ -70,6 +177,27 @@ export const AIS_STYLE = [
   '.ais__kindchip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; font: bold 11px/1 ui-monospace, Consolas, monospace; color: #fff; margin-right: 7px; flex: 0 0 auto; vertical-align: -4px; }',
   '.ais__kindchip--p { background: linear-gradient(120deg, #339af0, #1c7ed6); }',
   '.ais__kindchip--o { background: linear-gradient(120deg, #20c997, #0ca678); }',
+  '.ais__kindchip--s { background: linear-gradient(120deg, #9775fa, #7048e8); }',
+  '.ais__kinds--3 { grid-template-columns: repeat(3, 1fr); }',
+  '@media (max-width: 900px) { .ais__kinds--3 { grid-template-columns: 1fr; } }',
+  /* ---- statement-review chat ---- */
+  '.aisc { border: 1px solid var(--pta-violet-line); border-radius: var(--pta-radius-lg); overflow: hidden; margin-top: 12px; background: var(--pta-card); }',
+  '.aisc__head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--pta-violet-soft); font-size: 12.5px; font-weight: bold; color: var(--pta-violet-text); }',
+  '.aisc__head .aisc__clear { margin-left: auto; }',
+  '.aisc__log { max-height: 320px; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; }',
+  '.aisc__empty { color: var(--pta-ink-faint); font-size: 12px; padding: 4px 0; }',
+  '.aisc__turn { max-width: 88%; border-radius: 12px; padding: 7px 11px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; animation: ptaFadeUp .2s var(--pta-ease) backwards; }',
+  '.aisc__turn--user { align-self: flex-end; background: var(--pta-grad-violet); color: #fff; border-bottom-right-radius: 4px; }',
+  '.aisc__turn--ai { align-self: flex-start; background: var(--pta-card-2); color: var(--pta-ink); border: 1px solid var(--pta-line-soft); border-bottom-left-radius: 4px; }',
+  '.aisc__tag { display: inline-block; font-size: 10.5px; font-weight: bold; letter-spacing: .05em; text-transform: uppercase; opacity: .75; margin-bottom: 2px; }',
+  '.aisc__edited { display: inline-block; margin-left: 6px; font-size: 10.5px; border-radius: 8px; padding: 1px 7px; background: #ebfbee; color: #2b8a3e; }',
+  '.pta-dark .aisc__edited { background: #12341c; color: #69db7c; }',
+  '.aisc__form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--pta-line-soft); align-items: flex-end; }',
+  '.aisc__input { flex: 1 1 auto; resize: vertical; min-height: 44px; }',
+  '.aisc__typing { display: inline-flex; gap: 3px; align-items: center; }',
+  '.aisc__typing i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .35; animation: ais-breathe 1.1s ease-in-out infinite; }',
+  '.aisc__typing i:nth-child(2) { animation-delay: .16s; }',
+  '.aisc__typing i:nth-child(3) { animation-delay: .32s; }',
   '.ais__drop { border: 2px dashed #cdb9f7; border-radius: 12px; padding: 14px 12px; text-align: center; color: #7a6fae; cursor: pointer; background: #fcfbff; transition: background .15s, border-color .15s; user-select: none; }',
   '.ais__drop:hover, .ais__drop--over { background: #f6f1ff; border-color: #9775fa; }',
   '.ais__drop--busy { opacity: .6; pointer-events: none; }',
@@ -133,7 +261,7 @@ export const AIS_STYLE = [
   '.pta-dark .ais__badge--passed { background: #1e3524; color: #69db7c; }',
   '.pta-dark .ais__badge--failed { background: #3a1f2c; color: #faa2c1; }',
   '.pta-dark .ais__badge--published { background: #2c2440; color: #d0bdfb; }',
-].join('\n');
+].concat(AIS_POLISH).join('\n');
 
 export function ensureAisStyle() {
   if (getTheme() === 'dark') document.documentElement.classList.add('pta-dark');
@@ -215,50 +343,81 @@ export function wireAllowLangsDd($scope, onChange) {
 export function langOptionsHtml(serverLangs, selected) {
   const langs = langEntries(serverLangs);
   const keys = Object.keys(langs);
+  // Must match pickPreferredLang() on the server. A bare 'cc' is absent from
+  // many judge configs (they publish cc.cc11 / cc.cc17 / ... instead), and
+  // the old list fell through to 'c' — so a C++ course got C by default.
+  const PREF = ['cc', 'cc.cc17', 'cc.cc14', 'cc.cc11', 'cc.cc20', 'cc.cc23', 'cc.cc98', 'c', 'py.py3', 'py', 'java'];
   const sel = selected && keys.includes(selected) ? selected
-    : ['cc', 'c', 'py.py3', 'py', 'java'].find((k) => keys.includes(k)) || keys[0];
+    : PREF.find((k) => keys.includes(k)) || keys.find((k) => k.startsWith('cc')) || keys[0];
   return keys.map((k) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${$('<i>').text(langs[k]).html()}</option>`).join('');
 }
+
+/**
+ * Does this requirement read like a quiz rather than a coding exercise?
+ * Only ever used to OFFER a switch — the teacher's card selection wins.
+ * Two independent signals, because teachers phrase this very differently:
+ *   1. explicit quiz vocabulary ("multiple choice", "选择题", …)
+ *   2. a countable number of "questions" / "题", which programming tasks are
+ *      essentially never described with (those are "a problem"/"an exercise")
+ */
+const QUIZ_WORDS = /single[- ]?choice|multiple[- ]?choice|true[/ ]?(?:or )?false|fill[- ]?in[- ]?the[- ]?blank|\bquiz(?:zes)?\b|\bmcqs?\b|判断题|选择题|填空题|单选|多选|小测|测验|問答題|選擇題|判斷題|填空題|單選|多選/i;
+const QUIZ_COUNT = /\b\d+\s*(?:-|\s)?\s*questions?\b|\bquestions?\b[^.]{0,40}\b(?:check|test|assess|verify|understand|comprehension)\b|\d+\s*(?:道|个|個)\s*(?:题|題)|(?:出|设计|設計|生成)\s*\d*\s*(?:道|个|個)?\s*(?:题目|題目|题|題)/i;
+export const looksObjective = (t) => QUIZ_WORDS.test(t) || QUIZ_COUNT.test(t);
 
 const STATUS_LABEL = {
   idle: 'Draft', running: 'Verifying…', passed: 'Verified', failed: 'Failed',
 };
 
 function badge(d) {
-  if (d.published) return `<span class="ais__badge ais__badge--published">✓ ${esc(i18n('Published'))}</span>`;
+  if (d.published) {
+    return d.publishedHidden
+      ? `<span class="ais__badge ais__badge--idle" title="${esc(i18n('Published but not yet visible to students'))}">🕶 ${esc(i18n('Published · hidden'))}</span>`
+      : `<span class="ais__badge ais__badge--published">✓ ${esc(i18n('Published'))}</span>`;
+  }
   const cls = `ais__badge--${d.status || 'idle'}`;
   return `<span class="ais__badge ${cls}">${esc(i18n(STATUS_LABEL[d.status] || d.status))}</span>`;
 }
 
 function renderList($root, data) {
   const provider = data.provider || {};
-  const rows = (data.drafts || []).map((d) => `<tr>`
-    + `<td><span class="ais__kindchip ais__kindchip--${d.kind === 'objective' ? 'o' : 'p'}" title="${esc(i18n(d.kind === 'objective' ? 'Objective task' : 'Programming task'))}">${d.kind === 'objective' ? 'O' : 'P'}</span><b>${esc(d.title || d.topic)}</b></td>`
-    + `<td>${d.kind === 'objective' ? '—' : `<span class="ais__chip">${esc(d.language)}</span>`}</td>`
+  const KIND_CHIP = {
+    programming: ['p', 'P', 'Programming task'],
+    objective: ['o', 'O', 'Objective task'],
+    subjective: ['s', 'S', 'Subjective task'],
+  };
+  const rows = (data.drafts || []).map((d) => {
+    const [cls, letter, label] = KIND_CHIP[d.kind] || KIND_CHIP.programming;
+    return '<tr>'
+    + `<td><span class="ais__kindchip ais__kindchip--${cls}" title="${esc(i18n(label))}">${letter}</span><b>${esc(d.title || d.topic)}</b></td>`
+    + `<td>${d.kind === 'subjective' ? '—' : `<span class="ais__chip">${esc(d.language)}</span>`}</td>`
     + `<td>${esc(i18n(d.difficulty))}</td>`
     + `<td>${badge(d)}</td>`
     + `<td>${esc(fmtTs(d.updateAt))}</td>`
     + `<td><a class="ais__btn ais__btn--ghost ais__btn--sm" href="${domainPrefix()}/ai-studio/${d._id}">${esc(i18n('Open'))}</a></td>`
-    + '</tr>').join('');
+    + '</tr>';
+  }).join('');
   $root.html(`
     <div class="ais">
-      <div class="ais__head">✨ <span class="ais__title">${esc(i18n('AI Studio — Programming Tasks'))}</span>
-        <span class="ais__hint">${esc(i18n('Model'))}: ${esc(provider.provider || '?')} / ${esc(provider.model || '?')}</span></div>
+      <div class="ais__head">✨ <span class="ais__title">${esc(i18n('AI Studio'))}</span>
+        <span class="ais__hint">${esc(i18n('Model'))}: ${esc(provider.provider || '?')} / ${esc(provider.model || '?')}${provider.build ? ` · ${esc(i18n('build'))} ${esc(provider.build)}` : ''}</span></div>
       <div class="ais__body">
         <div class="ais__label">🧠 ${esc(i18n('New draft'))}</div>
-        <div class="ais__label" style="text-transform:none;letter-spacing:0;font-weight:normal;">${esc(i18n('Describe the task you want and attach the relevant slides below. The AI drafts the statement, solutions and tests — then the judge verifies everything before you can publish.'))}</div>
+        <div class="ais__label" style="text-transform:none;letter-spacing:0;font-weight:normal;">${esc(i18n('Describe the task you want and attach the relevant slides below. The AI drafts the statement first — you review it, refine it by chat, and only then does it continue.'))}</div>
         <div class="ais__label">${esc(i18n('What kind of task?'))}</div>
-        <div class="ais__kinds">
+        <div class="ais__kinds ais__kinds--3">
           <label class="ais__kind"><input type="radio" name="ais-kind" value="programming" checked>
             <span class="ais__kind-body"><span class="ais__kind-name">💻 ${esc(i18n('Programming task'))}</span>
             <span class="ais__kind-desc">${esc(i18n('Statement + reference solution + tests — the judge verifies everything in the sandbox before publishing.'))}</span></span></label>
           <label class="ais__kind"><input type="radio" name="ais-kind" value="objective">
             <span class="ais__kind-body"><span class="ais__kind-name">📝 ${esc(i18n('Objective task'))}</span>
-            <span class="ais__kind-desc">${esc(i18n('Auto-graded quiz — true/false, choice, fill-in-the-blank — generated together with its answer key.'))}</span></span></label>
+            <span class="ais__kind-desc">${esc(i18n('Auto-graded quiz — true/false, choice, fill-in-the-blank — you approve the questions, then the AI writes the answer key.'))}</span></span></label>
+          <label class="ais__kind"><input type="radio" name="ais-kind" value="subjective">
+            <span class="ais__kind-body"><span class="ais__kind-name">📄 ${esc(i18n('Subjective task'))}</span>
+            <span class="ais__kind-desc">${esc(i18n('Project-level assignment — students submit files and a report; you grade it. Written by chatting with the AI.'))}</span></span></label>
         </div>
         <textarea class="ais__topic" rows="2" placeholder="${esc(i18n('e.g. A problem practicing prefix sums, based on the attendance example from today\'s lecture'))}"></textarea>
         <div class="ais__row" style="margin-top:10px;">
-          <div class="ais__prog-only"><div class="ais__label">${esc(i18n('Language'))}</div>
+          <div><div class="ais__label ais__lang-label">${esc(i18n('Solution language'))}</div>
             <select class="ais__lang">${langOptionsHtml(data.langs)}</select></div>
           <div><div class="ais__label">${esc(i18n('Difficulty'))}</div>
             <select class="ais__diff"><option value="intro">${esc(i18n('intro'))}</option><option value="medium">${esc(i18n('medium'))}</option><option value="challenge">${esc(i18n('challenge'))}</option></select></div>
@@ -269,6 +428,11 @@ function renderList($root, data) {
             <div class="aisd__meta">${esc(i18n('Empty = every judge language.'))}</div></div>
         </div>
         <div class="ais__obj-only" hidden>
+          <div class="ais__label">${esc(i18n('How many questions?'))}</div>
+          <select class="ais__qcount" style="max-width:200px;">
+            <option value="0">${esc(i18n('Let the AI decide'))}</option>
+            ${[3, 4, 5, 6, 8, 10, 12, 15, 20].map((x) => `<option value="${x}">${x}</option>`).join('')}
+          </select>
           <div class="ais__label">${esc(i18n('Question types (optional — the AI mixes them sensibly)'))}</div>
           <div class="ais__qts">
             ${[['tf', 'True / False'], ['single', 'Single choice'], ['multi', 'Multiple choice'], ['fill', 'Fill in the blank'], ['dropdown', 'Dropdown'], ['short', 'Short answer']]
@@ -292,13 +456,29 @@ function renderList($root, data) {
     </div>`);
   let allowSel = [];
   wireAllowLangsDd($root, (langs) => { allowSel = langs; });
-  const OBJ_PLACEHOLDER = i18n("e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides");
-  const PROG_PLACEHOLDER = i18n('e.g. A problem practicing prefix sums, based on the attendance example from today\'s lecture');
+  const LANG_LABEL = {
+    programming: i18n('Solution language'),
+    objective: i18n('Language the questions are about'),
+    subjective: i18n('Language the project is written in'),
+  };
+  const PLACEHOLDER = {
+    programming: i18n('e.g. A problem practicing prefix sums, based on the attendance example from today\'s lecture'),
+    objective: i18n("e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides"),
+    subjective: i18n('e.g. A mini-project: build a command-line address book in C and report on your data-structure choices'),
+  };
+  const currentKind = () => String($root.find('input[name="ais-kind"]:checked').val() || 'programming');
   $root.find('input[name="ais-kind"]').on('change', function onKind() {
-    const isObj = $root.find('input[name="ais-kind"]:checked').val() === 'objective';
-    $root.find('.ais__prog-only').toggle(!isObj);
-    $root.find('.ais__obj-only').prop('hidden', !isObj);
-    $root.find('.ais__topic').attr('placeholder', isObj ? OBJ_PLACEHOLDER : PROG_PLACEHOLDER);
+    const kind = currentKind();
+    // Programming needs the full judge configuration; an objective quiz is
+    // still ABOUT a language (so it keeps the picker) but has nothing to
+    // cross-check or restrict; a subjective task has no judge at all.
+    $root.find('.ais__prog-only').toggle(kind === 'programming');
+    $root.find('.ais__obj-only').prop('hidden', kind !== 'objective');
+    // The picker stays visible for every kind. It used to be hidden for
+    // subjective drafts while still submitting its value, so a project brief
+    // silently carried whatever language happened to be preselected.
+    $root.find('.ais__lang-label').text(LANG_LABEL[kind] || LANG_LABEL.programming);
+    $root.find('.ais__topic').attr('placeholder', PLACEHOLDER[kind] || PLACEHOLDER.programming);
   });
 
   const pending = []; // File objects picked before the draft exists
@@ -337,8 +517,8 @@ function renderList($root, data) {
     }
     const $b = $(this).prop('disabled', true);
     try {
-      let kind = $root.find('input[name="ais-kind"]:checked').val() || 'programming';
-      const smellsObjective = /single[- ]?choice|multiple[- ]?choice|true[/ ]?(?:or )?false|fill[- ]?in[- ]?the[- ]?blank|\bquiz(?:zes)?\b|\bmcqs?\b|判断题|选择题|填空题|单选|多选|小测|测验|問答題|選擇題|判斷題|填空題|單選|多選/i.test(topic);
+      let kind = currentKind();
+      const smellsObjective = looksObjective(topic);
       if (kind === 'programming' && smellsObjective
         && window.confirm(i18n('This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)'))) {
         kind = 'objective';
@@ -353,7 +533,11 @@ function renderList($root, data) {
         difficulty: $root.find('.ais__diff').val(),
         crosscheck: $root.find('.ais__cross').val() === '1',
         notes: String($root.find('.ais__notes').val() || ''),
-        ...(kind === 'programming' ? { allowLangs: allowSel.join(',') } : { qtypes: qtypes.join(',') }),
+        ...(kind === 'programming'
+          ? { allowLangs: allowSel.join(',') }
+          : kind === 'objective'
+            ? { qtypes: qtypes.join(','), qcount: String($root.find('.ais__qcount').val() || '0') }
+            : {}),
       });
       const url = res.url || `${domainPrefix()}/ai-studio/${res.id}`;
       for (let k = 0; k < pending.length; k++) {
@@ -372,21 +556,17 @@ function renderList($root, data) {
   });
 }
 
-export default new NamedPage(['ai_studio', 'problem_create'], (pagename) => {
+// The Studio's entry point is the "AI Studio" row in the problem set's
+// "Create Problem" side panel (injected in handler/self_learning.ts). The
+// create-problem page used to prepend its own promo banner as well; that
+// duplicate entry has been retired, so this module now only drives the
+// Studio's own pages.
+export default new NamedPage(['ai_studio'], () => {
   ensureAisStyle();
-  if (pagename === 'problem_create') {
-    // Entry banner on the (already teacher-gated) create-problem page.
-    const $host = $('.medium-9.columns, .medium-12.columns').first();
-    if ($host.length && !document.getElementById('ais-entry')) {
-      $host.prepend(`<div class="ais__banner" id="ais-entry">
-        <span class="ais__banner-ic" aria-hidden="true">✨</span>
-        <span class="ais__banner-text">${esc(i18n('Creating a programming task? Let the AI draft it from your slides — the judge verifies everything before publishing.'))}</span>
-        <a class="ais__banner-cta" href="${domainPrefix()}/ai-studio">${esc(i18n('Open AI Studio'))} <i class="ais__banner-arrow">→</i></a></div>`);
-    }
-    return;
-  }
   const $root = $('#ais-root');
-  request.get(window.location.pathname)
+  // Distinct URL for the XHR so the document URL never caches JSON (see
+  // the Vary/no-store headers in AiStudioBaseHandler#prepare).
+  request.get(`${window.location.pathname}?_fmt=json`)
     .then((data) => renderList($root, data))
     .catch((e) => $root.html(`<div class="ais"><div class="ais__body"><div class="ais__empty">⚠ ${esc(e.message)}</div></div></div>`));
 });

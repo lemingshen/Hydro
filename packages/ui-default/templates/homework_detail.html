@@ -57,11 +57,15 @@
                 {% endif %}
               {% endif %}
               <td class="col--problem col--problem-name">
-                {% if isAdmin and not ntdoc %}
-                  {{ problem.render_problem_title(pdict[pid], show_invisible_flag=false, show_tags=false) }}
-                {% else %}
+                {#-
+                  Admins used to get tid-less links here — a workaround for
+                  the claim-and-start gate in ProblemDetailHandler, which
+                  threw ContestNotAttendedError at managers. That gate now
+                  has an owner-or-root bypass, so everyone gets the same
+                  ?tid link — which is also what routes objective tasks to
+                  the combined paper.
+                -#}
                   {{ problem.render_problem_title(pdict[pid], tdoc=tdoc, show_invisible_flag=false, show_tags=false) }}
-                {% endif %}
               </td>
             </tr>
           {%- endfor -%}

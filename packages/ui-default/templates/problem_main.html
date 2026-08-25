@@ -80,6 +80,28 @@
             <h1 class="section__title">{{ _('Create Problem') }}</h1>
           </div>
           <ol class="menu">
+            {#
+              AI Studio entry. Rendered here rather than injected as a
+              'ProblemAdd' node on purpose: an injected node lives in the
+              backend registry, so it only appears after a hydrooj restart,
+              and any checker attached to it can silently hide the row (an
+              unchecked boolean in /manage/setting stores '', not false).
+              The whole panel is already behind PERM_CREATE_PROBLEM, which
+              is the same permission AiStudioBaseHandler#prepare requires.
+            #}
+            <a href="{{ url('ai_studio') }}" class="menu__link">
+              <span class="icon icon-lab"></span>
+              {{ _('AI Studio') }}
+            </a>
+            {#
+              Upstream renders these nodes WITHOUT calling item.checker().
+              Keep it that way: this loop runs while the whole problem-set
+              page is being rendered, so any plugin whose checker throws
+              (e.g. one left over from a partially updated deploy) would
+              take the entire page down with a nunjucks render error rather
+              than just hiding its own row. Node visibility that matters is
+              enforced at the route instead.
+            #}
             {%- for item in ui.getNodes('ProblemAdd') -%}
               <a href="{{ url(item.name, item.args) }}" class="menu__link">
                 <span class="icon icon-{{ item.args.icon|default('add') }}"></span>

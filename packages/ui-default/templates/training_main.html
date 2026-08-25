@@ -29,6 +29,14 @@
                 </div>
                 <div class="media__body middle">
                   <h1 class="training__title"><a href="{{ url('training_detail', tid=tdoc.docId) }}" data-emoji-enabled>{{ tdoc.title }}</a></h1>
+                  {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_TRAINING) %}
+                {#- Upstream quirk: training's postDelete lives on the DETAIL handler,
+                    not the edit handler like contest/homework — so the form posts there. -#}
+                <form class="list-del " method="post" action="{{ url('training_detail', tid=tdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
+                  <input type="hidden" name="operation" value="delete">
+                  <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
+                </form>
+                {% endif %}
                   <div class="training__intro typo">
                     <p>{{ tdoc['content'] }}</p>
                   </div>

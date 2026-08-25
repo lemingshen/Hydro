@@ -5,7 +5,7 @@ import { Binary } from 'mongodb';
 import Schema from 'schemastery';
 import { randomstring } from '@hydrooj/utils';
 import type { Context } from '../context';
-import {
+import { PermissionError,
     AuthOperationError, BadRequestError, BlacklistedError, BuiltinLoginError,
     ForbiddenError, InvalidTokenError, NotFoundError,
     SystemError, UserAlreadyExistError, UserFacingError,
@@ -403,6 +403,17 @@ class UserDetailHandler extends Handler {
     async get(domainId: string, uid: number) {
         if (uid === 0) throw new UserNotFoundError(0);
         const isSelfProfile = this.user._id === uid;
+        /*
+         * Profiles are PRIVATE in this deployment: a student may open only
+         * their own. The site admin (PRIV_EDIT_SYSTEM) and the domain root
+         * (the teacher) may open anyone's — the same owner-or-root rule this
+         * fork already applies to record access. Names shown elsewhere
+         * (rankings, records) keep their own per-surface permission checks;
+         * this gate covers the aggregated profile view.
+         */
+        if (!isSelfProfile && !this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM) && this.user.role !== 'root') {
+            throw new PermissionError(PERM.PERM_VIEW_USER_PRIVATE_INFO);
+        }
         const [udoc, sdoc] = await Promise.all([
             user.getById(domainId, uid),
             token.getMostRecentSessionByUid(uid, ['createAt', 'updateAt']),

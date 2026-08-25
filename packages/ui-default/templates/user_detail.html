@@ -18,21 +18,33 @@
               <img src="{{ avatarUrl(udoc.avatar, 120) }}" width="120" height="120" class="large user-profile-avatar">
             </div>
             <div class="media__body profile-header__main">
-              <h1>
-                {{ udoc['uname'] }}
-                {% if handler.user.hasPerm(perm.PERM_VIEW_USER_PRIVATE_INFO) and udoc.displayName %}<small>({{ udoc['displayName'] }})</small>{% endif %}
+              {#-
+                Identity, human-first: the REAL NAME is the headline and the
+                login ID becomes a monospace chip beside it. Access to this
+                page is owner-or-root (UserDetailHandler), so the old
+                per-viewer privacy gate around the name is no longer needed
+                here — anyone who can open the page may see it.
+              -#}
+              {%- set udocRealName = ((((udoc.firstName or '') ~ ' ' ~ (udoc.lastName or '')) | trim) or udoc.displayName) -%}
+              <h1 class="up-name">
+                {{ udocRealName or udoc['uname'] }}
+                {% if udocRealName %}<span class="up-id" data-tooltip="{{ _('Login ID') }}">{{ udoc['uname'] }}</span>{% endif %}
               </h1>
-              <p>
-                {{ _('UID') }}: {{ udoc['_id'] }},
-                {{ _('Registered at') }} {{ datetimeSpan(udoc['regat'])|safe }},
-                {{ _('last login at') }} {{ datetimeSpan(udoc['loginat'])|safe }},
+              <div class="up-meta">
+                <span class="up-chip">UID {{ udoc['_id'] }}</span>
+                <span class="up-chip">{{ _('Registered at') }} {{ datetimeSpan(udoc['regat'])|safe }}</span>
+                <span class="up-chip">{{ _('last login at') }} {{ datetimeSpan(udoc['loginat'])|safe }}</span>
               {% if sdoc and sdoc.updateAt %}
-                {{ _('last active at') }} {{ datetimeSpan(sdoc['updateAt'])|safe if Date.now() - sdoc.updateAt.getTime() > 300000 else _('just now') }}.
+                <span class="up-chip">{{ _('last active at') }} {{ datetimeSpan(sdoc['updateAt'])|safe if Date.now() - sdoc.updateAt.getTime() > 300000 else _('just now') }}</span>
               {% else %}
-                {{ _('currently offline') }}.
+                <span class="up-chip">{{ _('currently offline') }}</span>
               {% endif %}
-              </p>
-              <p>{{ _('Solved {0} problems, RP: {1} (No. {2})').format(udoc.nAccept|default(0), udoc['rp']|default(0.0)|round(2), udoc['rank']|default('?')) }}</p>
+              </div>
+              <div class="up-stats">
+                <span class="up-stat"><b>{{ udoc.nAccept|default(0) }}</b>{{ _('Solved') }}</span>
+                <span class="up-stat"><b>{{ udoc['rp']|default(0.0)|round(2) }}</b>RP</span>
+                <span class="up-stat"><b>#{{ udoc['rank']|default('?') }}</b>{{ _('Rank') }}</span>
+              </div>
               {% if udoc._id != 1 and not udoc.hasPriv(PRIV.PRIV_USER_PROFILE) %}
                 <p>{{ _('This user was banned.') }}</p>
               {% endif %}

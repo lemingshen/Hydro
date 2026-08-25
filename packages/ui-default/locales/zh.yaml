@@ -77,8 +77,8 @@ Add: 添加
 Additional File: 附加文件
 Admin {0} delete your discussion "{1}".: 管理员 {0} 删除了你的讨论 "{1}"。
 Admin {0} delete your discussion tail reply {1} in "{2}"({3}).: 管理员 {0} 从讨论 {2}({3}) 中删除了你的楼中楼回复 {1}。
-All {0} Contests: 所有 {0} 比赛
-All Contests: 所有比赛
+All {0} Contests: 所有 {0} 测验
+All Contests: 所有测验
 All Homeworks: 所有作业
 All Submissions: 所有递交
 All Training Plans: 所有训练计划
@@ -97,15 +97,15 @@ Argument {0} is invalid.: 非法的参数 {0} 。
 Arguments: 参数
 astyle formatting options: Astyle 格式化选项
 At least 4 characters: 至少 4 个字符
-Attend Contest: 参加比赛
-Attend contests: 参加比赛
+Attend Contest: 参加测验
+Attend contests: 参加测验
 Attended: 已参加
 author: 作者
 Auto adjust the format of line breaks and remove unnecessary whitespace characters.: 自动调整换行符格式，并移除不必要的空白字符。
 Auto format code: 自动格式化代码
 Auto organize input: 自动整理输入
 Avatar: 头像
-Back to contest list: 返回比赛列表
+Back to contest list: 返回测验列表
 Background: 背景
 Be Copied: 被复制
 Begin at: 开始于
@@ -120,7 +120,7 @@ Browser: 浏览器
 Built-in: 内置
 Bulletin: 公告
 By clicking the button, you will become a member of the domain {0}.: 点击按钮，您将成为域 {0} 的成员。
-By Contest: 由比赛
+By Contest: 由测验
 By Problem: 由题目
 By Username / UID: 由用户名或 UID
 Calculate rp of a domain, or all domains: 计算用户的 RP
@@ -165,28 +165,28 @@ Contact Us: 联系我们
 Contact: 联系
 content: 内容
 Content: 内容
-Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 比赛 {0} 有一条关于 {1} 的新答疑，请前往比赛答疑页面回复。
-Contest {0} jury replied to your clarification, please go to contest page to view.: 比赛 {0} 的裁判回复了您的答疑，请前往比赛页面查看。
+Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 测验 {0} 有一条关于 {1} 的新答疑，请前往测验答疑页面回复。
+Contest {0} jury replied to your clarification, please go to contest page to view.: 测验 {0} 的裁判回复了您的答疑，请前往测验页面查看。
 Contest Clarifications: 赛时答疑
-Contest Management: 比赛管理
-Contest scoreboard is not visible.: 当前比赛成绩表隐藏，暂不可显示。
-Contest Scoreboard: 比赛成绩表
+Contest Management: 测验管理
+Contest scoreboard is not visible.: 当前测验成绩表隐藏，暂不可显示。
+Contest Scoreboard: 测验成绩表
 contest_balloon: 气球状态
-contest_clarification: 赛时答疑
-contest_create: 创建比赛
-contest_detail_problem_submit: 递交比赛题目
+contest_clarification: 测验答疑
+contest_create: 创建测验
+contest_detail_problem_submit: 递交测验题目
 contest_detail_problem: 题目详情
-contest_detail: 比赛详情
-contest_edit: 编辑比赛
-contest_main: 比赛
-contest_manage: 比赛管理
+contest_detail: 测验详情
+contest_edit: 编辑测验
+contest_main: 测验
+contest_manage: 测验管理
 contest_print: 打印
 contest_problemlist: 题目列表
-contest_scoreboard: 比赛成绩表
+contest_scoreboard: 测验成绩表
 contest_user: 参赛者管理
-contest: 比赛
-Contest: 比赛
-Contests per page: 每页展示的比赛数量
+contest: 测验
+Contest: 测验
+Contests per page: 每页展示的测验数量
 Continue: 继续
 Contributed Problems: 贡献的题目
 Contributions: 贡献
@@ -198,11 +198,11 @@ Copy WeChat Account: 复制微信号
 Copy: 复制
 Copyright Complaint: 版权申诉
 CPU Info: CPU信息
-Create a contest: 创建一个比赛
+Create a contest: 创建一个测验
 Create a Discussion: 创建一个讨论
 Create a problem: 创建一个题目
-Create Contest: 创建比赛
-Create contests: 创建比赛
+Create Contest: 创建测验
+Create contests: 创建测验
 Create Discussion in {0}: 在 {0} 下创建讨论
 Create Discussion: 创建讨论
 Create discussions: 创建讨论
@@ -307,9 +307,9 @@ Download: 下载
 Downvote: 差评
 Duration (hours): 持续时间 (小时)
 Duration: 持续时间
-Edit any contests: 修改任意的比赛
+Edit any contests: 修改任意的测验
 Edit any homework: 修改任意的作业
-Edit Contest: 编辑比赛
+Edit Contest: 编辑测验
 Edit description of this domain: 修改此域描述
 Edit discussion replies of own discussion: 修改自己讨论中的回复
 Edit discussion replies: 修改讨论的回复
@@ -317,7 +317,7 @@ Edit discussions: 修改讨论
 Edit domain settings: 编辑域设置
 Edit Domain: 编辑域
 Edit Homework: 编辑作业
-Edit own contests: 修改自己的比赛
+Edit own contests: 修改自己的测验
 Edit own discussion replies: 修改讨论中自己的回复
 Edit own discussions: 修改自己的讨论
 Edit own homework: 修改自己的作业
@@ -422,7 +422,7 @@ In 1 month: 一个月后
 In 1 week: 一周后
 In 3 days: 三天后
 In 3 hours: 三个小时后
-In following contests: 在下列比赛中
+In following contests: 在下列测验中
 In following homework: 在以下作业中
 In following training plans: 在下列训练计划中
 In Progress: 进行中
@@ -471,7 +471,7 @@ Live...: 正在进行…
 Location: 位置
 Lock discussions: 锁定讨论
 Lock Topic: 锁定主题
-Login to Attend Contest: 登录后参加比赛
+Login to Attend Contest: 登录后参加测验
 Login to Claim Homework: 登录后认领作业
 Login to Create a Discussion: 登录后创建讨论
 Login to join training plan: 登录以参加训练计划
@@ -527,7 +527,7 @@ New: 创建
 No comments so far...: 目前还没有评论...
 No dataset at present.: 暂无测试数据。
 No discussion yet...: 目前没有讨论…
-No Permission to Attend Contest: 您没有权限参加比赛
+No Permission to Attend Contest: 您没有权限参加测验
 No Permission to Claim Homework: 您没有权限认领作业
 No Permission to Create a Discussion: 您没有权限创建讨论
 No Permission to Submit: 您没有权限递交
@@ -584,7 +584,7 @@ Passwords don't match.: 验证密码不匹配。
 Path {0} not found.: 路径 {0} 不存在。
 Peak Memory: 峰值内存
 Penalty (Minutes): 罚时（分钟）
-perm_contest: 比赛
+perm_contest: 测验
 perm_discussion: 讨论
 perm_general: 一般
 perm_homework: 作业
@@ -601,7 +601,7 @@ pid: 题目 ID
 Pin discussions: 置顶讨论
 Pin training plans: 置顶训练计划
 Plan: 计划
-Please attend contest to see the problems.: 请参加比赛来查看题目。
+Please attend contest to see the problems.: 请参加测验来查看题目。
 Please claim the assignment to see the problems.: 认领作业后才可以查看作业内容。
 Please select at least one role to perform this operation.: 请选择至少一个角色来进行操作。
 Please select at least one user to perform this operation.: 请选择至少一个用户来进行操作。
@@ -864,10 +864,10 @@ The uploaded file is too long.: 上传的文件太长。
 The user is already a member of the domain.: 该用户已是域的成员。
 The user is too lazy to leave something here...: 该用户太懒，这里啥也没写 (´・ω・｀)
 theme: 主题
-There are no contests...: 没有比赛…
+There are no contests...: 没有测验…
 There is no homework so far ╰(*°▽°*)╯: 目前还没有作业 ╰(*°▽°*)╯
-This contest is not live.: 比赛没有开始。
-This contest has already started.: 比赛已开始。
+This contest is not live.: 测验没有开始。
+This contest has already started.: 测验已开始。
 This email was sent by {0} automatically, and please do not reply directly.: 这封邮件由 {0} 自动发送，请勿直接回复。
 This homework is not open and you cannot view problems.: 该作业还未到开放时间，您无法查看作业题目。
 This homework is not open.: 该作业还未开放递交。
@@ -949,15 +949,15 @@ Valid for registered users who are not members of the domain: 对域外注册用
 Valid for visitors: 对未登录的游客有效
 Verify register email: 注册需邮件验证
 Version: 版本
-View all contests: 查看所有比赛
+View all contests: 查看所有测验
 View all homework: 查看所有作业
-View contest scoreboard: 查看比赛成绩表
-View Contest: 查看比赛
-View contests: 查看比赛
+View contest scoreboard: 查看测验成绩表
+View Contest: 查看测验
+View contests: 查看测验
 View Details: 查看详情
 View discussions: 查看讨论
 View domain user private info: 显示域中用户的私有信息
-View hidden contest submission status and scoreboard: 查看隐藏的比赛递交状态和成绩表
+View hidden contest submission status and scoreboard: 查看隐藏的测验递交状态和成绩表
 View hidden homework submission status and scoreboard: 查看隐藏的作业递交状态和成绩表
 View hidden problems: 查看隐藏的题目
 View homework scoreboard: 查看作业成绩表
@@ -1011,11 +1011,11 @@ You have been kicked from domain {0} by {1}.: 您已被 {1} 从域 {0} 中移除
 You have not submitted any solutions for this problem: 您在该题下没有递交过任何解答
 You have permission to create problems for this domain.: 您有权限为此域创建题目。
 You have uncompleted domain creation operation. You can click "Continue" to finish the creation.: 您有未完成的创建域操作。您可以点击“继续”来完成创建。
-You haven't attended this contest yet.: 您还没有参加本次比赛。
+You haven't attended this contest yet.: 您还没有参加本次测验。
 You haven't claimed this homework yet.: 您还未认领过该作业。
 You need to enter the invitation code to join the domain.: 您需要输入邀请码来加入此域。
 You're not logged in.: 您没有登录。
-You've already attended this contest.: 您已经参加本次比赛。
+You've already attended this contest.: 您已经参加本次测验。
 You've already claimed this homework.: 您已认领过该作业。
 You've already voted.: 您已经投过票。
 Your permission: 您的权限
@@ -1315,3 +1315,151 @@ challenges cleared: 次挑战通关
 "e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides": 例如：基于本周课件出一份 6 题的循环与条件小测
 "Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)": '题面（Markdown，使用 {{ input/select/multiselect/dropdown }} 题目标记）'
 "This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)": 这个需求看起来像客观题（判断 / 选择 / 填空）。要改为创建客观题任务吗？（确定 = 客观题任务，取消 = 保持编程任务）
+
+# AI Studio: three task kinds + statement-review phase
+AI Studio: AI 出题工作室
+Subjective task: 主观题任务
+Questions: 题目
+Project-level assignment — students submit files and a report; you grade it. Written by chatting with the AI.: 项目型作业——学生提交文件与报告，由你评分。通过与 AI 对话撰写。
+Auto-graded quiz — true/false, choice, fill-in-the-blank — you approve the questions, then the AI writes the answer key.: 自动评分小测——判断、选择、填空——你确认题目后，AI 再生成答案。
+? Describe the task you want and attach the relevant slides below. The AI drafts the statement first — you review it, refine it by chat, and only then does it continue.
+: 描述你想要的题目，并在下方附上相关课件。AI 会先起草题面——你审阅、通过对话修改，之后它才继续。
+The language the questions are about.: 题目所涉及的编程语言。
+'e.g. A mini-project: build a command-line address book in C and report on your data-structure choices': 例如：小项目——用 C 实现命令行通讯录，并就数据结构的选择撰写报告
+Generate statement: 生成题面
+Generate questions: 生成题目
+Regenerate from scratch: 重新生成
+Regenerate the key: 重新生成答案
+Save my edits: 保存我的修改
+Happy with the statement? Continue — the AI then writes the solution, cross-check and tests.: 题面满意了吗？点击「继续」，AI 将接着生成参考解答、交叉校验与测试数据。
+Happy with the questions? Continue — the AI then writes the answer key.: 题目满意了吗？点击「继续」，AI 将接着生成答案。
+Happy with the assignment? Continue to assemble and publish it.: 作业满意了吗？点击「继续」以组装并发布。
+Review step — edit the text directly, or ask the AI below. Nothing else runs until you press Continue.: 审阅阶段——可直接编辑文本，或在下方与 AI 对话。在你点击「继续」之前，不会执行任何后续步骤。
+Editing this sends the draft back to review — press Continue again afterwards.: 修改后草稿将回到审阅阶段——请再次点击「继续」。
+Refine with the AI: 与 AI 一起修改
+Tell it what to change about: 告诉它要修改
+this statement: 这段题面
+these questions: 这些题目
+this assignment: 这份作业
+Clear chat: 清空对话
+Thinking…: 思考中…
+Describe the change you want, then press Send (Ctrl+Enter): 描述你想要的修改，然后点击发送（Ctrl+Enter）
+? 'Ask for a change and the AI rewrites the text above — for example: "make the constraints smaller", "add a worked example", "写成中文".'
+: 提出修改要求，AI 会重写上方文本——例如：「把数据范围调小」「加一个例子」「写成中文」。
+The AI applied your change — check the text above.: AI 已应用你的修改——请查看上方文本。
+Regenerate from scratch? The current text and this conversation will be replaced.: 确定重新生成？当前文本与本次对话都将被替换。
+Statement approved — drafting the solution, cross-check and tests.: 题面已确认——正在生成参考解答、交叉校验与测试数据。
+Questions approved — writing the answer key.: 题目已确认——正在生成答案。
+Assignment approved — assembling it now.: 作业已确认——正在组装。
+No statement yet — press Generate statement above.: 尚无题面——请点击上方的「生成题面」。
+No questions yet — press Generate questions above.: 尚无题目——请点击上方的「生成题目」。
+Questions (markdown with {{ input/select/multiselect/dropdown }} markers): 题目（markdown，使用 {{ input/select/multiselect/dropdown }} 标记）
+'Assignment brief (markdown: deliverables, report contents, rubric)': 作业说明（markdown：交付物、报告内容、评分标准）
+'A briefing for you, not for students: what a strong submission looks like, and how to apply the rubric consistently.': 给你而非学生的说明：优秀提交是什么样子，以及如何一致地套用评分标准。
+Assemble assignment: 组装作业
+Grading briefing: 评分说明
+Answer key: 答案
+Ready to publish.: 可以发布了。
+Task kind: 题目类型
+Wrong kind? Switch here — the requirement and uploaded files are kept, but every drafted artifact is cleared.: 类型选错了？在此切换——需求与已上传文件会保留，但已生成的内容将全部清除。
+Published drafts keep their kind.: 已发布的草稿无法更改类型。
+Switch task kind? Everything drafted so far will be cleared — your requirement and uploaded files are kept.: 确定切换题目类型？目前已生成的内容将被清除——需求与已上传文件会保留。
+Task kind changed — generate again.: 题目类型已更改——请重新生成。
+Statement drafted — review it, then press Continue.: 题面已生成——请审阅后点击「继续」。
+Questions drafted — review them, then press Continue.: 题目已生成——请审阅后点击「继续」。
+Untitled quiz: 未命名小测
+Untitled assignment: 未命名作业
+Auto-graded quiz — Hydro objective format: 自动评分客观题——Hydro 客观题格式
+Check every question below. The answer key is written only after you press Continue.: 请逐题检查下方内容。只有在你点击「继续」之后，AI 才会生成答案。
+Questions and key are set — publish when you are happy.: 题目与答案均已就绪——确认无误后即可发布。
+Quiz title: 小测标题
+Edit the markdown source: 编辑 Markdown 源码
+'Hydro objective format: {{ input(n) }} · {{ select(n) }} + option list · {{ multiselect(n) }} · {{ dropdown(n)[a, b] }}': Hydro 客观题格式：{{ input(n) }} · {{ select(n) }} 加选项列表 · {{ multiselect(n) }} · {{ dropdown(n)[a, b] }}
+Editing the questions sends the draft back to review — press Continue again afterwards.: 修改题目后草稿将回到审阅阶段——请再次点击「继续」。
+? 'The key the judge grades with. One line per question — id: [answer, score]. Choice answers are option letters; scores must total 100.'
+: '评测机据此评分。每题一行——编号: [答案, 分值]。选择题答案为选项字母；分值总和必须为 100。'
+No question markers found. Check the markdown source below — every question needs a {{ ... }} marker.: 未找到题目标记。请检查下方源码——每道题都需要一个 {{ ... }} 标记。
+questions: 题
+points total: 分（合计）
+should be 100: 应为 100
+Answer key not written yet: 尚未生成答案
+pts: 分
+Expected: 期望答案
+Graded by you — students upload files and a report. No judge, no test data.: 由你评分——学生上传文件与报告。不经评测机，也无测试数据。
+Assignment: 作业
+What students will see: 学生看到的效果
+No assignment yet — press Draft the assignment above, or just start chatting once it exists.: 尚无作业——请点击上方的「起草作业」。
+Draft the assignment: 起草作业
+Re-validate: 重新校验
+? 'A briefing for you, not for students: what the quiz covers, the correct answer for each question and why, and the misconception each distractor targets.'
+: 给你而非学生的说明：小测覆盖哪些内容、每题的正确答案及原因，以及每个干扰项针对的误解。
+Quiz setup: 小测设置
+The generator reads exactly these settings.: 生成时严格依据以下设置。
+What should the quiz cover?: 这份小测要考查什么？
+'e.g. the switch-case statement: syntax, fall-through, and when to prefer it over if-else': 例如：switch-case 语句的语法、贯穿（fall-through），以及何时优于 if-else
+How many questions?: 出几道题？
+Let the AI decide: 由 AI 决定
+Questions are about: 题目涉及的语言
+Leave every type unchecked to let the AI mix them sensibly.: 全部不勾选则由 AI 自行搭配题型。
+Save setup: 保存设置
+Then press Generate questions to rebuild the quiz against it.: 随后点击「生成题目」按新设置重建小测。
+Setup saved — press Generate questions to rebuild the quiz.: 设置已保存——点击「生成题目」重建小测。
+Course material: 课程材料
+build: 构建
+Backend build: 后端构建
+Draft questions: 生成题目
+Draft assignment: 生成作业
+Draft statement: 生成题面
+What the AI actually replied: AI 的原始回复
+Statement: 题面
+Assignment brief: 作业说明
+Markdown. Leave out samples — the judge computes them from your tests.: Markdown。无需写样例——评测机会依据测试数据自动生成。
+Markdown with {{ input / select / multiselect / dropdown }} markers.: Markdown，使用 {{ input / select / multiselect / dropdown }} 标记。
+'Markdown: the deliverables, what the report must contain, and the grading rubric.': Markdown：交付物、报告须包含的内容，以及评分标准。
+The preview toggle in the toolbar shows exactly what students will see.: 工具栏中的预览按钮可查看学生看到的效果。
+Problem ID — its prefix marks the task kind: 题目 ID——前缀标识题目类型
+Solution language: 参考解答语言
+Language the questions are about: 题目涉及的语言
+Language the project is written in: 项目使用的语言
+Keep hidden after publishing: 发布后暂不对学生可见
+Published · hidden from students: 已发布 · 学生不可见
+Published · visible to students: 已发布 · 学生可见
+Reveal to students: 对学生开放
+Hide from students: 对学生隐藏
+Published · hidden: 已发布 · 隐藏
+Published but not yet visible to students: 已发布，但学生尚不可见
+hidden from students until you reveal it: 学生不可见，待你开放
+Students can now see this task.: 学生现在可以看到该题目了。
+Hidden — students can no longer see this task.: 已隐藏——学生将看不到该题目。
+Publishing finalizes the task. Tick the box to keep it invisible to students until you reveal it.: 发布即定稿。勾选后题目暂不对学生可见，直到你手动开放。
+Students cannot see or open this task yet. Reveal it when the class is ready.: 学生目前无法看到或打开该题目。准备就绪后再开放。
+Hiding pulls the task from the student problem list without unpublishing it.: 隐藏会将题目从学生题库中移除，但不会取消发布。
+? The server ignored "Keep hidden" — it is running an older backend build, so the task was published VISIBLE to students. Hide it from the problem's edit page, then restart hydrooj and check the build stamp in the Studio header.
+: 服务器忽略了「发布后暂不可见」——后端仍是旧版本，题目已对学生可见。请先在题目编辑页将其隐藏，然后重启 hydrooj 并检查工作室页眉中的构建号。
+? The running backend does not have this feature yet. Restart hydrooj, then confirm the Studio header shows build 2026-08-23c-sentinel or later. Until then, toggle visibility from the problem's own edit page.
+: 当前后端尚不支持此功能。请重启 hydrooj，并确认工作室页眉显示 build 2026-08-23c-sentinel 或更高版本。在此之前，可在题目编辑页切换可见性。
+(applied via the problem list — the backend is running an older build; restart it when you can): （已通过题库批量操作生效——后端仍为旧版本，方便时请重启）
+First Name: 名
+Last Name: 姓
+Login ID: 登录账号
+Answer as one paper: 整卷作答
+Submit all answers: 提交全部答案
+'Each question is its own task: submitting sends one record per question, only for the ones you answered.': 每道题都是独立题目：提交时会为你作答的每道题各生成一条记录。
+'{0} non-objective task(s) in this set open from the task list as usual.': 本组还有 {0} 道非客观题，请照常从题目列表打开。
+This set contains no objective tasks.: 本组不包含客观题。
+Nothing to submit — answer at least one question first.: 没有可提交的内容——请先作答至少一道题。
+answered, not yet submitted: 已作答，尚未提交
+submitting…: 提交中…
+submitted: 已提交
+submitted — view record: 已提交——查看记录
+submit failed: 提交失败
+Judged: 已评测
+publishes as: 将发布为
+separate tasks — each worth 100 points on its own: 道独立题目——每题单独计 100 分
+Draft problems (one per question): 草稿题目（每题一个）
+Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.: 确定永久删除？已有的提交记录会保留，但该项目本身无法恢复。
+
+Answer: 作答
+Submitted — results are revealed when this assessment ends.: 已提交——成绩将在本次测评结束后公布。
+Results are withheld until this assessment ends.: 成绩将在本次测评结束后公布。
+Answers are saved on this device as you type — close the page and pick up where you left off.: 答案会随输入自动保存在本设备上——关闭页面后再次打开可继续作答。

@@ -80,6 +80,14 @@ export interface AuthorCase {
     sample: boolean;
     purpose?: string;
 }
+/** One turn of the statement-review conversation between teacher and AI. */
+export interface AuthorChatTurn {
+    role: 'user' | 'assistant';
+    content: string;
+    at: Date;
+}
+export type AuthorKind = 'programming' | 'objective' | 'subjective';
+
 export interface AuthorDraftDoc {
     _id: ObjectId;
     domainId: string;
@@ -97,10 +105,37 @@ export interface AuthorDraftDoc {
         /** Languages students may submit in (config.langs). Empty/absent = unrestricted. */
         allowLangs?: string[];
         /** Task kind. Absent = 'programming' (legacy drafts). */
-        kind?: 'programming' | 'objective';
+        kind?: AuthorKind;
         /** Objective only: question types the teacher asked for. */
         qtypes?: string[];
+        /** Objective only: how many questions to write. 0/absent = the AI decides. */
+        qcount?: number;
     };
+    /**
+     * Two-phase authoring gate. Every kind first drafts ONLY the statement
+     * (for objective drafts: the questions, without their answer key), which
+     * the teacher then edits by hand or reworks by chatting with the AI.
+     * Nothing downstream — solutions, tests, answer key, verification — runs
+     * until the teacher presses Continue, which sets this flag.
+     *
+     * Absent on drafts created before the review phase existed; those are
+     * treated as approved so their toolbars keep working (see phaseOf).
+     */
+    approved?: boolean;
+    /** Statement-review conversation. Trimmed to the last CHAT_KEEP turns. */
+    chat?: AuthorChatTurn[];
+    /** pid stamped on the scratch problem — its prefix encodes the kind. */
+    pid?: string;
+    /**
+     * Objective drafts split one-question-per-task: the scratch problems in
+     * question order. docId/pid stay populated (first entry) so pre-split
+     * drafts and old clients keep working; draftDocIds()/draftPids() are the
+     * accessors that reconcile both shapes.
+     */
+    docIds?: number[];
+    pids?: string[];
+    /** Published but still invisible to students (teacher will reveal later). */
+    publishedHidden?: boolean;
     artifacts: {
         statement?: { title: string, body: string };
         solution?: { language: string, code: string };
@@ -131,11 +166,60 @@ export interface AuthorDraftDoc {
     log: { at: Date, actor: string, action: string, detail?: string }[];
 }
 
+/**
+ * Build stamp for THIS file, surfaced in the AI Studio header and the boot
+ * log. Bump it whenever the generation contract changes. It exists because
+ * the Studio's frontend and backend deploy separately, and a rebuilt UI
+ * talking to an older process fails in ways that look like model problems:
+ * with the stamp on screen, "which code is actually running" is answerable
+ * from a screenshot instead of a guess.
+ */
+export const AI_STUDIO_BUILD = '2026-08-23c-sentinel';
+
 const coll: Collection<AuthorDraftDoc> = db.collection('ai.author.draft' as any);
 
-function authorEnabled() {
+/**
+ * Whether the AI Studio is usable right now: not switched off, and an AI
+ * provider is actually configured.
+ *
+ * Exported even though this module is its only caller today: an earlier
+ * build of handler/self_learning.ts imported it, and a tree where that file
+ * is stale but this one is current would otherwise call `undefined` and
+ * crash whatever invoked it. Keeping the export makes a half-updated
+ * checkout degrade instead of break.
+ */
+export function authorEnabled() {
     const v = system.get('ai_author.enabled');
     return (v === undefined ? true : !!v) && aiTutor.tutorConfigured();
+}
+
+/**
+ * Site convention: the pid PREFIX is what marks a task's kind — P
+ * programming, O objective, S subjective. Every consumer keys off it and
+ * nothing else: PROBLEM_KIND_FILTERS for the problem-list tabs,
+ * isSubjectivePdoc for the subjective submission handlers, isSubjectivePid
+ * for the scratchpad rail.
+ *
+ * The scratch problem has to be created before its docId exists, so it is
+ * born with NO pid. Stamp it the moment the id is known rather than waiting
+ * for publish: until it is stamped every one of those checks reads the
+ * draft as a programming problem, so previewing a subjective assignment
+ * opens the code scratchpad and the problem list files it under the wrong
+ * tab.
+ */
+const KIND_PREFIX: Record<AuthorKind, string> = { programming: 'P', objective: 'O', subjective: 'S' };
+
+async function ensureKindPid(domainId: string, docId: number, kind: AuthorKind): Promise<string> {
+    const prefix = KIND_PREFIX[kind] || 'P';
+    const cur = await problem.get(domainId, docId);
+    const curPid = String(cur?.pid || '');
+    // Already correctly prefixed (including a teacher's own rename) — leave it.
+    if (curPid && curPid.toUpperCase().startsWith(prefix)) return curPid;
+    let pid = `${prefix}${docId}`;
+    const clash = await problem.get(domainId, pid);
+    if (clash && clash.docId !== docId) pid = `${prefix}${docId}A`;
+    await problem.edit(domainId, docId, { pid });
+    return pid;
 }
 
 async function getDraft(domainId: string, id: ObjectId): Promise<AuthorDraftDoc> {
@@ -156,24 +240,161 @@ async function patchDraft(id: ObjectId, $set: any, logEntry?: { actor: string, a
 /*  Strict-JSON helpers (weak-model friendly, mirrors the annotation   */
 /*  engine's extract-and-repair approach)                              */
 /* ------------------------------------------------------------------ */
+/**
+ * Escape the control characters models leave raw inside JSON string
+ * literals. A markdown body with real newlines in it is the single most
+ * common way a reply fails JSON.parse while being otherwise perfect.
+ */
+function repairJsonStrings(src: string): string {
+    let out = '';
+    let inStr = false;
+    let esc = false;
+    for (const ch of src) {
+        if (esc) { out += ch; esc = false; continue; }
+        if (ch === '\\') { out += ch; esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; out += ch; continue; }
+        if (inStr) {
+            if (ch === '\n') { out += '\\n'; continue; }
+            if (ch === '\r') { out += '\\r'; continue; }
+            if (ch === '\t') { out += '\\t'; continue; }
+            if (ch < ' ') continue; // drop the rest
+        }
+        out += ch;
+    }
+    return out;
+}
+
+/**
+ * Reasoning models sometimes inline their scratchpad in the content field
+ * (rather than the separate reasoning_content DeepSeek normally uses).
+ * Drop it before parsing: the payload we want is what follows.
+ */
+function stripThinking(text: string): string {
+    return String(text || '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+        .replace(/^[\s\S]*?<\/think(?:ing)?>/i, '') // unclosed opener at the start
+        .trim();
+}
+
 function extractJson(text: string): any {
-    let t = String(text || '').trim();
-    const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    if (fence) t = fence[1].trim();
-    // Try as-is, then the widest {...} or [...] slice.
-    const candidates = [t];
-    const firstObj = t.indexOf('{');
-    const lastObj = t.lastIndexOf('}');
-    if (firstObj >= 0 && lastObj > firstObj) candidates.push(t.slice(firstObj, lastObj + 1));
-    const firstArr = t.indexOf('[');
-    const lastArr = t.lastIndexOf(']');
-    if (firstArr >= 0 && lastArr > firstArr) candidates.push(t.slice(firstArr, lastArr + 1));
+    const raw = stripThinking(text);
+    const candidates: string[] = [];
+    const push = (c: string) => {
+        const t = c.trim();
+        if (t && !candidates.includes(t)) candidates.push(t);
+    };
+    push(raw);
+    /*
+     * Strip only a WRAPPING fence — one that opens on the first line and
+     * closes on the last. The old non-greedy /```...```/ match stopped at
+     * the first fence INSIDE the payload, so any statement containing a
+     * ```c code block came back truncated mid-string and could never parse.
+     */
+    const wrapped = /^```(?:json|jsonc|javascript)?[ \t]*\r?\n([\s\S]*)\r?\n```$/i.exec(raw);
+    if (wrapped) push(wrapped[1]);
+    // Widest object / array slice of every candidate so far.
+    for (const c of [...candidates]) {
+        const fo = c.indexOf('{');
+        const lo = c.lastIndexOf('}');
+        if (fo >= 0 && lo > fo) push(c.slice(fo, lo + 1));
+        const fa = c.indexOf('[');
+        const la = c.lastIndexOf(']');
+        if (fa >= 0 && la > fa) push(c.slice(fa, la + 1));
+    }
+    // Then the same set with raw control chars escaped and trailing commas
+    // dropped — both are things a model does that JSON.parse will not take.
+    for (const c of [...candidates]) {
+        push(repairJsonStrings(c));
+        push(repairJsonStrings(c).replace(/,(\s*[}\]])/g, '$1'));
+    }
     for (const c of candidates) {
         try {
             return JSON.parse(c);
         } catch (e) { /* next */ }
     }
-    throw new Error('The AI reply was not valid JSON.');
+    // The build stamp rides along so a screenshot of this message alone
+    // says which code produced it. No stamp => the process is running a
+    // build older than 2026-08-23c, whatever the file on disk says.
+    throw Object.assign(
+        new Error(`The AI reply was not valid JSON. [${AI_STUDIO_BUILD}]`),
+        { evidence: `Raw reply (first 1200 chars):\n${raw.slice(0, 1200)}` },
+    );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Title + markdown body: sentinel-delimited, never JSON               */
+/* ------------------------------------------------------------------ */
+/*
+ * Statements, quizzes and assignment briefs are long markdown documents
+ * that routinely contain code fences, braces and quotes — exactly the
+ * things that make a model's JSON string literals fall apart. Asking for
+ * the body between markers instead removes the whole class of failure:
+ * nothing inside needs escaping, so nothing can be escaped wrongly.
+ */
+const BODY_OPEN = '<<<BODY';
+const BODY_CLOSE = 'BODY>>>';
+
+const SYS_TEXT = 'You are an assistant that helps a university teacher author exercises for an online judge used in teaching. '
+    + 'You reply in EXACTLY the plain-text format requested — never JSON, and never wrap the whole reply in markdown fences. '
+    + 'Write the statement in the same natural language the teacher used in the brief (Chinese brief -> Chinese statement; English brief -> English statement).';
+
+const FORMAT_TITLE_BODY = `Reply in EXACTLY this plain-text format and nothing else — no JSON, no commentary before or after:
+TITLE: <the title, on a single line>
+${BODY_OPEN}
+<the markdown body, verbatim, over as many lines as you need>
+${BODY_CLOSE}
+The body may contain anything at all — code fences, braces, quotes, blank lines — because the markers delimit it. Do NOT escape anything inside it.`;
+
+function parseTitleBody(raw: string): { title: string, body: string } | null {
+    const t = stripThinking(raw);
+    const open = t.indexOf(BODY_OPEN);
+    const close = t.lastIndexOf(BODY_CLOSE);
+    if (open < 0 || close <= open) return null;
+    let body = t.slice(open + BODY_OPEN.length, close).replace(/^\r?\n/, '').replace(/\s+$/, '');
+    // Chattier models wrap the body in a fence even though the markers make
+    // that unnecessary. Unwrap ONLY a fence that opens on the first line and
+    // closes on the last, so a statement's own ```c blocks survive intact.
+    const fenced = /^```[a-z]*[ \t]*\r?\n([\s\S]*)\r?\n```$/i.exec(body);
+    if (fenced) body = fenced[1];
+    const tm = /^[ \t]*TITLE:[ \t]*(.+)$/im.exec(t.slice(0, open));
+    return { title: (tm ? tm[1] : '').trim().replace(/^["'`]|["'`]$/g, '').slice(0, 120), body };
+}
+
+/** One title+body artifact, with a JSON fallback for models that ignore the markers. */
+async function aiTitleBody(userPrompt: string, model?: string): Promise<{ title: string, body: string }> {
+    const prompt = `${userPrompt}\n\n${FORMAT_TITLE_BODY}`;
+    const first = await aiTutor.callProvider(SYS_TEXT, [{ role: 'user', content: prompt }], { temperature: 0.4, model });
+    let lastRaw = first;
+    let r = parseTitleBody(first);
+    if (!r) {
+        try {
+            const j = extractJson(first);
+            if (j && typeof j.body === 'string') r = { title: String(j.title || '').slice(0, 120), body: j.body };
+        } catch (e) { /* not JSON either */ }
+    }
+    if (!r) {
+        const retry = await aiTutor.callProvider(SYS_TEXT, [
+            { role: 'user', content: prompt },
+            { role: 'assistant', content: first.slice(0, 4000) },
+            { role: 'user', content: `Your reply did not use the required format. Send it again using EXACTLY the "TITLE:" line, then ${BODY_OPEN} on its own line, the body, then ${BODY_CLOSE} on its own line. Nothing else.` },
+        ], { temperature: 0.2, model });
+        lastRaw = retry;
+        r = parseTitleBody(retry);
+    }
+    if (!r || !r.body.trim()) {
+        // Preserve the evidence: without it a parse failure leaves nothing
+        // to diagnose, and the next report is another round of guessing.
+        const seen = (lastRaw || '').trim();
+        logger.warn('[ai-studio] title/body parse failed (%s chars) for %s: %s',
+            seen.length, aiTutor.tutorProviderInfo().model || '?', seen.slice(0, 400).replace(/\n/g, ' | '));
+        throw Object.assign(
+            new BadRequestError(`The AI did not return a usable statement. [${AI_STUDIO_BUILD} · ${aiTutor.tutorProviderInfo().model || '?'}]`),
+            { evidence: seen ? `Raw reply (first 1500 chars):\n${seen.slice(0, 1500)}` : 'The provider returned an empty reply.' },
+        );
+    }
+    if (!r.title) r.title = r.body.split('\n').find((l) => l.trim())?.replace(/^#+\s*/, '').slice(0, 120) || 'Untitled';
+    return r;
 }
 
 function aiJSON2(systemPrompt: string, model: string, parts: string[] | string): Promise<any> {
@@ -196,7 +417,13 @@ async function aiJSON(systemPrompt: string, userPrompt: string, model?: string):
             ],
             { temperature: 0.2, model },
         );
-        return extractJson(retry);
+        try {
+            return extractJson(retry);
+        } catch (e2) {
+            throw Object.assign(e2, {
+                evidence: `Model: ${aiTutor.tutorProviderInfo().model || '?'}\nRaw reply (first 1200 chars):\n${String(retry).slice(0, 1200)}`,
+            });
+        }
     }
 }
 
@@ -223,6 +450,13 @@ function judgeLangs(): Record<string, string> {
     return out;
 }
 /** Validate a teacher-picked allowed-language list against the judge config. */
+/** 0 = let the AI choose; otherwise clamp to a sane quiz length. */
+function sanitizeQCount(raw: any): number {
+    const n = Math.round(Number(raw));
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(30, Math.max(1, n));
+}
+
 function sanitizeAllowLangs(raw: any): string[] {
     let arr: any = raw;
     if (typeof raw === 'string') { try { arr = JSON.parse(raw); } catch (e) { arr = []; } }
@@ -231,10 +465,27 @@ function sanitizeAllowLangs(raw: any): string[] {
     return [...new Set(arr.map(String).filter((x) => valid[x]))].slice(0, 32);
 }
 
+/**
+ * Default language preference, most-wanted first.
+ *
+ * The old list started at a bare 'cc'. Many judge configs never expose that
+ * id — they publish versioned C++ ids only (cc.cc11, cc.cc17, ...) — so the
+ * lookup fell straight through to 'c' and EVERY draft silently defaulted to
+ * C. On a C++ course that quietly contradicted the teacher's own wording:
+ * the brief said C++, the language field said C, and the model followed the
+ * field. Versioned ids are listed explicitly so C++ always wins over C.
+ */
+const LANG_PREFERENCE = ['cc', 'cc.cc17', 'cc.cc14', 'cc.cc11', 'cc.cc20', 'cc.cc23', 'cc.cc98',
+    'c', 'py.py3', 'py', 'java'];
+
+export function pickPreferredLang(keys: string[]): string {
+    for (const pref of LANG_PREFERENCE) if (keys.includes(pref)) return pref;
+    // Any remaining C++ dialect still beats an arbitrary first key.
+    return keys.find((k) => k.startsWith('cc')) || keys[0] || 'cc';
+}
+
 function defaultLang(): string {
-    const l = judgeLangs();
-    for (const pref of ['cc', 'c', 'py.py3', 'py', 'java']) if (l[pref]) return pref;
-    return Object.keys(l)[0] || 'cc';
+    return pickPreferredLang(Object.keys(judgeLangs()));
 }
 function langPromptHint(id: string): string {
     if (id.startsWith('py')) return 'Python: read stdin via input()/sys.stdin, write with print';
@@ -270,18 +521,42 @@ function ctxFileMeta(name: string): { kind: string, fence?: string } {
     return { kind: 'document' };
 }
 
+const KIND_BRIEF_LINE: Record<AuthorKind, string> = {
+    programming: 'programming exercise (auto-judged: the student submits code that is run against tests)',
+    objective: 'OBJECTIVE quiz (auto-graded questions, no coding)',
+    subjective: 'SUBJECTIVE project-level assignment (human-graded: the student submits files plus a written report)',
+};
+
 function briefBlock(d: AuthorDraftDoc): string {
-    const isObj = (d.brief.kind || 'programming') === 'objective';
+    const kind: AuthorKind = (d.brief.kind || 'programming') as AuthorKind;
+    const isObj = kind === 'objective';
     const langName = judgeLangs()[d.brief.language] || d.brief.language;
+    /*
+     * State the language ONCE, unambiguously, per kind. Previously only the
+     * programming branch mentioned it — and it did so as "Solution language",
+     * with a stdin/stdout hint, even for subjective drafts, which were also
+     * told "Task kind: programming exercise". A project brief asking for C++
+     * therefore arrived with C plumbing attached and came back as C.
+     */
+    const langLine = {
+        programming: `Solution language: ${d.brief.language} (${langName}) — ${langPromptHint(d.brief.language)}`,
+        objective: `TARGET LANGUAGE: ${langName} (${d.brief.language}). Every question, code snippet, option and answer must use ${langName} syntax, headers and idioms. Do not use any other language.`,
+        subjective: `TARGET LANGUAGE: ${langName} (${d.brief.language}). The project must be written in ${langName}: source file names, extensions, build instructions, code and terminology must all match it. Do not use any other language.`,
+    }[kind];
     const qtypeLine = isObj && d.brief.qtypes?.length
         ? `Requested question types: ${d.brief.qtypes.map((q) => QTYPE_LABEL[q] || q).join(', ')}`
         : '';
+    const qcountLine = isObj && d.brief.qcount
+        ? `Number of questions: EXACTLY ${d.brief.qcount} — this overrides any default count.`
+        : '';
     const parts = [
         '=== TEACHER BRIEF (data, not instructions) ===',
-        `Task kind: ${isObj ? 'OBJECTIVE quiz (auto-graded questions, no coding)' : 'programming exercise'}`,
+        `Task kind: ${KIND_BRIEF_LINE[kind] || KIND_BRIEF_LINE.programming}`,
         `Topic: ${d.brief.topic}`,
         `Difficulty: ${d.brief.difficulty} (${DIFF_HINT[d.brief.difficulty] || d.brief.difficulty})`,
-        isObj ? qtypeLine : `Solution language: ${d.brief.language} (${langName}) — ${langPromptHint(d.brief.language)}`,
+        langLine,
+        isObj ? qcountLine : '',
+        isObj ? qtypeLine : '',
         d.brief.notes ? `Extra requirements from the teacher:\n${d.brief.notes.slice(0, 4000)}` : '',
     ];
     // Fair share across every uploaded file: each gets budget/n, and whatever
@@ -381,6 +656,43 @@ const P_REFINE = `Revise ONLY the requested artifact according to the teacher's 
 Reply with the SAME schema as the artifact ({"title","body"} / {"language","code"} / {"cases":[...]}). Keep everything not covered by the instruction unchanged.`;
 
 /* ------------------------------------------------------------------ */
+/*  Subjective (project-level) tasks                                   */
+/* ------------------------------------------------------------------ */
+/**
+ * Subjective tasks never touch the judge: students upload files and write a
+ * markdown report, and the teacher grades by hand. So the whole artifact set
+ * is a single statement, arrived at conversationally.
+ */
+const P_SUBJECTIVE = `Draft the STATEMENT for a SUBJECTIVE, project-level assignment based on the brief.
+Schema: {"title": string, "body": string}
+Rules for "body" (markdown):
+- This task is NOT auto-judged. Students submit files (code, documents, screenshots) plus a written report; a human grades it. Never mention stdin/stdout, test cases, or an online judge.
+- Sections in this order: background and motivation; what to build or investigate; concrete deliverables (name the files or artifacts to submit); the written report's required contents; a grading rubric as a markdown table whose weights sum to 100%.
+- Be specific enough that two students reading it would submit comparable deliverables, and open enough to leave real design choices to them.
+- Scale the workload to the stated difficulty. Ground everything in the teacher's materials.
+- Title: short, descriptive, no numbering.`;
+
+/**
+ * The statement-review conversation. The AI answers the teacher AND returns
+ * the (possibly revised) statement in the same call, so one round-trip both
+ * explains and applies the change. When the teacher only asks a question,
+ * the statement comes back byte-identical and "changed" is false.
+ */
+const P_CHAT = `You are revising a problem statement together with the teacher who will assign it. The teacher's latest message is at the end of the conversation.
+Reply in EXACTLY this plain-text format and nothing else:
+REPLY: <1-3 short sentences to the teacher, in the teacher's own language, on one line>
+TITLE: <the statement title, on one line>
+${BODY_OPEN}
+<the FULL revised markdown statement>
+${BODY_CLOSE}
+Rules:
+- Include the TITLE line and the body block ONLY when you are actually changing the statement. If the teacher just asked a question, or gave no actionable instruction, send the REPLY line alone and stop.
+- When you do send a body, send the WHOLE statement after the change — not a diff, not an excerpt. Change only what the teacher asked for; preserve the existing structure, sections and language everywhere else.
+- Never paste the statement into the REPLY line.
+- The body may contain code fences, braces and quotes freely — the markers delimit it, so escape nothing.
+- Keep obeying every formatting rule the statement already follows for its task kind (stated again below).`;
+
+/* ------------------------------------------------------------------ */
 /*  Objective quizzes                                                  */
 /* ------------------------------------------------------------------ */
 const QTYPES = ['tf', 'single', 'multi', 'fill', 'dropdown', 'short'] as const;
@@ -392,6 +704,48 @@ const QTYPE_LABEL: Record<string, string> = {
     dropdown: 'dropdown',
     short: 'short answer',
 };
+
+/**
+ * Hydro's objective markup, stated once and reused by every objective
+ * prompt (question drafting, chat revision, repair) so the rules can never
+ * drift apart between them.
+ * Reference: https://hydro.js.org/en/docs/Hydro/user/problem-create#7-objective-problem-creation
+ */
+const OBJ_FORMAT_RULES = [
+    "\"body\" is markdown in Hydro's objective format — follow it EXACTLY:",
+    '- Number the questions (1., 2., ...). Interactive blanks use these markers; ids are consecutive integers starting at 1, each id used exactly once:',
+    '  * Fill-in-the-blank: {{ input(N) }} placed where the blank belongs.',
+    '  * Dropdown: {{ dropdown(N)[opt1, opt2, opt3] }} — options inline, comma-separated, no commas inside an option.',
+    '  * Single choice (incl. true/false): end the question paragraph with {{ select(N) }}, then IMMEDIATELY on the following lines a markdown list of the options, one "- option text" per line. Do NOT letter the options yourself; the platform labels them A, B, C…',
+    '  * Multiple choice: same list rule but with {{ multiselect(N) }}.',
+    '  * Short answer: {{ textarea(N) }} — graded by EXACT match, so use it ONLY if the teacher explicitly asked for short answers.',
+    '- True/False = a select with exactly two options: True / False (or 对 / 错 when the brief is Chinese).',
+    '- Never put markers inside code fences. 4-8 questions unless the teacher asked otherwise. Mix the requested question types sensibly.',
+].join('\n');
+
+/**
+ * PHASE 1 for objective drafts: the QUESTIONS only. The answer key is a
+ * separate call made after the teacher approves the questions, so that
+ * editing a question can never leave a stale key silently attached to it.
+ */
+const P_OBJ_QUESTIONS = [
+    'Draft the QUESTIONS of an OBJECTIVE QUIZ (auto-graded) based on the brief.',
+    'Schema: {"title": string, "body": string}',
+    OBJ_FORMAT_RULES,
+    'Do NOT reveal, mark, or hint at which option is correct — the answer key is written separately in a later step. Order the options naturally, not with the correct one always first.',
+    'Every question must have exactly one defensible correct answer (or, for multiple choice, one defensible correct SET) derivable from the teacher\'s materials.',
+    "Ground every question in the teacher's materials; write in the same language as the brief.",
+].join('\n');
+
+/** PHASE 2 for objective drafts: the answer key for questions already fixed. */
+const P_OBJ_ANSWERS = [
+    'Write the ANSWER KEY for the objective quiz below. The questions are FINAL — the teacher has approved them. Do not restate, renumber or modify them.',
+    'Schema: {"answers": {"<id>": [answer, score]}}',
+    'One entry per question marker present in the statement, using that marker\'s exact id.',
+    'Answer format by marker type: select → the single correct option LETTER ("A", "B", …) counting the markdown list under the marker from A; multiselect → an array of correct letters, alphabetically sorted; dropdown → the exact option text as written inside the brackets; input/textarea → the exact expected string (short and unambiguous — a number or one word).',
+    'Every score is a positive integer, and all scores sum to exactly 100. Weight harder questions higher.',
+    'Solve each question carefully from the statement and the teacher\'s materials before answering; a wrong key is worse than a wrong question.',
+].join('\n');
 
 const P_OBJECTIVE = [
     'Draft an OBJECTIVE QUIZ (auto-graded) based on the brief.',
@@ -475,6 +829,38 @@ function validateObjective(body: string, answers: Record<string, any>) {
     return { issues, normalized: ordered, count: orderedIds.length, total };
 }
 
+/**
+ * Validate the QUESTIONS alone, before an answer key exists. Used by the
+ * review phase: the teacher is editing markers by hand, so the markup must
+ * stay well-formed even though nothing can be graded yet.
+ */
+function validateObjectiveBody(body: string) {
+    const meta = aiTutor.extractQuestionMeta(body || '');
+    const issues: string[] = [];
+    const ids = Object.keys(meta).sort(aiTutor.questionIdCompare);
+    if (!ids.length) issues.push('The statement contains no {{ ... }} question markers.');
+    for (const id of ids) {
+        const m = meta[id];
+        if (['single-choice', 'multi-select'].includes(m.kind) && (m.options || []).length < 2) {
+            issues.push(`Q${id}: a choice question needs a markdown option list ("- option") right under its marker.`);
+        }
+        if (m.kind === 'dropdown-choice' && (m.options || []).length < 2) {
+            issues.push(`Q${id}: a dropdown needs at least two comma-separated options inside its brackets.`);
+        }
+    }
+    // Ids must be the consecutive run 1..n: the judge keys scoring off them.
+    const numeric = ids.filter((id) => /^\d+$/.test(id)).map(Number).sort((a, b) => a - b);
+    if (numeric.length === ids.length) {
+        for (let i = 0; i < numeric.length; i++) {
+            if (numeric[i] !== i + 1) {
+                issues.push(`Question ids must be consecutive integers starting at 1 (found ${numeric.join(', ')}).`);
+                break;
+            }
+        }
+    }
+    return { issues, count: ids.length, ids };
+}
+
 const answersYamlOf = (map: Record<string, [any, number]>) => yamlDump(map, { flowLevel: 1 });
 
 function objAnswersDigest(body: string, map: Record<string, [any, number]>): string {
@@ -486,9 +872,47 @@ function objAnswersDigest(body: string, map: Record<string, [any, number]>): str
     }).join('\n');
 }
 
-/** Generation for objective drafts: the statement and its key are one unit. */
+/** Generation for objective drafts. */
 async function generateObjectiveArtifact(d: AuthorDraftDoc, target: string): Promise<any> {
     const brief = briefBlock(d);
+    if (target === 'questions') {
+        // Review phase: questions only. Any answer key from an earlier round
+        // is dropped by the caller, since it can no longer be trusted to
+        // match the questions that just replaced it.
+        const j = await aiTitleBody(`${P_OBJ_QUESTIONS}\n\n${brief}`);
+        let body = String(j.body).slice(0, 30000);
+        let v = validateObjectiveBody(body);
+        if (v.issues.length) {
+            // One cheap in-place repair round, exactly as the combined path does.
+            const j2 = await aiTitleBody([P_OBJ_REPAIR, `Problems found:\n- ${v.issues.join('\n- ')}`,
+                'The answer key is written in a later step — send back the QUESTIONS only.',
+                `Current quiz title: ${j.title}`, `Current quiz body:\n${body}`, OBJ_FORMAT_RULES, brief].join('\n\n'));
+            const v2 = validateObjectiveBody(j2.body);
+            if (!v2.issues.length) {
+                body = j2.body.slice(0, 30000);
+                v = v2;
+                if (j2.title) j.title = j2.title;
+            }
+            if (v.issues.length) throw Object.assign(new BadRequestError(`The quiz failed validation: ${v.issues[0]}`), { evidence: v.issues.join('\n') });
+        }
+        return { statement: { title: String(j.title).slice(0, 120), body } };
+    }
+    if (target === 'answers') {
+        if (!d.artifacts.statement) throw new BadRequestError('Draft the questions first.');
+        const bodyNow = d.artifacts.statement.body;
+        const vb = validateObjectiveBody(bodyNow);
+        if (vb.issues.length) throw Object.assign(new BadRequestError(`The questions are not valid yet: ${vb.issues[0]}`), { evidence: vb.issues.join('\n') });
+        const ask = async (extra = '') => aiJSON(SYS_COMMON, [P_OBJ_ANSWERS, brief,
+            `=== QUIZ STATEMENT (final) ===\n${bodyNow.slice(0, 20000)}\n=== END ===`, extra].filter((x) => x).join('\n\n'));
+        let j = await ask();
+        let v = validateObjective(bodyNow, j?.answers && typeof j.answers === 'object' ? j.answers : {});
+        if (v.issues.length) {
+            j = await ask(`Your previous key was rejected:\n- ${v.issues.join('\n- ')}\nReply with {"answers": {...}} only.`);
+            v = validateObjective(bodyNow, j?.answers && typeof j.answers === 'object' ? j.answers : {});
+            if (v.issues.length) throw Object.assign(new BadRequestError(`The answer key failed validation: ${v.issues[0]}`), { evidence: v.issues.join('\n') });
+        }
+        return { answers: { yaml: answersYamlOf(v.normalized) } };
+    }
     if (target === 'statement') {
         const j = await aiJSON(SYS_COMMON, `${P_OBJECTIVE}\n\n${brief}`);
         if (!j?.title || typeof j?.body !== 'string' || !j?.answers) throw new BadRequestError('The AI did not return a usable quiz.');
@@ -529,9 +953,94 @@ async function generateObjectiveArtifact(d: AuthorDraftDoc, target: string): Pro
     throw new BadRequestError('Only the quiz (statement + answers) and the teacher report apply to objective tasks.');
 }
 
+/** Generation for subjective drafts: one statement, plus the teacher briefing. */
+async function generateSubjectiveArtifact(d: AuthorDraftDoc, target: string): Promise<any> {
+    const brief = briefBlock(d);
+    if (target === 'statement' || target === 'questions') {
+        const j = await aiTitleBody(`${P_SUBJECTIVE}\n\n${brief}`);
+        return { statement: { title: j.title, body: j.body.slice(0, 30000) } };
+    }
+    if (target === 'report') {
+        if (!d.artifacts.statement) throw new BadRequestError('Draft the statement first.');
+        const j = await aiJSON(SYS_COMMON, [P_REPORT_SUBJECTIVE, brief, statementContext(d)].join('\n\n'));
+        if (!j?.summary) throw new BadRequestError('The AI did not return a usable report.');
+        return {
+            report: {
+                summary: String(j.summary).slice(0, 2000),
+                knowledgePoints: (Array.isArray(j.knowledgePoints) ? j.knowledgePoints : []).map((x: any) => String(x).slice(0, 200)).slice(0, 8),
+                caseDesign: String(j.caseDesign || '').slice(0, 3000),
+                pitfalls: (Array.isArray(j.pitfalls) ? j.pitfalls : []).map((x: any) => String(x).slice(0, 300)).slice(0, 8),
+            },
+        };
+    }
+    throw new BadRequestError('Subjective tasks only have a statement and a teacher report.');
+}
+
+const P_REPORT_SUBJECTIVE = 'Write a short TEACHER BRIEFING for the subjective, human-graded assignment below. '
+    + 'Schema: {"summary": string, "knowledgePoints": string[], "caseDesign": string, "pitfalls": string[]}. '
+    + '"summary" = what the assignment asks and what a strong submission looks like. "knowledgePoints" = the skills it exercises. '
+    + '"caseDesign" = how to grade it: what to look for in the deliverables and the report, and how to apply the rubric consistently. '
+    + '"pitfalls" = where students typically go wrong or under-deliver. Write in the statement\'s language.';
+
 function statementContext(d: AuthorDraftDoc): string {
     const s = d.artifacts.statement;
     return s ? `=== PROBLEM STATEMENT ===\nTitle: ${s.title}\n${s.body}\n=== END STATEMENT ===` : '';
+}
+
+/* ------------------------------------------------------------------ */
+/*  Statement-review chat                                              */
+/* ------------------------------------------------------------------ */
+const CHAT_KEEP = 40; // stored turns per draft
+const CHAT_SEND = 16; // turns replayed to the model
+
+/** The formatting contract the revised statement must keep obeying. */
+function chatFormatRules(kind: AuthorKind): string {
+    if (kind === 'objective') return `The statement is an objective quiz. ${OBJ_FORMAT_RULES}\nNever add, remove or renumber a question marker unless the teacher asked for it; ids must stay the consecutive run 1..n.`;
+    if (kind === 'subjective') return P_SUBJECTIVE.split('\n').slice(2).join('\n');
+    return P_SPEC.split('\n').slice(2).join('\n');
+}
+
+/**
+ * One turn of the review conversation: the AI replies to the teacher AND
+ * returns the full revised statement. Returns the reply plus the statement
+ * only when it actually changed, so an unchanged answer never rewrites the
+ * artifact (and never clobbers an edit the teacher made in the meantime).
+ */
+async function runStatementChat(d: AuthorDraftDoc, message: string): Promise<{ reply: string, statement?: { title: string, body: string } }> {
+    const s = d.artifacts.statement;
+    if (!s) throw new BadRequestError('Draft the statement first, then chat about it.');
+    const kind: AuthorKind = (d.brief.kind || 'programming') as AuthorKind;
+    const history = (d.chat || []).slice(-CHAT_SEND)
+        .map((t) => `${t.role === 'user' ? 'TEACHER' : 'YOU'}: ${t.content.slice(0, 1500)}`).join('\n');
+    const raw = await aiTutor.callProvider(SYS_TEXT, [{
+        content: [
+            P_CHAT,
+            `Task kind: ${kind}`,
+            `=== FORMATTING RULES THE STATEMENT MUST KEEP ===\n${chatFormatRules(kind)}\n=== END ===`,
+            briefBlock(d),
+            `=== CURRENT STATEMENT ===\nTitle: ${s.title}\n${s.body.slice(0, 20000)}\n=== END ===`,
+            history ? `=== CONVERSATION SO FAR ===\n${history}\n=== END ===` : '',
+            `TEACHER: ${message.slice(0, 4000)}`,
+        ].filter((x) => x).join('\n\n'),
+        role: 'user' as const,
+    }], { temperature: 0.4 });
+    // The body block is present only when the AI actually rewrote something,
+    // so its presence IS the "changed" signal — no separate flag to distrust.
+    const rb = parseTitleBody(raw);
+    const head = rb ? raw.slice(0, raw.indexOf(BODY_OPEN)) : raw;
+    const rm = /^[ \t]*REPLY:[ \t]*(.+)$/im.exec(head);
+    const reply = (rm ? rm[1] : head.replace(/^[ \t]*TITLE:.*$/im, '').trim()).trim().slice(0, 4000);
+    if (!reply) throw new BadRequestError('The AI reply was empty; try rephrasing.');
+    const title = (rb && rb.title ? rb.title : s.title).slice(0, 120);
+    const body = rb ? rb.body.slice(0, 30000) : '';
+    const changed = !!body.trim() && (body !== s.body || title !== s.title);
+    if (changed && kind === 'objective') {
+        const v = validateObjectiveBody(body);
+        if (v.issues.length) {
+            return { reply: `${reply}\n\n⚠ ${'I could not apply that: the revised questions are malformed'} (${v.issues[0]}). The statement was left unchanged — try rephrasing, or edit it by hand.` };
+        }
+    }
+    return changed ? { reply, statement: { title, body } } : { reply };
 }
 
 /* ------------------------------------------------------------------ */
@@ -562,13 +1071,39 @@ function validCase(c: any): AuthorCase | null {
     return out;
 }
 
+/** The draft's task kind, defaulting to programming for legacy drafts. */
+const kindOf = (d: AuthorDraftDoc): AuthorKind => ((d.brief.kind || 'programming') as AuthorKind);
+
+/**
+ * Where the draft sits in the two-phase flow:
+ *   'brief'    — nothing drafted yet; the teacher presses Generate.
+ *   'review'   — the statement exists and awaits approval: the teacher edits
+ *                it or chats about it, and everything downstream is locked.
+ *   'approved' — Continue was pressed; downstream artifacts and verification
+ *                are live.
+ * Drafts created before the review phase existed have no `approved` flag but
+ * do have downstream artifacts, so they resolve to 'approved' and keep their
+ * old toolbar rather than being sent back through a review they never had.
+ */
+function phaseOf(d: AuthorDraftDoc): 'brief' | 'review' | 'approved' {
+    if (!d.artifacts.statement) return 'brief';
+    if (d.approved) return 'approved';
+    if (d.approved === undefined) {
+        const legacy = kindOf(d) === 'objective' ? !!d.artifacts.answers : !!d.artifacts.solution;
+        if (legacy) return 'approved';
+    }
+    return 'review';
+}
+
 async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any> {
-    if ((d.brief.kind || 'programming') === 'objective') return generateObjectiveArtifact(d, target);
+    const kind = kindOf(d);
+    if (kind === 'objective') return generateObjectiveArtifact(d, target);
+    if (kind === 'subjective') return generateSubjectiveArtifact(d, target);
     const brief = briefBlock(d);
+    if (target === 'questions') target = 'statement'; // review phase alias
     if (target === 'statement') {
-        const j = await aiJSON(SYS_COMMON, `${P_SPEC}\n\n${brief}`);
-        if (!j?.title || !j?.body) throw new BadRequestError('The AI did not return a usable statement.');
-        return { statement: { title: String(j.title).slice(0, 120), body: String(j.body).slice(0, 30000) } };
+        const j = await aiTitleBody(`${P_SPEC}\n\n${brief}`);
+        return { statement: { title: j.title, body: j.body.slice(0, 30000) } };
     }
     if (target === 'solution' || target === 'alt') {
         if (!d.artifacts.statement) throw new BadRequestError('Generate the statement first.');
@@ -1185,36 +1720,154 @@ async function clarifyStatement(id: ObjectId, d: AuthorDraftDoc, note: string): 
  * immediately and the page polls: artifacts appear live as each one is
  * drafted, and on success the run chains straight into verification.
  */
-async function runGenerateAll(domainId: string, id: ObjectId, verify: boolean) {
+/**
+ * PHASE 1 — draft ONLY the statement (objective: only the questions) and
+ * stop. The draft lands in the review phase, where the teacher edits it or
+ * chats about it; nothing downstream runs until Continue.
+ */
+async function runGenerateStatement(domainId: string, id: ObjectId) {
+    const key = id.toHexString();
+    if (running.has(key)) return;
+    running.add(key);
+    try {
+        const d = await getDraft(domainId, id);
+        const kind = kindOf(d);
+        if (cancelled.has(key)) throw Object.assign(new StoppedError('Stopped by the teacher'), { stage: 'generate' });
+        await patchDraft(id, {
+            pipeline: {
+                status: 'running',
+                stage: 'generate',
+                message: kind === 'objective' ? 'Drafting the questions...' : 'Drafting the statement...',
+                startedAt: new Date(),
+            },
+        });
+        const patch = await generateArtifact(d, 'questions');
+        // A fresh set of questions invalidates any key written for the old
+        // ones: drop it rather than leave a mismatched pair on the draft.
+        const flat: any = { approved: false, chat: [] };
+        for (const k of Object.keys(patch)) flat[`artifacts.${k}`] = (patch as any)[k];
+        if (kind === 'objective') flat['artifacts.answers'] = null;
+        await patchDraft(id, flat, { actor: 'ai', action: 'generate:statement' });
+        await patchDraft(id, {
+            pipeline: {
+                status: 'idle',
+                stage: 'review',
+                message: kind === 'objective'
+                    ? 'Questions drafted. Review or refine them, then press Continue.'
+                    : 'Statement drafted. Review or refine it, then press Continue.',
+                finishedAt: new Date(),
+            },
+        });
+    } catch (e) {
+        logger.warn('[ai-studio] statement generation failed for %s: %s', key, e.message);
+        await patchDraft(id, {
+            pipeline: {
+                status: 'failed',
+                stage: 'generate',
+                message: `${e.message} [${AI_STUDIO_BUILD} · ${aiTutor.tutorProviderInfo().model || '?'}]`,
+                evidence: String(e.evidence || '').slice(0, 2500),
+                finishedAt: new Date(),
+            },
+        }, { actor: 'ai', action: 'failed', detail: e.message }).catch(() => { /* draft may be gone */ });
+    } finally {
+        running.delete(key);
+        cancelled.delete(key);
+    }
+}
+
+/**
+ * PHASE 2 — the teacher approved the statement. Draft whatever the kind
+ * still needs, then hand over to that kind's verification pipeline:
+ *   programming - reference solution, cross-check solution, tests -> sandbox
+ *   objective   - the answer key for the approved questions -> validation
+ *   subjective  - nothing to draft; just materialize the assignment
+ */
+async function runContinue(domainId: string, id: ObjectId) {
     const key = id.toHexString();
     if (running.has(key)) return;
     running.add(key);
     try {
         let d = await getDraft(domainId, id);
-        const targets = (d.brief.kind || 'programming') === 'objective'
-            ? ['statement', 'report']
-            : ['statement', 'solution', ...d.brief.crosscheck ? ['alt'] : [], 'tests'];
+        const kind = kindOf(d);
+        const targets = kind === 'objective' ? ['answers']
+            : kind === 'subjective' ? []
+                : ['solution', ...d.brief.crosscheck ? ['alt'] : [], 'tests'];
+        const LABEL: Record<string, string> = {
+            answers: 'the answer key', solution: 'the reference solution', alt: 'the cross-check solution', tests: 'the test cases',
+        };
         for (const t of targets) {
             if (cancelled.has(key)) throw Object.assign(new StoppedError('Stopped by the teacher'), { stage: 'generate' });
-            await patchDraft(id, { pipeline: { status: 'running', stage: 'generate', message: `Drafting: ${t}`, startedAt: d.pipeline.startedAt || new Date() } });
+            await patchDraft(id, { pipeline: { status: 'running', stage: 'generate', message: `Drafting ${LABEL[t] || t}...`, startedAt: d.pipeline.startedAt || new Date() } });
             const patch = await generateArtifact(d, t);
             const flat: any = {};
             for (const k of Object.keys(patch)) flat[`artifacts.${k}`] = (patch as any)[k];
             await patchDraft(id, flat, { actor: 'ai', action: `generate:${t}` });
             d = await getDraft(domainId, id);
         }
-        if (verify) {
-            await patchDraft(id, { pipeline: { status: 'running', stage: 'queued', message: 'Artifacts drafted — starting verification', startedAt: d.pipeline.startedAt || new Date() } });
-            running.delete(key); // hand the guard to the pipeline
-            runPipeline(domainId, id);
-            return;
-        }
-        await patchDraft(id, { pipeline: { status: 'idle', stage: 'draft', message: 'Artifacts drafted — review them, then run verification.', finishedAt: new Date() } });
+        await patchDraft(id, { pipeline: { status: 'running', stage: 'queued', message: 'Artifacts drafted, starting verification', startedAt: d.pipeline.startedAt || new Date() } });
+        running.delete(key); // hand the guard to the pipeline
+        if (kind === 'objective') runObjectivePipeline(domainId, id);
+        else if (kind === 'subjective') runSubjectivePipeline(domainId, id);
+        else runPipeline(domainId, id);
     } catch (e) {
-        logger.warn('[ai-studio] generation failed for %s: %s', key, e.message);
+        logger.warn('[ai-studio] continuation failed for %s: %s', key, e.message);
         await patchDraft(id, {
             pipeline: { status: 'failed', stage: 'generate', message: e.message, evidence: String(e.evidence || '').slice(0, 2500), finishedAt: new Date() },
         }, { actor: 'ai', action: 'failed', detail: e.message }).catch(() => { /* draft may be gone */ });
+    } finally {
+        running.delete(key);
+        cancelled.delete(key);
+    }
+}
+
+/**
+ * Verification for SUBJECTIVE drafts. There is nothing to verify - no judge,
+ * no answer key - so this only materializes the hidden problem and writes
+ * the grading briefing, then marks the draft publishable so it flows through
+ * the same publish gate as every other kind.
+ */
+async function runSubjectivePipeline(domainId: string, id: ObjectId) {
+    const key = id.toHexString();
+    if (running.has(key)) return;
+    running.add(key);
+    try {
+        let d = await getDraft(domainId, id);
+        if (!d.artifacts.statement) throw Object.assign(new Error('Draft the statement first.'), { stage: 'precheck' });
+        await patchDraft(id, { pipeline: { status: 'running', stage: 'materialize', message: 'Assembling the assignment', startedAt: new Date() } });
+        if (!d.docId) {
+            const docId = await problem.add(domainId, '', `[AI Draft] ${d.artifacts.statement.title}`, d.artifacts.statement.body, d.owner, [], { hidden: true });
+            const newPid = await ensureKindPid(domainId, docId, kindOf(d));
+            await patchDraft(id, { docId, pid: newPid }, { actor: 'system', action: 'scratch-problem', detail: `${newPid} (docId=${docId})` });
+            d = await getDraft(domainId, id);
+        } else {
+            const curTags = ((await problem.get(domainId, d.docId))?.tag || []).filter((t) => t !== 'ai-draft');
+            await problem.edit(domainId, d.docId, {
+                title: `[AI Draft] ${d.artifacts.statement.title}`, content: d.artifacts.statement.body, hidden: !d.published, tag: curTags,
+            });
+        }
+        // Deliberately NO testdata and NO config.yaml: the S-prefixed pid is
+        // what routes students to the subjective submission UI, and an empty
+        // problem keeps the judge out of the picture entirely.
+        if (!d.artifacts.report) {
+            await patchDraft(id, { pipeline: { status: 'running', stage: 'report', message: 'Writing the grading briefing', startedAt: d.pipeline.startedAt || new Date() } });
+            try {
+                const patch = await generateSubjectiveArtifact(d, 'report');
+                await patchDraft(id, { 'artifacts.report': patch.report }, { actor: 'ai', action: 'generate:report' });
+            } catch (e) {
+                logger.warn('[ai-studio] subjective report failed for %s: %s', key, e.message);
+            }
+        }
+        await patchDraft(id, {
+            pipeline: { status: 'passed', stage: 'done', message: 'Ready to publish. Subjective tasks are graded by you, not the judge.', finishedAt: new Date() },
+        }, { actor: 'system', action: 'ready' });
+    } catch (e) {
+        logger.warn('[ai-studio] subjective pipeline failed for %s: %s', key, e.message);
+        await patchDraft(id, {
+            pipeline: {
+                status: 'failed', stage: e.stage || 'materialize', message: e.message,
+                evidence: String(e.evidence || '').slice(0, 2500), finishedAt: new Date(),
+            },
+        }, { actor: 'system', action: 'failed', detail: e.message }).catch(() => { /* draft may be gone */ });
     } finally {
         running.delete(key);
         cancelled.delete(key);
@@ -1227,6 +1880,73 @@ async function runGenerateAll(domainId: string, id: ObjectId, verify: boolean) {
  * materialize the hidden quiz problem with `type: objective` config, and
  * write the teacher report.
  */
+/* ------------------------------------------------------------------ */
+/*  One question = one task                                            */
+/* ------------------------------------------------------------------ */
+/**
+ * Split a multi-question quiz body into standalone single-question bodies.
+ *
+ * Mirrors the client-side card parser (ai_studio_detail parseQuestions) and
+ * the runtime renderer (problem_detail loadObjective): fences are opaque, a
+ * marker line ends the block it accumulates, and a select/multiselect
+ * consumes the option list that follows it. Each part keeps its question
+ * text VERBATIM except for two edits that make it standalone: the marker id
+ * is renumbered to (1), and a leading "3." style ordinal is stripped from
+ * the first line. Prose after the final question (closing remarks) is
+ * appended to the last part so nothing the teacher wrote is lost.
+ */
+function splitObjectiveBody(body: string): { origId: string, body: string }[] {
+    const MARKER = /\{\{ (input|select|multiselect|textarea|dropdown)\((\d+(?:-\d+)?)\)(?:\[([^\]]*)\])? \}\}/;
+    const lines = String(body || '').split('\n');
+    const out: { origId: string, body: string }[] = [];
+    let fence = false;
+    let buf: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*(```|~~~)/.test(line)) { fence = !fence; buf.push(line); continue; }
+        if (fence) { buf.push(line); continue; }
+        const m = MARKER.exec(line);
+        if (!m) { buf.push(line); continue; }
+        const [full, tag, origId] = m;
+        const renumbered = full.replace(`(${origId})`, '(1)');
+        const block = [...buf, line.replace(full, renumbered)];
+        if (tag === 'select' || tag === 'multiselect') {
+            for (let k = i + 1; k < lines.length; k++) {
+                const t = lines[k].trim();
+                if (!t) { if (block.some((l) => /^\s*[-*]\s+/.test(l.trim()) && l.trim())) break; block.push(lines[k]); continue; }
+                if (!/^[-*]\s+/.test(t)) break;
+                block.push(lines[k]);
+                i = k;
+            }
+        }
+        let text = block.join('\n').replace(/^\s*\n/, '');
+        // First line carrying a "3." style ordinal loses it — /m so the
+        // ordinal is found even when the quiz preamble precedes question 1;
+        // non-global so numbered content deeper in the stem is untouched.
+        text = text.replace(/^(\s*)\d+\s*[.、)]\s+/m, '$1');
+        out.push({ origId, body: text.trim() });
+        buf = [];
+    }
+    const rest = buf.join('\n').trim();
+    if (rest && out.length) out[out.length - 1].body += `\n\n${rest}`;
+    return out;
+}
+
+/** Draft-side view of the scratch problems, tolerant of pre-split drafts. */
+function draftDocIds(d: AuthorDraftDoc): number[] {
+    if (Array.isArray((d as any).docIds) && (d as any).docIds.length) return (d as any).docIds;
+    return d.docId ? [d.docId] : [];
+}
+function draftPids(d: AuthorDraftDoc): string[] {
+    if (Array.isArray((d as any).pids) && (d as any).pids.length) return (d as any).pids;
+    return d.pid ? [d.pid] : [];
+}
+/** Per-part scratch title: base plus a question ordinal when split. */
+function partTitle(base: string, k: number, total: number, draft: boolean): string {
+    const t = total > 1 ? `${base} — Q${k + 1}` : base;
+    return draft ? `[AI Draft] ${t}` : t;
+}
+
 async function runObjectivePipeline(domainId: string, id: ObjectId) {
     const key = id.toHexString();
     if (running.has(key)) return;
@@ -1262,19 +1982,48 @@ async function runObjectivePipeline(domainId: string, id: ObjectId) {
         }
         await stage('precheck', `Validated: ${v.count} question(s), ${v.total} point(s) total`);
 
-        await stage('materialize', 'Assembling the hidden quiz problem');
-        if (!d.docId) {
-            const docId = await problem.add(domainId, '', `[AI Draft] ${d.artifacts.statement.title}`, d.artifacts.statement.body, d.owner, [], { hidden: true });
-            await patchDraft(id, { docId }, { actor: 'system', action: 'scratch-problem', detail: `docId=${docId}` });
-            d = await getDraft(domainId, id);
-        } else {
-            const curTags = ((await problem.get(domainId, d.docId))?.tag || []).filter((t) => t !== 'ai-draft');
-            await problem.edit(domainId, d.docId, {
-                title: `[AI Draft] ${d.artifacts.statement.title}`, content: d.artifacts.statement.body, hidden: !d.published, tag: curTags,
-            });
+        /*
+         * ONE QUESTION = ONE TASK. The teacher authors and reviews the quiz
+         * as a whole, but each question materializes as its own hidden
+         * problem: its verbatim source (marker renumbered to (1), ordinal
+         * stripped) plus a config.yaml holding just its answer, worth 100 —
+         * every task is standalone, so per-task scores never have to sum
+         * across a set. Existing scratch problems are reused in question
+         * order; growing the quiz creates new ones, shrinking it deletes the
+         * surplus so no orphaned [AI Draft] problems linger.
+         */
+        const parts = splitObjectiveBody(d.artifacts.statement.body);
+        if (parts.length !== v.count) {
+            throw Object.assign(new Error(`Splitter found ${parts.length} question(s) but the key covers ${v.count} — the markers and the answer key disagree.`), { stage: 'materialize' });
         }
-        const docId = d.docId!;
-        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ type: 'objective', answers: v.normalized })), d.owner);
+        await stage('materialize', `Assembling ${parts.length} hidden task(s) — one per question`);
+        const prevIds = draftDocIds(d);
+        const docIds: number[] = [];
+        const pids: string[] = [];
+        for (let k = 0; k < parts.length; k++) {
+            const title = partTitle(d.artifacts.statement.title, k, parts.length, true);
+            let pDocId = prevIds[k];
+            if (pDocId && !(await problem.get(domainId, pDocId))) pDocId = undefined; // deleted outside the Studio
+            if (!pDocId) {
+                pDocId = await problem.add(domainId, '', title, parts[k].body, d.owner, [], { hidden: true });
+            } else {
+                const curTags = ((await problem.get(domainId, pDocId))?.tag || []).filter((t) => t !== 'ai-draft');
+                await problem.edit(domainId, pDocId, { title, content: parts[k].body, hidden: !d.published, tag: curTags });
+            }
+            const pid = await ensureKindPid(domainId, pDocId, kindOf(d));
+            const orig = v.normalized[parts[k].origId];
+            if (!orig) throw Object.assign(new Error(`No answer found for question #${parts[k].origId}.`), { stage: 'materialize' });
+            await problem.addTestdata(domainId, pDocId, 'config.yaml',
+                Buffer.from(yamlDump({ type: 'objective', answers: { '1': [orig[0], 100] } })), d.owner);
+            docIds.push(pDocId);
+            pids.push(pid);
+        }
+        for (const stale of prevIds.slice(parts.length)) {
+            await problem.del(domainId, stale).catch(() => { /* already gone */ });
+        }
+        await patchDraft(id, { docIds, docId: docIds[0], pids, pid: pids[0] },
+            { actor: 'system', action: 'scratch-problems', detail: pids.join(' ') });
+        d = await getDraft(domainId, id);
 
         if (!d.artifacts.report) {
             await stage('report', 'Writing the teacher briefing');
@@ -1326,7 +2075,8 @@ async function runPipeline(domainId: string, id: ObjectId) {
         // Stage 0: the hidden scratch problem that hosts testdata + records.
         if (!d.docId) {
             const docId = await problem.add(domainId, '', `[AI Draft] ${d.artifacts.statement.title}`, fullContent(d, ''), d.owner, [], { hidden: true });
-            await patchDraft(id, { docId }, { actor: 'system', action: 'scratch-problem', detail: `docId=${docId}` });
+            const newPid = await ensureKindPid(domainId, docId, kindOf(d));
+            await patchDraft(id, { docId, pid: newPid }, { actor: 'system', action: 'scratch-problem', detail: `${newPid} (docId=${docId})` });
             d = await getDraft(domainId, id);
         } else {
             const curTags = ((await problem.get(domainId, d.docId))?.tag || []).filter((t) => t !== 'ai-draft');
@@ -1601,6 +2351,13 @@ async function runPipeline(domainId: string, id: ObjectId) {
 function toClient(d: AuthorDraftDoc) {
     return {
         ...d,
+        // Computed server-side so the client never has to re-derive the
+        // legacy-draft rule (see phaseOf).
+        phase: phaseOf(d),
+        kind: kindOf(d),
+        chat: d.chat || [],
+        docIds: draftDocIds(d),
+        pids: draftPids(d),
         brief: { ...d.brief, files: (d.brief.files || []).map((f) => ({ name: f.name, size: f.size, chars: f.chars })) },
     };
 }
@@ -1616,7 +2373,10 @@ function draftSummary(d: AuthorDraftDoc) {
         stage: d.pipeline.stage,
         status: d.pipeline.status,
         docId: d.docId || null,
+        docIds: draftDocIds(d),
+        pids: draftPids(d),
         published: !!d.published,
+        publishedHidden: !!d.publishedHidden,
         updateAt: d.updateAt,
     };
 }
@@ -1625,6 +2385,19 @@ class AiStudioBaseHandler extends Handler {
     async prepare() {
         if (!authorEnabled()) throw new ForbiddenError('The AI Studio is not enabled (or no AI provider is configured).');
         this.checkPerm(PERM.PERM_CREATE_PROBLEM);
+        /*
+         * These URLs have TWO representations: HTML for a browser navigation,
+         * and JSON for the page's own XHR (request.get sends
+         * Accept: application/json to the very same path). Nothing else
+         * distinguishes them, so without these headers the browser stores the
+         * JSON in its HTTP cache under the document URL and replays it on
+         * Back/Forward — the Studio then "loads" as a wall of raw JSON.
+         *
+         * Vary tells a well-behaved cache the two differ; no-store makes sure
+         * even a cache that ignores Vary keeps nothing to replay.
+         */
+        this.response.addHeader('Vary', 'Accept');
+        this.response.addHeader('Cache-Control', 'no-store, must-revalidate');
     }
 }
 
@@ -1632,7 +2405,7 @@ class AiStudioHandler extends AiStudioBaseHandler {
     async get({ domainId }) {
         const docs = await coll.find({ domainId, owner: this.user._id }).sort({ updateAt: -1 }).limit(50).toArray();
         this.response.template = 'ai_studio.html';
-        this.response.body = { drafts: docs.map(draftSummary), provider: aiTutor.tutorProviderInfo(), langs: judgeLangs() };
+        this.response.body = { drafts: docs.map(draftSummary), provider: { ...aiTutor.tutorProviderInfo(), build: AI_STUDIO_BUILD }, langs: judgeLangs() };
     }
 
     @param('topic', Types.String)
@@ -1643,22 +2416,26 @@ class AiStudioHandler extends AiStudioBaseHandler {
     @param('kind', Types.String, true)
     @param('allowLangs', Types.String, true)
     @param('qtypes', Types.String, true)
-    async postCreate({ domainId }, topic: string, language = '', difficulty = 'intro', notes = '', crosscheck = true, kind = 'programming', allowLangs?: string, qtypes = '') {
+    @param('qcount', Types.String, true)
+    async postCreate({ domainId }, topic: string, language = '', difficulty = 'intro', notes = '', crosscheck = true, kind = 'programming', allowLangs?: string, qtypes = '', qcount = '') {
         topic = topic.trim().slice(0, 2000);
         if (!topic) throw new BadRequestError('Topic is required.');
         if (!judgeLangs()[language]) language = defaultLang();
+        if (!['programming', 'objective', 'subjective'].includes(kind)) kind = 'programming';
         const isObj = kind === 'objective';
+        const isProg = kind === 'programming';
         // Allowed submission languages (programming only). The client sends a
         // comma-joined list from the picker (empty string = every language,
         // matching the manual creation page). When the field is absent
         // entirely — older clients — keep the historical policy of pinning
         // to the solution language.
-        const allow = isObj ? []
+        const allow = !isProg ? []
             : allowLangs === undefined ? [language]
                 : sanitizeAllowLangs(String(allowLangs).split(',').map((x) => x.trim()).filter((x) => x));
         const qt = isObj
             ? [...new Set(String(qtypes).split(',').map((x) => x.trim()).filter((x) => (QTYPES as readonly string[]).includes(x)))]
             : [];
+        const qn = isObj ? sanitizeQCount(qcount) : 0;
         if (!DIFF_HINT[difficulty]) difficulty = 'intro';
         const now = new Date();
         const doc: AuthorDraftDoc = {
@@ -1668,12 +2445,15 @@ class AiStudioHandler extends AiStudioBaseHandler {
             createdAt: now,
             updateAt: now,
             brief: {
-                topic, notes: String(notes || '').slice(0, 20000), language, difficulty, crosscheck: isObj ? false : !!crosscheck,
+                topic, notes: String(notes || '').slice(0, 20000), language, difficulty, crosscheck: isProg && !!crosscheck,
                 ...(allow.length ? { allowLangs: allow } : {}),
-                ...(isObj ? { kind: 'objective' as const } : {}),
+                ...(isProg ? {} : { kind: kind as AuthorKind }),
                 ...(qt.length ? { qtypes: qt } : {}),
+                ...(qn ? { qcount: qn } : {}),
             },
             artifacts: {},
+            approved: false,
+            chat: [],
             pipeline: { status: 'idle', stage: 'draft', message: '' },
             log: [{
                 at: now,
@@ -1681,7 +2461,9 @@ class AiStudioHandler extends AiStudioBaseHandler {
                 action: 'create',
                 detail: isObj
                     ? `objective${qt.length ? ` [${qt.join(',')}]` : ''}`
-                    : `programming [langs:${allow.length ? allow.join(',') : 'all'}]`,
+                    : kind === 'subjective'
+                        ? 'subjective'
+                        : `programming [langs:${allow.length ? allow.join(',') : 'all'}]`,
             }],
         };
         await coll.insertOne(doc);
@@ -1705,7 +2487,7 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         this.response.template = 'ai_studio_detail.html';
         this.response.body = {
             draft: toClient(this.ddoc),
-            provider: aiTutor.tutorProviderInfo(),
+            provider: { ...aiTutor.tutorProviderInfo(), build: AI_STUDIO_BUILD },
             langs: judgeLangs(),
             running: running.has(this.ddoc._id.toHexString()),
         };
@@ -1718,10 +2500,15 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         if (this.ddoc.pipeline.status === 'running' || running.has(this.ddoc._id.toHexString())) {
             throw new BadRequestError('A generation or verification run is in progress; wait for it to finish.');
         }
-        if (target === 'all') {
+        // 'all' is the legacy one-shot target; it now starts PHASE 1 only.
+        // Nothing downstream is drafted until the teacher presses Continue,
+        // so `verify` no longer has anything to chain to and is ignored.
+        if (target === 'all' || target === 'questions' || (target === 'statement' && phaseOf(this.ddoc) !== 'approved')) {
             // Background job: respond immediately, the page polls artifacts in.
-            await patchDraft(this.ddoc._id, { pipeline: { status: 'running', stage: 'generate', message: 'Starting…', startedAt: new Date() } }, { actor: 'teacher', action: 'generate:all' });
-            runGenerateAll(domainId, this.ddoc._id, verify);
+            await patchDraft(this.ddoc._id, {
+                pipeline: { status: 'running', stage: 'generate', message: 'Starting...', startedAt: new Date() },
+            }, { actor: 'teacher', action: 'generate:statement' });
+            runGenerateStatement(domainId, this.ddoc._id);
             this.ddoc = await getDraft(domainId, this.ddoc._id);
             this.response.body = { draft: toClient(this.ddoc), started: true };
             return;
@@ -1731,6 +2518,76 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         for (const k of Object.keys(patch)) flat[`artifacts.${k}`] = patch[k];
         await patchDraft(this.ddoc._id, flat, { actor: 'ai', action: `generate:${target}` });
         this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), started: false };
+    }
+
+    /**
+     * The teacher approves the statement. From here the kind's own pipeline
+     * takes over: solutions + tests + sandbox verification (programming),
+     * the answer key + format validation (objective), or straight to
+     * materialization (subjective).
+     */
+    async postContinue({ domainId }) {
+        if (this.ddoc.pipeline.status === 'running' || running.has(this.ddoc._id.toHexString())) {
+            throw new BadRequestError('A generation or verification run is in progress; wait for it to finish.');
+        }
+        if (!this.ddoc.artifacts.statement) throw new BadRequestError('Generate the statement first.');
+        if (kindOf(this.ddoc) === 'objective') {
+            // Fail here, with the offending marker named, rather than three
+            // minutes later inside the key generator.
+            const v = validateObjectiveBody(this.ddoc.artifacts.statement.body);
+            if (v.issues.length) throw new BadRequestError(`The questions are not valid yet: ${v.issues[0]}`);
+        }
+        await patchDraft(this.ddoc._id, {
+            approved: true,
+            pipeline: { status: 'running', stage: 'generate', message: 'Starting...', startedAt: new Date() },
+        }, { actor: 'teacher', action: 'continue' });
+        runContinue(domainId, this.ddoc._id);
+        this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), started: true };
+    }
+
+    /**
+     * One turn of the statement-review conversation. Synchronous: the reply
+     * and the revised statement arrive together, and the client keeps every
+     * other control disabled until this resolves.
+     */
+    @param('text', Types.String)
+    async postChat({ domainId }, text: string) {
+        await this.limitRate('ai_author', 60, 20);
+        if (this.ddoc.pipeline.status === 'running' || running.has(this.ddoc._id.toHexString())) {
+            throw new BadRequestError('A generation or verification run is in progress; wait for it to finish.');
+        }
+        const message = String(text || '').trim().slice(0, 4000);
+        if (!message) throw new BadRequestError('Type a message first.');
+        const { reply, statement } = await runStatementChat(this.ddoc, message);
+        const now = new Date();
+        const turns: AuthorChatTurn[] = [
+            { role: 'user', content: message, at: now },
+            { role: 'assistant', content: reply, at: new Date(now.getTime() + 1) },
+        ];
+        const $set: any = {};
+        if (statement) {
+            $set['artifacts.statement'] = statement;
+            // Re-editing an approved statement un-approves it: whatever was
+            // built downstream certified the OLD text.
+            if (phaseOf(this.ddoc) === 'approved') $set.approved = false;
+            if (this.ddoc.pipeline.status === 'passed') {
+                $set.pipeline = { status: 'idle', stage: 'review', message: 'Statement changed. Review it, then press Continue.' };
+            }
+        }
+        await coll.updateOne({ _id: this.ddoc._id }, {
+            $set: { ...$set, updateAt: new Date() },
+            $push: {
+                chat: { $each: turns, $slice: -CHAT_KEEP },
+                log: { $each: [{ at: now, actor: 'teacher', action: 'chat', detail: message.slice(0, 120) }], $slice: -80 },
+            },
+        } as any);
+        this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), reply, changed: !!statement };
+    }
+
+    /** Clear the review conversation without touching the statement. */
+    async postChatReset({ domainId }) {
+        await patchDraft(this.ddoc._id, { chat: [] }, { actor: 'teacher', action: 'chat:reset' });
+        this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
     }
 
     @param('target', Types.String)
@@ -1798,7 +2655,20 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             const topic = String(j?.topic ?? this.ddoc.brief.topic).trim().slice(0, 2000);
             if (!topic) throw new BadRequestError('The requirement cannot be empty.');
             const difficulty = ['intro', 'medium', 'challenge'].includes(j?.difficulty) ? j.difficulty : this.ddoc.brief.difficulty;
+            // The objective setup panel edits the whole quiz brief in one go;
+            // the programming form only ever sends topic + difficulty, so the
+            // extra keys stay untouched there.
+            const extra: any = {};
+            if (kindOf(this.ddoc) === 'objective') {
+                if (Array.isArray(j?.qtypes)) {
+                    extra['brief.qtypes'] = [...new Set(j.qtypes.map((x: any) => String(x).trim())
+                        .filter((x: string) => (QTYPES as readonly string[]).includes(x)))];
+                }
+                if (j?.qcount !== undefined) extra['brief.qcount'] = sanitizeQCount(j.qcount);
+            }
+            if (typeof j?.language === 'string' && judgeLangs()[j.language]) extra['brief.language'] = j.language;
             await patchDraft(this.ddoc._id, {
+                ...extra,
                 'brief.topic': topic,
                 'brief.difficulty': difficulty,
                 // A changed requirement invalidates "verified": that badge
@@ -1835,13 +2705,72 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
             return;
         }
+        if (target === 'kind') {
+            /*
+             * Change the task kind of an existing draft. Artifacts are
+             * kind-specific — a programming statement is not a quiz body and
+             * a quiz has no reference solution — so switching resets ALL of
+             * them rather than leaving a half-valid mixture behind. This is
+             * the escape hatch for a draft created on the wrong card; without
+             * it the teacher has to retype the requirement into a new draft.
+             */
+            const next = ['programming', 'objective', 'subjective'].includes(j?.kind) ? j.kind as AuthorKind : null;
+            if (!next) throw new BadRequestError('Unknown task kind.');
+            if (this.ddoc.published) throw new BadRequestError('This draft is already published; create a new draft instead.');
+            if (this.ddoc.pipeline.status === 'running' || running.has(this.ddoc._id.toHexString())) {
+                throw new BadRequestError('A generation or verification run is in progress; wait for it to finish.');
+            }
+            if (next === kindOf(this.ddoc)) {
+                this.response.body = { draft: toClient(this.ddoc), changed: false };
+                return;
+            }
+            // The hidden scratch problem was built to the OLD kind's shape
+            // (testdata, objective config, ...). Drop it; the next pipeline
+            // run creates a clean one.
+            if (this.ddoc.docId) {
+                await problem.del(this.ddoc.domainId, this.ddoc.docId)
+                    .catch((e) => logger.warn('[ai-studio] kind switch: scratch problem cleanup failed: %s', e.message));
+            }
+            await patchDraft(this.ddoc._id, {
+                'brief.kind': next,
+                'brief.crosscheck': next === 'programming' ? !!this.ddoc.brief.crosscheck : false,
+                'brief.qtypes': next === 'objective' ? (this.ddoc.brief.qtypes || []) : [],
+                'brief.allowLangs': next === 'programming' ? (this.ddoc.brief.allowLangs || []) : [],
+                artifacts: {},
+                approved: false,
+                chat: [],
+                docId: null,
+                pid: null,
+                docIds: null,
+                pids: null,
+                measured: null,
+                pipeline: { status: 'idle', stage: 'draft', message: 'Task kind changed — generate again.' },
+            }, { actor: 'teacher', action: `kind:${next}` });
+            this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), changed: true };
+            return;
+        }
         if (target === 'notes' && typeof j?.notes === 'string') {
             await patchDraft(this.ddoc._id, { 'brief.notes': j.notes.slice(0, 20000) }, { actor: 'teacher', action: 'edit:notes' });
             this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
             return;
         }
         if (!patch) throw new BadRequestError('Bad artifact payload.');
-        await patchDraft(this.ddoc._id, { [`artifacts.${target}`]: patch, 'pipeline.status': this.ddoc.pipeline.status === 'passed' ? 'idle' : this.ddoc.pipeline.status }, { actor: 'teacher', action: `edit:${target}` });
+        const extra: any = {};
+        if (target === 'statement') {
+            // Editing the statement invalidates approval: everything built
+            // downstream (solutions, tests, answer key) certified the OLD
+            // text, so the teacher re-reviews and presses Continue again.
+            if (phaseOf(this.ddoc) === 'approved') extra.approved = false;
+            if (kindOf(this.ddoc) === 'objective') {
+                const v = validateObjectiveBody(patch.body);
+                if (v.issues.length) throw new BadRequestError(`The questions are not valid: ${v.issues[0]}${v.issues.length > 1 ? ` (+${v.issues.length - 1} more)` : ''}`);
+            }
+        }
+        await patchDraft(this.ddoc._id, {
+            [`artifacts.${target}`]: patch,
+            ...extra,
+            'pipeline.status': this.ddoc.pipeline.status === 'passed' ? 'idle' : this.ddoc.pipeline.status,
+        }, { actor: 'teacher', action: `edit:${target}` });
         this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
     }
 
@@ -1894,27 +2823,65 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         this.response.body = { ok: 1 };
     }
 
-    async postPublish({ domainId }) {
+    /**
+     * Publish the draft. `hidden` keeps the finished task invisible to
+     * students: everything else is finalized — pid, title, the ai-draft tag
+     * comes off — so a teacher can verify tasks days ahead and reveal them
+     * at class time from the same page (postVisibility below).
+     */
+    @param('hidden', Types.Boolean, true)
+    async postPublish({ domainId }, hidden = false) {
         if (this.ddoc.pipeline.status !== 'passed' || !this.ddoc.docId) {
             throw new BadRequestError('Only a draft that passed verification can be published.');
         }
-        const docId = this.ddoc.docId;
-        // Site convention: pid prefix encodes the task kind (P = programming,
-        // O = objective) — the problem-list tabs and the scratchpad rail key
-        // off it.
-        const prefix = (this.ddoc.brief.kind || 'programming') === 'objective' ? 'O' : 'P';
-        let pid = `${prefix}${docId}`;
-        const clash = await problem.get(domainId, pid);
-        if (clash && clash.docId !== docId) pid = `${prefix}${docId}A`;
-        const pubTags = ((await problem.get(domainId, docId))?.tag || []).filter((t) => t !== 'ai-draft');
-        await problem.edit(domainId, docId, { hidden: false, pid, title: this.ddoc.artifacts.statement!.title, tag: pubTags });
-        await patchDraft(this.ddoc._id, { published: true }, { actor: 'teacher', action: 'publish', detail: pid });
-        this.response.body = { pid, url: this.url('problem_detail', { pid }) };
+        const docIds = draftDocIds(this.ddoc);
+        const total = docIds.length;
+        const pids: string[] = [];
+        for (let k = 0; k < total; k++) {
+            const docId = docIds[k];
+            // Re-assert the pid so drafts from before stamping existed, or
+            // whose kind was switched, still publish under the right prefix.
+            const pid = await ensureKindPid(domainId, docId, kindOf(this.ddoc));
+            const pubTags = ((await problem.get(domainId, docId))?.tag || []).filter((t) => t !== 'ai-draft');
+            await problem.edit(domainId, docId, {
+                hidden: !!hidden,
+                pid,
+                title: partTitle(this.ddoc.artifacts.statement!.title, k, total, false),
+                tag: pubTags,
+            });
+            pids.push(pid);
+        }
+        await patchDraft(this.ddoc._id, { published: true, publishedHidden: !!hidden, pid: pids[0], pids },
+            { actor: 'teacher', action: 'publish', detail: (hidden ? `${pids.join(' ')} (hidden from students)` : pids.join(' ')) });
+        this.response.body = {
+            pid: pids[0],
+            pids,
+            hidden: !!hidden,
+            url: this.url('problem_detail', { pid: pids[0] }),
+            draft: toClient(await getDraft(domainId, this.ddoc._id)),
+        };
+    }
+
+    /**
+     * Flip a PUBLISHED task's visibility. Draft-phase problems stay managed
+     * by the pipeline (always hidden), so this refuses until publish.
+     */
+    @param('visible', Types.Boolean)
+    async postVisibility({ domainId }, visible: boolean) {
+        if (!this.ddoc.published || !draftDocIds(this.ddoc).length) throw new BadRequestError('Publish the task first — drafts are always hidden from students.');
+        for (const docId of draftDocIds(this.ddoc)) {
+            await problem.edit(domainId, docId, { hidden: !visible });
+        }
+        await patchDraft(this.ddoc._id, { publishedHidden: !visible },
+            { actor: 'teacher', action: visible ? 'reveal' : 'hide', detail: draftPids(this.ddoc).join(' ') || `docId=${this.ddoc.docId}` });
+        this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
     }
 
     async postDiscard({ domainId }) {
         if (this.ddoc.published) throw new BadRequestError('This draft is already published; delete the problem from the problem page instead.');
-        if (this.ddoc.docId) await problem.del(domainId, this.ddoc.docId).catch((e) => logger.warn('discard: %s', e.message));
+        for (const docId of draftDocIds(this.ddoc)) {
+            await problem.del(domainId, docId).catch((e) => logger.warn('discard: %s', e.message));
+        }
         await coll.deleteOne({ _id: this.ddoc._id });
         this.response.body = { ok: 1, url: this.url('ai_studio') };
     }
@@ -1973,5 +2940,11 @@ export async function apply(ctx: Context) {
     let pdfLib = false;
     try { pdfLib = !!(typeof require === 'function' && require('pdf-parse')); } catch (e) { /* optional */ }
     logger.info('[ai-studio] context extraction ready: built-in PDF reader%s', pdfLib ? ' + pdf-parse' : ' (pdf-parse not installed — optional)');
+    // Build marker. The Studio's frontend and backend must be deployed
+    // together: a rebuilt UI talking to an older process sends operations
+    // (continue / chat) and targets ('questions') the old handlers reject
+    // with "Unknown target". If this line is missing from the boot log, the
+    // running process is NOT this file.
+    logger.info('[ai-studio] build %s — two-phase authoring, kinds: programming | objective | subjective', AI_STUDIO_BUILD);
     registerAiStudioTemplates(ctx);
 }

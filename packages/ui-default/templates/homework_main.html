@@ -50,6 +50,12 @@
               </div>
               <div class="media__body medium">
                 <h1 class="homework__title"><a href="{{ url('homework_detail', tid=tdoc.docId) }}" data-emoji-enabled>{{ tdoc.title }}</a></h1>
+                {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) %}
+                <form class="list-del " method="post" action="{{ url('homework_edit', tid=tdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
+                  <input type="hidden" name="operation" value="delete">
+                  <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
+                </form>
+                {% endif %}
                 <ul class="supplementary list">
                   <li>{{ _('Status') }}: {{ _(model.contest.statusText(tdoc)) }}</li>
                   <li>{{ _('Open Since') }}: {{ datetimeSpan(tdoc['beginAt'])|safe }}</li>

@@ -255,6 +255,24 @@ PreferenceSetting(
 );
 
 AccountSetting(
+    /*
+     * Real name, split so display order can be composed per locale. The
+     * account NAME (uname) stays the student/staff ID used to log in —
+     * these two are what humans get shown (nav, rosters, reports). Same
+     * visibility class as school/studentId: the owner and anyone holding
+     * PERM_VIEW_USER_PRIVATE_INFO (teachers), not classmates.
+     */
+    /*
+     * FLAG_DISABLED does two jobs at once here: partials/setting.html
+     * renders the input greyed-out (visible but not editable), and the
+     * settings save path (home.ts set()) silently drops any write to a
+     * disabled setting — so a devtools-edited form can't change it either.
+     * These fields are roster-managed: the bulk importer writes them via
+     * user.setById, which bypasses the settings pipeline entirely, so the
+     * flag does not get in its way.
+     */
+    Setting('setting_info', 'firstName', '', 'text', 'First Name', 'Managed by your institution — imported from the course roster.', FLAG_DISABLED | FLAG_PRIVATE),
+    Setting('setting_info', 'lastName', '', 'text', 'Last Name', 'Managed by your institution — imported from the course roster.', FLAG_DISABLED | FLAG_PRIVATE),
     Setting('setting_info', 'avatar', '', 'text', 'Avatar',
         'Allow using gravatar:email qq:id github:name url:link format.'),
     Setting('setting_info', 'qq', null, 'text', 'QQ'),

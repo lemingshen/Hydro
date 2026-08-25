@@ -2,7 +2,8 @@ import $ from 'jquery';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { i18n, request } from 'vj/utils';
-import { ensureAisStyle, fmtSize, langEntries, langOptionsHtml, renderAllowLangsDd, uploadContextFile, wireAllowLangsDd } from 'vj/pages/ai_studio.page';
+import { aiMarkdown } from 'vj/components/ai-report/pdf';
+import { AIS_POLISH, ensureAisStyle, fmtSize, langEntries, langOptionsHtml, renderAllowLangsDd, uploadContextFile, wireAllowLangsDd } from 'vj/pages/ai_studio.page';
 
 /**
  * AI Studio — draft detail. Left: artifact tabs (statement / reference
@@ -15,6 +16,14 @@ import { ensureAisStyle, fmtSize, langEntries, langOptionsHtml, renderAllowLangs
 const esc = (t) => $('<i>').text(String(t ?? '')).html();
 const fmtTs = (ts) => (ts ? new Date(ts).toLocaleString() : '-');
 const base = () => window.location.pathname;
+/*
+ * The same path serves HTML to the browser and JSON to this XHR. Giving the
+ * XHR its own query string means the document URL never acquires a JSON
+ * entry in the HTTP cache, so Back/Forward cannot replay JSON as the page.
+ * Belt and braces with the Vary/no-store headers the handler sets: a proxy
+ * that strips Vary would otherwise reintroduce the bug.
+ */
+const jsonUrl = () => `${window.location.pathname}?_fmt=json`;
 const domainPrefix = () => (window.location.pathname.match(/^\/d\/[^/]+/) || [''])[0];
 
 const DETAIL_STYLE = [
@@ -44,7 +53,66 @@ const DETAIL_STYLE = [
   '.aisd__case:hover { background: var(--pta-violet-soft); }',
   '.aisd__case pre { margin: 4px 0 0; background: var(--pta-card-2); border-radius: 6px; padding: 6px 8px; font-size: 11.5px; white-space: pre-wrap; }',
   '.pta-dark .aisd__case pre { background: #1e2227; }',
-].join('\n');
+  /* ---- objective: the quiz setup panel ---- */
+  '.aisq__setup { border: 1px solid rgba(12, 166, 120, .35); border-radius: var(--pta-radius-lg); padding: 14px 16px 16px; margin-bottom: 18px; background: var(--pta-card); }',
+  '.aisq__setup-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-weight: bold; font-size: 13.5px; color: var(--pta-ink); margin-bottom: 12px; }',
+  '.aisq__setup-head .aisd__meta { font-weight: normal; }',
+  '.aisq__grid { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }',
+  '@media (max-width: 780px) { .aisq__grid { grid-template-columns: 1fr; } }',
+  '.aisq__grid select { width: 100%; }',
+  '.aisq__types { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }',
+  '.aisq__type-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--pta-line); border-radius: 999px; padding: 5px 13px; font-size: 12.5px; cursor: pointer; background: var(--pta-card-2); color: var(--pta-ink-soft); transition: border-color .15s, background .15s, color .15s; }',
+  '.aisq__type-chip:hover { border-color: rgba(12, 166, 120, .5); }',
+  '.aisq__type-chip--on { border-color: #0ca678; background: #ebfbee; color: #0b7a56; font-weight: bold; }',
+  '.pta-dark .aisq__type-chip--on { background: #10331d; color: #69db7c; }',
+  '.aisq__type-chip input { margin: 0; accent-color: #0ca678; }',
+  /* ---- per-kind page identity ---- */
+  '.ais__head--obj { background: linear-gradient(100deg, #0ca678 0%, #20c997 55%, #63e6be 100%); }',
+  '.ais__head--subj { background: linear-gradient(100deg, #7048e8 0%, #9775fa 55%, #d0bfff 100%); }',
+  '.aisd--obj .aisd__tab--on { box-shadow: inset 0 -2px 0 #0ca678; }',
+  '.aisd--subj .aisd__tab--on { box-shadow: inset 0 -2px 0 #7048e8; }',
+  /* ---- objective: the quiz workbench ---- */
+  '.aisq { margin: 4px 0 14px; }',
+  '.aisq__summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; font-size: 12.5px; }',
+  '.aisq__count { font-weight: bold; color: var(--pta-ink); }',
+  '.aisq__pts { border-radius: 10px; padding: 2px 10px; background: #ebfbee; color: #2b8a3e; font-weight: bold; }',
+  '.aisq__pts--warn { background: #fff4e6; color: #e8590c; }',
+  '.pta-dark .aisq__pts { background: #10331d; color: #69db7c; }',
+  '.pta-dark .aisq__pts--warn { background: #3a2410; color: #ffa94d; }',
+  '.aisq__card { border: 1px solid var(--pta-line); border-radius: var(--pta-radius-lg); padding: 12px 14px; margin: 0 0 10px; background: var(--pta-card); animation: ptaFadeUp .22s var(--pta-ease) backwards; }',
+  '.aisq__card:hover { border-color: rgba(12, 166, 120, .45); }',
+  '.aisq__head { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; flex-wrap: wrap; }',
+  '.aisq__num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(120deg, #20c997, #0ca678); color: #fff; font: bold 12px/1 ui-monospace, Consolas, monospace; flex: 0 0 auto; }',
+  '.aisq__type { font-size: 12px; font-weight: bold; color: var(--pta-ink-soft); }',
+  '.aisq__id { font: 11px/1 ui-monospace, Consolas, monospace; color: var(--pta-ink-faint); }',
+  '.aisq__score { margin-left: auto; font-size: 11.5px; border-radius: 9px; padding: 2px 9px; background: var(--pta-card-2); color: var(--pta-ink-soft); }',
+  '.aisq__stem { font-size: 13px; line-height: 1.6; }',
+  '.aisq__stem p { margin: 0 0 6px; }',
+  '.aisq__opts { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }',
+  '.aisq__opt { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; border: 1px solid var(--pta-line-soft); border-radius: 9px; padding: 6px 10px; background: var(--pta-card-2); }',
+  '.aisq__opt--ok { border-color: #40c057; background: #ebfbee; }',
+  '.pta-dark .aisq__opt--ok { background: #10331d; }',
+  '.aisq__letter { font: bold 11.5px/1.5 ui-monospace, Consolas, monospace; color: var(--pta-ink-faint); flex: 0 0 auto; min-width: 14px; }',
+  '.aisq__opt--ok .aisq__letter { color: #2b8a3e; }',
+  '.aisq__tick { margin-left: auto; color: #2b8a3e; font-weight: bold; }',
+  '.aisq__ans { margin-top: 8px; font-size: 12.5px; color: var(--pta-ink-soft); }',
+  '.aisq__ans code { background: #ebfbee; color: #2b8a3e; border-radius: 6px; padding: 1px 7px; }',
+  '.pta-dark .aisq__ans code { background: #10331d; color: #69db7c; }',
+  '.aisq__titlerow { margin-bottom: 12px; }',
+  '.aisq__src { border: 1px dashed var(--pta-line); border-radius: var(--pta-radius-lg); padding: 10px 12px; margin: 4px 0 0; }',
+  '.aisq__src > summary { cursor: pointer; font-size: 12.5px; font-weight: bold; color: var(--pta-ink-soft); }',
+  '.aisq__src > summary .aisd__meta { font-weight: normal; display: block; margin-top: 3px; }',
+  '.aisq__src textarea { margin-top: 10px; }',
+  /* ---- shared: editor host + field headers + toolbar hint ---- */
+  '.aisd__host { position: relative; }',
+  /* The rich editor injects itself here, beside the textarea it replaces. */
+  '.aisd__host .editor-container, .aisd__host .monaco-editor { border-radius: var(--pta-radius-lg); overflow: hidden; }',
+  '.aisd__fieldhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 14px 0 6px; }',
+  '.aisd__fieldhead .aisd__meta { text-transform: none; letter-spacing: 0; }',
+  '.aisd__toolhint { margin: 8px 0 2px; font-size: 12.5px; color: var(--pta-ink-soft); line-height: 1.5; }',
+  '.aisd__pidchip { margin-left: 8px; font-family: ui-monospace, Consolas, monospace; font-weight: bold; letter-spacing: .03em; }',
+  '.aisd__bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }'
+].concat(AIS_POLISH).join('\n');
 
 const STAGES = [
   ['generate', 'Generate'],
@@ -59,13 +127,65 @@ const STAGES = [
 
 /** Objective drafts skip the sandbox entirely: validate -> assemble -> report. */
 const OBJ_STAGES = [
-  ['generate', 'Generate'],
+  ['generate', 'Answer key'],
   ['precheck', 'Validate'],
   ['materialize', 'Assemble quiz'],
   ['report', 'Teacher report'],
 ];
-const isObjDraft = (d) => ((d?.brief?.kind) === 'objective');
-const stageListFor = (d) => (isObjDraft(d) ? OBJ_STAGES : STAGES);
+/** Subjective drafts have nothing to verify — only assembly and the briefing. */
+const SUBJ_STAGES = [
+  ['materialize', 'Assemble assignment'],
+  ['report', 'Grading briefing'],
+];
+const kindOf = (d) => (d?.kind || d?.brief?.kind || 'programming');
+const isObjDraft = (d) => kindOf(d) === 'objective';
+const isSubjDraft = (d) => kindOf(d) === 'subjective';
+/**
+ * Phase 1 runs a single step, and it is NOT the first step of the post-
+ * approval pipeline: an objective draft busy writing its QUESTIONS was
+ * previously labelled "Answer key", because both use stage id 'generate'.
+ */
+const REVIEW_STAGE = {
+  objective: [['generate', 'Draft questions']],
+  subjective: [['generate', 'Draft assignment']],
+  programming: [['generate', 'Draft statement']],
+};
+function stageListFor(d) {
+  const kind = kindOf(d);
+  if (phaseOf(d) !== 'approved') return REVIEW_STAGE[kind] || REVIEW_STAGE.programming;
+  return kind === 'objective' ? OBJ_STAGES : kind === 'subjective' ? SUBJ_STAGES : STAGES;
+}
+
+/**
+ * Where the draft sits in the two-phase flow. The server computes this (it
+ * owns the legacy-draft rule); this fallback only covers a stale payload.
+ */
+function phaseOf(d) {
+  if (d?.phase) return d.phase;
+  if (!d?.artifacts?.statement) return 'brief';
+  if (d.approved) return 'approved';
+  return (isObjDraft(d) ? d.artifacts.answers : d.artifacts.solution) ? 'approved' : 'review';
+}
+
+/** Wording for the statement pane, per kind. */
+const STATEMENT_LABEL = {
+  programming: 'Statement',
+  objective: 'Questions',
+  subjective: 'Assignment brief',
+};
+const STATEMENT_HINT = {
+  programming: 'Markdown. Leave out samples — the judge computes them from your tests.',
+  objective: 'Markdown with {{ input / select / multiselect / dropdown }} markers.',
+  subjective: 'Markdown: the deliverables, what the report must contain, and the grading rubric.',
+};
+
+/**
+ * The rich editor mounts by appending to its textarea's PARENT, so the
+ * textarea needs its own wrapper — otherwise the editor is injected after
+ * whatever follows it, which is how the Save button ended up floating above
+ * the toolbar instead of below the text.
+ */
+const editorHost = (rows, body) => `<div class="aisd__host"><textarea class="aisd__body-md" rows="${rows}" spellcheck="false">${esc(body)}</textarea></div>`;
 const QT_LABEL = { tf: 'True / False', single: 'Single choice', multi: 'Multiple choice', fill: 'Fill in the blank', dropdown: 'Dropdown', short: 'Short answer' };
 const answersCount = (yaml) => (String(yaml || '').match(/^\s*['"]?\d+(?:-\d+)?['"]?:/gm) || []).length;
 
@@ -102,8 +222,11 @@ const artifactFp = (d) => JSON.stringify([
   !!d?.artifacts?.report,
   d?.artifacts?.answers?.yaml?.length || 0,
   d?.brief?.kind || 'programming',
+  phaseOf(d),
+  (d?.chat || []).length,
 ]);
 let langsMap = {}; // judge languages from the server (scratchpad-identical set)
+let backendBuild = ''; // AI_STUDIO_BUILD reported by the running process
 let activePane = null; // which tab survives re-renders
 let pollTimer = null;
 let lastSideFp = ''; // sidebar re-renders only when this changes
@@ -163,12 +286,13 @@ function sideHtml(d) {
   })()}
         ${stageDots(p, list)}
         ${p.message ? `<div class="aisd__meta${p.status === 'running' ? ' ais__msg--live' : ''}" style="margin-top:6px;">${esc(p.message)}</div>` : ''}
-        ${p.evidence ? `<div class="ais__label">🔍 ${esc(i18n('Judge evidence'))}</div><div class="aisd__ev">${esc(p.evidence)}</div>` : ''}
+        ${p.evidence ? `<div class="ais__label">🔍 ${esc(i18n(p.stage === 'generate' ? 'What the AI actually replied' : 'Judge evidence'))}</div><div class="aisd__ev">${esc(p.evidence)}</div>` : ''}
         ${p.status === 'failed' && p.stage === 'crosscheck' ? `<div class="aisd__meta" style="margin-top:6px;">💡 ${esc(i18n('If the statement is ambiguous for this input (e.g. negative values), clarify it in the Statement tab and verify again — or edit either solution directly.'))}</div>
         <button class="ais__btn ais__btn--sm aisd__skipcc" style="margin-top:8px;">✋ ${esc(i18n('Trust the reference — re-verify without cross-check'))}</button>` : ''}
         ${measured}
-        ${d.docId ? `<div class="aisd__meta" style="margin-top:10px;">${esc(i18n('Draft problem'))}: <a href="${domainPrefix()}/p/${d.docId}" target="_blank" rel="noopener">#${d.docId}</a>${d.published ? ` · <b>${esc(i18n('Published'))}</b>` : ` (${esc(i18n('hidden'))})`}</div>` : ''}
+        ${(d.docIds || []).length ? `<div class="aisd__meta" style="margin-top:10px;">${esc(i18n((d.docIds || []).length > 1 ? 'Draft problems (one per question)' : 'Draft problem'))}: ${(d.docIds || []).map((x, k) => `<a href="${domainPrefix()}/p/${x}" target="_blank" rel="noopener">${esc((d.pids || [])[k] || `#${x}`)}</a>`).join(' · ')}${d.published ? ` · <b>${esc(i18n('Published'))}</b>` : ` (${esc(i18n('hidden'))})`}</div>` : ''}
         ${logs ? `<div class="ais__label">📜 ${esc(i18n('Recent activity'))}</div>${logs}` : ''}
+        ${backendBuild ? `<div class="aisd__meta" style="margin-top:10px;opacity:.65;">${esc(i18n('Backend build'))}: <code>${esc(backendBuild)}</code></div>` : ''}
       </div>
     </div>`;
 }
@@ -201,64 +325,237 @@ function reportPane(d) {
     ${list(r.pitfalls)}`;
 }
 
-function render($root) {
-  const d = state;
-  lastFp = artifactFp(d);
-  lastSideFp = sideFp();
-  const s = d.artifacts.statement || { title: '', body: '' };
-  const sol = d.artifacts.solution || { language: d.brief.language, code: '' };
-  const alt = d.artifacts.alt || { language: d.brief.language, code: '' };
-  const busy = d.pipeline.status === 'running';
-  const langSel = (cls, cur) => `<select class="${cls}" style="max-width:240px;">${langOptionsHtml(langsMap, cur)}</select>`;
-  const isObj = isObjDraft(d);
-  const progTabs = isObj ? '' : [
-    '<button class="aisd__tab" data-pane="sol">✅ ' + esc(i18n('Reference solution')) + '</button>',
-    '<button class="aisd__tab" data-pane="alt">🔁 ' + esc(i18n('Cross-check solution')) + '</button>',
-    '<button class="aisd__tab" data-pane="tests">🧾 ' + esc(i18n('Tests')) + ' (' + (d.artifacts.tests || []).length + ')</button>',
-  ].join('\n          ');
-  const ansTab = isObj
-    ? '<button class="aisd__tab" data-pane="ans">🔑 ' + esc(i18n('Answers')) + ' (' + answersCount(d.artifacts.answers && d.artifacts.answers.yaml) + ')</button>'
-    : '';
-  const stmtRefine = isObj ? '' : '<button class="ais__btn ais__btn--ghost ais__btn--sm aisd__refine" data-t="statement" ' + (busy ? 'disabled' : '') + '>💬 ' + esc(i18n('AI refine…')) + '</button>';
-  $root.html(`
-  <div class="ais__banner">← <a href="${domainPrefix()}/ai-studio">${esc(i18n('All drafts'))}</a>
-    <span style="margin-left:6px;">${esc(d.brief.topic)}</span>
-    <span class="ais__chip" style="margin-left:auto;">${isObj ? `📝 ${esc(i18n('Objective'))}` : `💻 ${esc(d.brief.language)}`} · ${esc(i18n(d.brief.difficulty))} · 📚 ${(d.brief.files || []).length}</span></div>
-  <div class="aisd">
-    <div class="aisd__main">
-      <div class="ais">
-        <div class="ais__head">✨ <span class="ais__title">${esc(s.title || i18n('Untitled draft'))}</span>
-          <span class="ais__hint">${esc(i18n('Every artifact is editable — your edits go through the same verification.'))}</span></div>
-        <div class="aisd__tabs">
-          <button class="aisd__tab" data-pane="stmt">📝 ${esc(i18n('Statement'))}</button>
-          ${ansTab}
-          ${progTabs}
-          <button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Teacher report'))}</button>
-          <button class="aisd__tab" data-pane="ctx">📚 ${esc(i18n('Context'))} (${(d.brief.files || []).length})</button>
-        </div>
-        <div class="ais__body">
-          <div class="aisd__bar">
-            ${busy ? `<button class="ais__btn ais__btn--danger aisd__stop">⏹ ${esc(i18n('Stop'))}</button>` : ''}
-            <button class="ais__btn aisd__genall" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Generate & verify'))}</button>
-            <button class="ais__btn aisd__verify" ${busy ? 'disabled' : ''}>🧪 ${esc(i18n('Run verification'))}</button>
-            <button class="ais__btn aisd__publish" ${d.pipeline.status === 'passed' && !d.published ? '' : 'disabled'}>🚀 ${esc(i18n('Publish'))}</button>
-            <button class="ais__btn ais__btn--danger aisd__discard" ${busy || d.published ? 'disabled' : ''}>🗑 ${esc(i18n('Discard'))}</button>
-          </div>
+/**
+ * The statement-review conversation. Rendered inside the statement pane so
+ * the teacher can read the text they are discussing while they type.
+ */
+function chatPanel(d) {
+  const turns = d.chat || [];
+  const kind = kindOf(d);
+  const what = kind === 'objective' ? i18n('these questions') : kind === 'subjective' ? i18n('this assignment') : i18n('this statement');
+  const log = turns.length
+    ? turns.map((t) => (t.role === 'user'
+      ? `<div class="aisc__turn aisc__turn--user">${esc(t.content)}</div>`
+      : `<div class="aisc__turn aisc__turn--ai"><span class="aisc__tag">${esc(i18n('AI'))}</span><br>${esc(t.content)}</div>`)).join('')
+    : `<div class="aisc__empty">${esc(i18n('Ask for a change and the AI rewrites the text above — for example: "make the constraints smaller", "add a worked example", "写成中文".'))}</div>`;
+  return `
+    <div class="aisc">
+      <div class="aisc__head">💬 ${esc(i18n('Refine with the AI'))}
+        <span style="font-weight:normal;opacity:.8;">${esc(i18n('Tell it what to change about'))} ${esc(what)}</span>
+        ${turns.length ? `<button class="ais__btn ais__btn--ghost ais__btn--sm aisc__clear">${esc(i18n('Clear chat'))}</button>` : ''}
+      </div>
+      <div class="aisc__log">${log}</div>
+      <div class="aisc__form">
+        <textarea class="aisc__input" rows="2" placeholder="${esc(i18n('Describe the change you want, then press Send (Ctrl+Enter)'))}"></textarea>
+        <button class="ais__btn ais__btn--sm aisc__send">${esc(i18n('Send'))}</button>
+      </div>
+    </div>`;
+}
 
-          <div class="aisd__pane" data-pane="ctx">
-            <div class="ais__label">🧠 ${esc(i18n('Task requirement'))}</div>
-            <textarea class="aisd__topic" rows="3" spellcheck="false">${esc(d.brief.topic || '')}</textarea>
-            <div class="ais__row" style="margin-top:8px;align-items:center;gap:10px;display:flex;flex-wrap:wrap;">
-              <div><div class="ais__label" style="margin-top:0;">${esc(i18n('Difficulty'))}</div>
-                <select class="aisd__difficulty" style="max-width:180px;">
-                  ${['intro', 'medium', 'challenge'].map((x) => `<option value="${x}" ${d.brief.difficulty === x ? 'selected' : ''}>${esc(i18n(x))}</option>`).join('')}
-                </select></div>
-              ${isObj
-    ? '<div><div class="ais__label" style="margin-top:0;">' + esc(i18n('Question types')) + '</div><div class="aisd__meta" style="margin-top:6px;">' + esc(((d.brief.qtypes || []).map((q) => i18n(QT_LABEL[q] || q)).join(' · ')) || i18n('AI decides')) + '</div></div>'
-    : '<div style="min-width:230px;"><div class="ais__label" style="margin-top:0;">' + esc(i18n('Allowed languages for students')) + '</div>' + renderAllowLangsDd(langEntries(langsMap), d.brief.allowLangs || [], false) + '<div class="aisd__meta">' + esc(i18n('Empty = every judge language. Saved instantly.')) + '</div></div>'}
-              <button class="ais__btn ais__btn--sm aisd__brief-save" style="align-self:flex-end;">💾 ${esc(i18n('Save requirement'))}</button>
-            </div>
-            <div class="aisd__meta" style="margin:6px 0 14px;">${esc(i18n('After changing the requirement, click Generate & verify to synthesize the task against it.'))}</div>
+/* ------------------------------------------------------------------ */
+/*  Objective quizzes: parse the markdown into per-question cards      */
+/* ------------------------------------------------------------------ */
+const MARKER_RE = /\{\{ (input|select|multiselect|textarea|dropdown)\((\d+(?:-\d+)?)\)(?:\[([^\]]*)\])? \}\}/;
+const MARKER_RE_G = new RegExp(MARKER_RE.source, 'g');
+const QKIND = {
+  input: { key: 'fill', label: 'Fill in the blank', icon: '✏️' },
+  textarea: { key: 'short', label: 'Short answer', icon: '📄' },
+  select: { key: 'single', label: 'Single choice', icon: '🔘' },
+  multiselect: { key: 'multi', label: 'Multiple choice', icon: '☑️' },
+  dropdown: { key: 'dropdown', label: 'Dropdown', icon: '🔽' },
+};
+const letter = (i) => String.fromCharCode(65 + i);
+
+/** One answer-key line: `'3': [[A, B], 20]` -> { answer, score }. */
+function parseAnswerLine(line) {
+  const m = /^\s*['"]?([\d-]+)['"]?:\s*\[(.*)\]\s*$/.exec(line);
+  if (!m) return null;
+  const inner = m[2];
+  const cut = inner.lastIndexOf(',');
+  if (cut < 0) return null;
+  const raw = inner.slice(0, cut).trim();
+  const score = Number(inner.slice(cut + 1).trim());
+  const answer = /^\[.*\]$/.test(raw)
+    ? raw.slice(1, -1).split(',').map((x) => x.trim().replace(/^['"]|['"]$/g, '')).filter((x) => x)
+    : raw.replace(/^['"]|['"]$/g, '');
+  return { id: m[1], answer, score: Number.isFinite(score) ? score : null };
+}
+
+/**
+ * Turn the quiz markdown (plus its key, when one exists) into structured
+ * questions. Deliberately mirrors the server's extractQuestionMeta so the
+ * cards show exactly what the judge will grade — if a card looks wrong, the
+ * markup IS wrong.
+ */
+function parseQuestions(body, answersYaml) {
+  const lines = String(body || '').split('\n');
+  const out = [];
+  let fence = false;
+  let buf = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; buf.push(line); continue; }
+    if (fence) { buf.push(line); continue; }
+    const m = MARKER_RE.exec(line);
+    if (!m) { buf.push(line); continue; }
+    const [full, tag, id, inline] = m;
+    const meta = QKIND[tag] || { key: tag, label: tag, icon: '•' };
+    const q = { id, tag, kind: meta.key, label: meta.label, icon: meta.icon, options: [] };
+    if (tag === 'dropdown' && inline) q.options = inline.split(',').map((x) => x.trim()).filter((x) => x);
+    if (tag === 'select' || tag === 'multiselect') {
+      for (let k = i + 1; k < lines.length; k++) {
+        const t = lines[k].trim();
+        if (!t) { if (q.options.length) break; continue; }
+        const om = /^[-*]\s+(.*)$/.exec(t);
+        if (!om) break;
+        q.options.push(om[1].trim());
+        i = k;
+      }
+    }
+    // A blank marker stands in for missing text, so show a blank. A choice
+    // marker only anchors the option list below it — leave nothing behind.
+    const ph = (tag === 'select' || tag === 'multiselect') ? '' : ' ______ ';
+    q.stem = [...buf, line.replace(full, ph)].join('\n')
+      .replace(MARKER_RE_G, ph)
+      .replace(/^\s*\d+[.、)]\s*/, '')
+      .trim();
+    buf = [];
+    out.push(q);
+  }
+  const byId = {};
+  for (const l of String(answersYaml || '').split('\n')) {
+    const a = parseAnswerLine(l);
+    if (a) byId[a.id] = a;
+  }
+  for (const q of out) {
+    const a = byId[q.id];
+    if (a) { q.answer = a.answer; q.score = a.score; }
+  }
+  return out;
+}
+
+/** Is this option letter part of the correct answer? */
+function isCorrect(q, idx) {
+  if (q.answer === undefined) return false;
+  const L = letter(idx);
+  return Array.isArray(q.answer) ? q.answer.includes(L) : q.answer === L;
+}
+
+/** The quiz workbench: one card per question, answers shown once they exist. */
+function questionCards(d) {
+  const qs = parseQuestions(d.artifacts.statement && d.artifacts.statement.body,
+    d.artifacts.answers && d.artifacts.answers.yaml);
+  if (!qs.length) {
+    return `<div class="ais__empty">${esc(i18n('No question markers found. Check the markdown source below — every question needs a {{ ... }} marker.'))}</div>`;
+  }
+  const total = qs.reduce((a, q) => a + (q.score || 0), 0);
+  const hasKey = qs.some((q) => q.answer !== undefined);
+  const head = `<div class="aisq__summary">
+    <span class="aisq__count">${qs.length} ${esc(i18n('questions'))}</span>
+    ${qs.length > 1 ? `<span class="aisd__meta">${esc(i18n('publishes as'))} ${qs.length} ${esc(i18n('separate tasks — each worth 100 points on its own'))}</span>` : ''}
+    ${hasKey ? `<span class="aisq__pts ${total === 100 ? '' : 'aisq__pts--warn'}">${total} ${esc(i18n('points total'))}${total === 100 ? '' : ` ⚠ ${esc(i18n('should be 100'))}`}</span>` : `<span class="aisd__meta">${esc(i18n('Answer key not written yet'))}</span>`}
+  </div>`;
+  const cards = qs.map((q, n) => {
+    let opts = '';
+    if (q.options.length) {
+      opts = `<ol class="aisq__opts">${q.options.map((o, i) => {
+        const ok = isCorrect(q, i);
+        return `<li class="aisq__opt${ok ? ' aisq__opt--ok' : ''}"><span class="aisq__letter">${q.tag === 'dropdown' ? '·' : letter(i)}</span><span>${esc(o)}</span>${ok ? `<span class="aisq__tick">✓</span>` : ''}</li>`;
+      }).join('')}</ol>`;
+    }
+    let ans = '';
+    if (q.answer !== undefined && !q.options.length) {
+      ans = `<div class="aisq__ans">${esc(i18n('Expected'))}: <code>${esc(Array.isArray(q.answer) ? q.answer.join(', ') : q.answer)}</code></div>`;
+    } else if (q.answer !== undefined && q.tag === 'dropdown') {
+      ans = `<div class="aisq__ans">${esc(i18n('Expected'))}: <code>${esc(Array.isArray(q.answer) ? q.answer.join(', ') : q.answer)}</code></div>`;
+    }
+    return `<div class="aisq__card">
+      <div class="aisq__head">
+        <span class="aisq__num">${n + 1}</span>
+        <span class="aisq__type">${q.icon} ${esc(i18n(q.label))}</span>
+        <span class="aisq__id">#${esc(q.id)}</span>
+        ${q.score != null ? `<span class="aisq__score">${q.score} ${esc(i18n('pts'))}</span>` : ''}
+      </div>
+      <div class="aisq__stem typo">${aiMarkdown.render(q.stem || '')}</div>
+      ${opts}${ans}
+    </div>`;
+  }).join('');
+  return head + cards;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Shared page parts                                                  */
+/* ------------------------------------------------------------------ */
+const KIND_THEME = {
+  programming: { cls: 'aisd--prog', icon: '💻', name: 'Programming task' },
+  objective: { cls: 'aisd--obj', icon: '📝', name: 'Objective task' },
+  subjective: { cls: 'aisd--subj', icon: '📄', name: 'Subjective task' },
+};
+
+function bannerHtml(d) {
+  const kind = kindOf(d);
+  const t = KIND_THEME[kind] || KIND_THEME.programming;
+  return `<div class="ais__banner">← <a href="${domainPrefix()}/ai-studio">${esc(i18n('All drafts'))}</a>
+    <span style="margin-left:6px;">${esc(d.brief.topic)}</span>
+    ${d.pid ? `<span class="ais__chip aisd__pidchip" title="${esc(i18n('Problem ID — its prefix marks the task kind'))}">${esc(d.pid)}${(d.pids || []).length > 1 ? ` ×${d.pids.length}` : ''}</span>` : ''}
+    <span class="ais__chip" style="margin-left:auto;">${t.icon} ${esc(i18n(t.name))} · ${esc(langsMap[d.brief.language] || d.brief.language)} · ${esc(i18n(d.brief.difficulty))} · 📚 ${(d.brief.files || []).length}</span></div>`;
+}
+
+/**
+ * Toolbar by phase. The review phase deliberately offers exactly two forward
+ * moves — regenerate, or Continue — so nothing downstream can start behind
+ * the teacher's back while they are still deciding.
+ */
+function toolbarHtml(d) {
+  const busy = d.pipeline.status === 'running';
+  const kind = kindOf(d);
+  const phase = phaseOf(d);
+  const GEN = { objective: 'Generate questions', subjective: 'Draft the assignment', programming: 'Generate statement' };
+  const HINT = {
+    objective: 'Happy with the questions? Continue — the AI then writes the answer key.',
+    subjective: 'Happy with the assignment? Continue to assemble and publish it.',
+    programming: 'Happy with the statement? Continue — the AI then writes the solution, cross-check and tests.',
+  };
+  let mid;
+  let hint = '';
+  if (phase === 'brief') {
+    mid = `<button class="ais__btn aisd__gen" ${busy ? 'disabled' : ''}>✨ ${esc(i18n(GEN[kind] || GEN.programming))}</button>`;
+  } else if (phase === 'review') {
+    mid = `<button class="ais__btn ais__btn--ghost aisd__gen" ${busy ? 'disabled' : ''}>♻ ${esc(i18n('Regenerate from scratch'))}</button>
+            <button class="ais__btn aisd__continue" ${busy ? 'disabled' : ''}>▶ ${esc(i18n('Continue'))}</button>`;
+    hint = HINT[kind] || HINT.programming;
+  } else if (d.published) {
+    /*
+     * Published: the remaining decision is who can see it. "Published
+     * hidden" is a deliberate state — verify tasks days ahead, reveal at
+     * class time — so it gets a labelled chip and a one-click flip, not a
+     * buried setting.
+     */
+    mid = d.publishedHidden
+      ? `<span class="ais__chip aisd__vischip">🕶 ${esc(i18n('Published · hidden from students'))}</span>
+            <button class="ais__btn aisd__reveal" ${busy ? 'disabled' : ''}>👁 ${esc(i18n('Reveal to students'))}</button>`
+      : `<span class="ais__chip aisd__vischip">✅ ${esc(i18n('Published · visible to students'))}</span>
+            <button class="ais__btn ais__btn--ghost aisd__unreveal" ${busy ? 'disabled' : ''}>🕶 ${esc(i18n('Hide from students'))}</button>`;
+    hint = d.publishedHidden
+      ? 'Students cannot see or open this task yet. Reveal it when the class is ready.'
+      : 'Hiding pulls the task from the student problem list without unpublishing it.';
+  } else {
+    mid = `${kind === 'subjective' ? '' : `<button class="ais__btn aisd__verify" ${busy ? 'disabled' : ''}>🧪 ${esc(i18n(kind === 'objective' ? 'Re-validate' : 'Run verification'))}</button>`}
+            <button class="ais__btn aisd__publish" ${d.pipeline.status === 'passed' ? '' : 'disabled'}>🚀 ${esc(i18n('Publish'))}</button>
+            <label class="aisd__hidebox"><input type="checkbox" class="aisd__pubhidden"> ${esc(i18n('Keep hidden after publishing'))}</label>`;
+    if (d.pipeline.status === 'passed') hint = 'Publishing finalizes the task. Tick the box to keep it invisible to students until you reveal it.';
+  }
+  return `<div class="aisd__bar">
+            ${busy ? `<button class="ais__btn ais__btn--danger aisd__stop">⏹ ${esc(i18n('Stop'))}</button>` : ''}
+            ${mid}
+            <button class="ais__btn ais__btn--danger aisd__discard" ${busy || d.published ? 'disabled' : ''}>🗑 ${esc(i18n('Discard'))}</button>
+          </div>${hint ? `<div class="aisd__toolhint">${esc(i18n(hint))}</div>` : ''}`;
+}
+
+/** Course material + free-text extras — the same for every kind. */
+function materialHtml(d) {
+  return `
+            <div class="ais__label">📚 ${esc(i18n('Course material'))}</div>
             <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('Slides and notes uploaded here ground the generated task. Text is extracted on upload; the original files are not stored.'))}</div>
             <div class="ais__drop aisd__ctx-drop">
               <div class="ais__drop-main">${esc(i18n('Drop the course files here, or click to choose'))}</div>
@@ -274,36 +571,159 @@ function render($root) {
             <textarea class="aisd__notes" rows="3">${esc(d.brief.notes || '')}</textarea>
             <div class="aisd__bar" style="margin-top:10px;">
               <button class="ais__btn ais__btn--sm aisd__notes-save">💾 ${esc(i18n('Save notes'))}</button>
-            </div>
-          </div>
+            </div>`;
+}
 
+const DIFF_SELECT = (d) => `<select class="aisd__difficulty" style="max-width:180px;">
+                  ${['intro', 'medium', 'challenge'].map((x) => `<option value="${x}" ${d.brief.difficulty === x ? 'selected' : ''}>${esc(i18n(x))}</option>`).join('')}
+                </select>`;
+
+/**
+ * OBJECTIVE setup — a quiz brief, not a programming form. Every knob the
+ * generator actually reads is here and editable: how many questions, which
+ * types, which language they are about, and how hard. The task kind is NOT
+ * offered again; it was chosen when the draft was created.
+ */
+function objectiveSetupHtml(d) {
+  const QTYPES = [['tf', 'True / False'], ['single', 'Single choice'], ['multi', 'Multiple choice'],
+    ['fill', 'Fill in the blank'], ['dropdown', 'Dropdown'], ['short', 'Short answer']];
+  const chosen = new Set(d.brief.qtypes || []);
+  const n = d.brief.qcount || 0;
+  return `
+          <div class="aisd__pane" data-pane="ctx">
+            <div class="aisq__setup">
+              <div class="aisq__setup-head">📝 ${esc(i18n('Quiz setup'))}
+                <span class="aisd__meta">${esc(i18n('The generator reads exactly these settings.'))}</span></div>
+
+              <div class="ais__label" style="margin-top:0;">${esc(i18n('What should the quiz cover?'))}</div>
+              <textarea class="aisd__topic" rows="3" spellcheck="false" placeholder="${esc(i18n('e.g. the switch-case statement: syntax, fall-through, and when to prefer it over if-else'))}">${esc(d.brief.topic || '')}</textarea>
+
+              <div class="aisq__grid">
+                <div>
+                  <div class="ais__label">${esc(i18n('How many questions?'))}</div>
+                  <select class="aisd__qcount">
+                    <option value="0" ${!n ? 'selected' : ''}>${esc(i18n('Let the AI decide'))}</option>
+                    ${[3, 4, 5, 6, 8, 10, 12, 15, 20].map((x) => `<option value="${x}" ${n === x ? 'selected' : ''}>${x}</option>`).join('')}
+                    ${n && ![3, 4, 5, 6, 8, 10, 12, 15, 20].includes(n) ? `<option value="${n}" selected>${n}</option>` : ''}
+                  </select>
+                </div>
+                <div>
+                  <div class="ais__label">${esc(i18n('Difficulty'))}</div>
+                  ${DIFF_SELECT(d)}
+                </div>
+                <div>
+                  <div class="ais__label">${esc(i18n('Language the questions are about'))}</div>
+                  <select class="aisd__brieflang">${langOptionsHtml(langsMap, d.brief.language)}</select>
+                </div>
+              </div>
+
+              <div class="ais__label">${esc(i18n('Question types'))}</div>
+              <div class="aisq__types">
+                ${QTYPES.map(([v, lb]) => `<label class="aisq__type-chip${chosen.has(v) ? ' aisq__type-chip--on' : ''}">
+                  <input type="checkbox" class="aisd__qtype" value="${v}" ${chosen.has(v) ? 'checked' : ''}> ${esc(i18n(lb))}</label>`).join('')}
+              </div>
+              <div class="aisd__meta" style="margin-top:6px;">${esc(i18n('Leave every type unchecked to let the AI mix them sensibly.'))}</div>
+
+              <div class="aisd__bar" style="margin-top:14px;">
+                <button class="ais__btn ais__btn--sm aisd__brief-save">💾 ${esc(i18n('Save setup'))}</button>
+                <span class="aisd__meta">${esc(i18n('Then press Generate questions to rebuild the quiz against it.'))}</span>
+              </div>
+            </div>
+            ${materialHtml(d)}
+          </div>`;
+}
+
+/** PROGRAMMING / SUBJECTIVE setup — the original brief form, minus the kind row. */
+function ctxPaneHtml(d) {
+  const kind = kindOf(d);
+  return `
+          <div class="aisd__pane" data-pane="ctx">
+            <div class="ais__label">🧠 ${esc(i18n('Task requirement'))}</div>
+            <textarea class="aisd__topic" rows="3" spellcheck="false">${esc(d.brief.topic || '')}</textarea>
+            <div class="ais__row" style="margin-top:8px;align-items:center;gap:10px;display:flex;flex-wrap:wrap;">
+              <div><div class="ais__label" style="margin-top:0;">${esc(i18n('Difficulty'))}</div>
+                ${DIFF_SELECT(d)}</div>
+              ${kind === 'subjective'
+    ? '<div><div class="ais__label" style="margin-top:0;">' + esc(i18n('Language the project is written in')) + '</div><select class="aisd__brieflang" style="max-width:200px;">' + langOptionsHtml(langsMap, d.brief.language) + '</select></div>'
+    : '<div style="min-width:230px;"><div class="ais__label" style="margin-top:0;">' + esc(i18n('Allowed languages for students')) + '</div>' + renderAllowLangsDd(langEntries(langsMap), d.brief.allowLangs || [], false) + '<div class="aisd__meta">' + esc(i18n('Empty = every judge language. Saved instantly.')) + '</div></div>'}
+              <button class="ais__btn ais__btn--sm aisd__brief-save" style="align-self:flex-end;">💾 ${esc(i18n('Save requirement'))}</button>
+            </div>
+            <div class="aisd__meta" style="margin:6px 0 14px;">${esc(i18n('After changing the requirement, regenerate the statement to synthesize the task against it.'))}</div>
+            ${materialHtml(d)}
+          </div>`;
+}
+
+function reportPaneHtml(d) {
+  const kind = kindOf(d);
+  const busy = d.pipeline.status === 'running';
+  const BLURB = {
+    subjective: 'A briefing for you, not for students: what a strong submission looks like, and how to apply the rubric consistently.',
+    objective: 'A briefing for you, not for students: what the quiz covers, the correct answer for each question and why, and the misconception each distractor targets.',
+    programming: 'A briefing for you, not for students: the key idea, the knowledge points the task tests, how the cases probe them, and likely pitfalls.',
+  };
+  return `
+          <div class="aisd__pane" data-pane="report">
+            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n(BLURB[kind] || BLURB.programming))}</div>
+            ${reportPane(d)}
+            ${phaseOf(d) === 'approved' ? `<div class="aisd__bar" style="margin-top:12px;">
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="report" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate'))}</button>
+            </div>` : ''}
+          </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  PROGRAMMING page — the original layout, unchanged                  */
+/* ------------------------------------------------------------------ */
+function renderProgramming(d) {
+  const s = d.artifacts.statement || { title: '', body: '' };
+  const sol = d.artifacts.solution || { language: d.brief.language, code: '' };
+  const alt = d.artifacts.alt || { language: d.brief.language, code: '' };
+  const busy = d.pipeline.status === 'running';
+  const phase = phaseOf(d);
+  const hasStmt = !!d.artifacts.statement;
+  const langSel = (cls, cur) => `<select class="${cls}" style="max-width:240px;">${langOptionsHtml(langsMap, cur)}</select>`;
+  const showDownstream = phase === 'approved';
+  const progTabs = showDownstream ? [
+    '<button class="aisd__tab" data-pane="sol">✅ ' + esc(i18n('Reference solution')) + '</button>',
+    '<button class="aisd__tab" data-pane="alt">🔁 ' + esc(i18n('Cross-check solution')) + '</button>',
+    '<button class="aisd__tab" data-pane="tests">🧾 ' + esc(i18n('Tests')) + ' (' + (d.artifacts.tests || []).length + ')</button>',
+  ].join('\n          ') : '';
+  return `
+  ${bannerHtml(d)}
+  <div class="aisd aisd--prog">
+    <div class="aisd__main">
+      <div class="ais">
+        <div class="ais__head">✨ <span class="ais__title">${esc(s.title || i18n('Untitled draft'))}</span>
+          <span class="ais__hint">${esc(phase === 'review'
+    ? i18n('Review step — edit the text directly, or ask the AI below. Nothing else runs until you press Continue.')
+    : i18n('Every artifact is editable — your edits go through the same verification.'))}</span></div>
+        <div class="aisd__tabs">
+          <button class="aisd__tab" data-pane="stmt">📝 ${esc(i18n('Statement'))}</button>
+          ${progTabs}
+          <button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Teacher report'))}</button>
+          <button class="aisd__tab" data-pane="ctx">📚 ${esc(i18n('Context'))} (${(d.brief.files || []).length})</button>
+        </div>
+        <div class="ais__body">
+          ${toolbarHtml(d)}
+          ${ctxPaneHtml(d)}
           <div class="aisd__pane" data-pane="stmt">
+            ${hasStmt ? `
             <div class="ais__label">${esc(i18n('Title'))}</div>
             <input type="text" class="aisd__title" value="${esc(s.title)}">
-            <div class="ais__label">${isObj
-    ? esc(i18n('Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)'))
-    : esc(i18n('Statement (markdown, no samples — samples are computed by the judge)'))}</div>
-            <textarea class="aisd__body-md" rows="14">${esc(s.body)}</textarea>
-            <div class="aisd__bar" style="margin-top:10px;">
-              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="statement" ${busy ? 'disabled' : ''}>✨ ${esc(i18n(isObj ? 'Regenerate quiz + key' : 'Regenerate'))}</button>
-              ${stmtRefine}
-              <button class="ais__btn ais__btn--sm aisd__save" data-t="statement">💾 ${esc(i18n('Save'))}</button>
+            <div class="aisd__fieldhead">
+              <span class="ais__label" style="margin:0;">${esc(i18n(STATEMENT_LABEL.programming))}</span>
+              <span class="aisd__meta">${esc(i18n(STATEMENT_HINT.programming))}</span>
             </div>
+            ${editorHost(16, s.body)}
+            <div class="aisd__bar" style="margin-top:10px;">
+              <button class="ais__btn ais__btn--sm aisd__save" data-t="statement">💾 ${esc(i18n('Save my edits'))}</button>
+              ${phase === 'approved' ? `<span class="aisd__meta">${esc(i18n('Editing this sends the draft back to review — press Continue again afterwards.'))}</span>` : ''}
+            </div>
+            ${chatPanel(d)}`
+    : `<div class="ais__empty">${esc(i18n('No statement yet — press Generate statement above.'))}</div>`}
           </div>
 
-          <div class="aisd__pane" data-pane="ans" ${isObj ? '' : 'hidden'}>
-            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('The answer key the judge grades with. YAML: one line per question — id: [answer, score].'))}</div>
-            <div class="ais__label">🔑 ${esc(i18n('Answer key (YAML)'))}</div>
-            <textarea class="aisd__answers" rows="10" spellcheck="false">${esc((d.artifacts.answers && d.artifacts.answers.yaml) || '')}</textarea>
-            <div class="aisd__bar" style="margin-top:10px;">
-              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="statement" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate quiz + key'))}</button>
-              <button class="ais__btn ais__btn--sm aisd__save" data-t="answers">💾 ${esc(i18n('Validate & save'))}</button>
-            </div>
-            <div class="ais__label">👁 ${esc(i18n('Preview'))}</div>
-            ${answersPreview(d)}
-          </div>
-
-          <div class="aisd__pane" data-pane="sol" ${isObj ? 'hidden' : ''}>
+          <div class="aisd__pane" data-pane="sol" ${showDownstream ? '' : 'hidden'}>
             <div class="ais__label">${esc(i18n('Language'))}</div>${langSel('aisd__sol-lang', sol.language)}
             <div class="ais__label">${esc(i18n('Reference solution (must read stdin, write stdout only)'))}</div>
             <textarea class="aisd__sol-code" rows="18" spellcheck="false">${esc(sol.code)}</textarea>
@@ -314,7 +734,7 @@ function render($root) {
             </div>
           </div>
 
-          <div class="aisd__pane" data-pane="alt" ${isObj ? 'hidden' : ''}>
+          <div class="aisd__pane" data-pane="alt" ${showDownstream ? '' : 'hidden'}>
             <div class="aisd__meta" style="margin-bottom:8px;">${d.brief.crosscheck
     ? `${esc(i18n('Cross-check is ON: a second, independently written solution must agree with the reference on every test.'))} <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__cc-toggle" data-on="0">${esc(i18n('Turn off'))}</button>`
     : `${esc(i18n('Cross-check is OFF: the reference solution\u2019s outputs are trusted as-is \u2014 read it yourself before publishing.'))} <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__cc-toggle" data-on="1">${esc(i18n('Turn on'))}</button>`}</div>
@@ -328,7 +748,7 @@ function render($root) {
             </div>
           </div>
 
-          <div class="aisd__pane" data-pane="tests" ${isObj ? 'hidden' : ''}>
+          <div class="aisd__pane" data-pane="tests" ${showDownstream ? '' : 'hidden'}>
             <div class="ais__label">${esc(i18n('Cases (JSON — inputs only; outputs come from running the reference solution)'))}</div>
             <textarea class="aisd__tests" rows="12" spellcheck="false">${esc(j(d.artifacts.tests || []))}</textarea>
             <div class="aisd__bar" style="margin-top:10px;">
@@ -339,24 +759,162 @@ function render($root) {
             <div class="ais__label">👁 ${esc(i18n('Preview'))}</div>
             ${casesPreview(d.artifacts.tests)}
           </div>
-
-          <div class="aisd__pane" data-pane="report">
-            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('A briefing for you, not for students: the key idea, the knowledge points the task tests, how the cases probe them, and likely pitfalls.'))}</div>
-            ${reportPane(d)}
-            <div class="aisd__bar" style="margin-top:12px;">
-              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="report" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate'))}</button>
-            </div>
-          </div>
+          ${reportPaneHtml(d)}
         </div>
       </div>
     </div>
     <div class="aisd__side">${sideHtml(d)}</div>
-  </div>`);
+  </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  OBJECTIVE page — a quiz workbench, not a statement editor          */
+/* ------------------------------------------------------------------ */
+function renderObjective(d) {
+  const s = d.artifacts.statement || { title: '', body: '' };
+  const busy = d.pipeline.status === 'running';
+  const phase = phaseOf(d);
+  const hasStmt = !!d.artifacts.statement;
+  const hasKey = !!(d.artifacts.answers && d.artifacts.answers.yaml);
+  return `
+  ${bannerHtml(d)}
+  <div class="aisd aisd--obj">
+    <div class="aisd__main">
+      <div class="ais">
+        <div class="ais__head ais__head--obj">📝 <span class="ais__title">${esc(s.title || i18n('Untitled quiz'))}</span>
+          <span class="ais__hint">${esc(phase === 'brief'
+    ? i18n('Auto-graded quiz — Hydro objective format')
+    : phase === 'review'
+      ? i18n('Check every question below. The answer key is written only after you press Continue.')
+      : i18n('Questions and key are set — publish when you are happy.'))}</span></div>
+        <div class="aisd__tabs">
+          <button class="aisd__tab" data-pane="stmt">🧩 ${esc(i18n('Questions'))}${hasStmt ? ` (${parseQuestions(s.body).length})` : ''}</button>
+          ${phase === 'approved' ? `<button class="aisd__tab" data-pane="ans">🔑 ${esc(i18n('Answer key'))} (${answersCount(d.artifacts.answers && d.artifacts.answers.yaml)})</button>` : ''}
+          <button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Teacher report'))}</button>
+          <button class="aisd__tab" data-pane="ctx">⚙️ ${esc(i18n('Quiz setup'))}${(d.brief.files || []).length ? ` · 📚 ${(d.brief.files || []).length}` : ''}</button>
+        </div>
+        <div class="ais__body">
+          ${toolbarHtml(d)}
+          ${objectiveSetupHtml(d)}
+
+          <div class="aisd__pane" data-pane="stmt">
+            ${hasStmt ? `
+            <div class="aisq__titlerow">
+              <input type="text" class="aisd__title" value="${esc(s.title)}" placeholder="${esc(i18n('Quiz title'))}">
+            </div>
+            <div class="aisq">${questionCards(d)}</div>
+            <details class="aisq__src"${hasKey ? '' : ' open'}>
+              <summary>${esc(i18n('Edit the markdown source'))} <span class="aisd__meta">${esc(i18n('Hydro objective format: {{ input(n) }} · {{ select(n) }} + option list · {{ multiselect(n) }} · {{ dropdown(n)[a, b] }}'))}</span></summary>
+              ${editorHost(16, s.body)}
+              <div class="aisd__bar" style="margin-top:10px;">
+                <button class="ais__btn ais__btn--sm aisd__save" data-t="statement">💾 ${esc(i18n('Save my edits'))}</button>
+                ${phase === 'approved' ? `<span class="aisd__meta">${esc(i18n('Editing the questions sends the draft back to review — press Continue again afterwards.'))}</span>` : ''}
+              </div>
+            </details>
+            ${chatPanel(d)}`
+    : `<div class="ais__empty">${esc(i18n('No questions yet — press Generate questions above.'))}</div>`}
+          </div>
+
+          <div class="aisd__pane" data-pane="ans" ${phase === 'approved' ? '' : 'hidden'}>
+            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('The key the judge grades with. One line per question — id: [answer, score]. Choice answers are option letters; scores must total 100.'))}</div>
+            <div class="aisq">${questionCards(d)}</div>
+            <div class="ais__label">🔑 ${esc(i18n('Answer key (YAML)'))}</div>
+            <textarea class="aisd__answers" rows="10" spellcheck="false">${esc((d.artifacts.answers && d.artifacts.answers.yaml) || '')}</textarea>
+            <div class="aisd__bar" style="margin-top:10px;">
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="answers" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate the key'))}</button>
+              <button class="ais__btn ais__btn--sm aisd__save" data-t="answers">💾 ${esc(i18n('Validate & save'))}</button>
+            </div>
+          </div>
+          ${reportPaneHtml(d)}
+        </div>
+      </div>
+    </div>
+    <div class="aisd__side">${sideHtml(d)}</div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  SUBJECTIVE page — a document workbench with a live preview         */
+/* ------------------------------------------------------------------ */
+function renderSubjective(d) {
+  const s = d.artifacts.statement || { title: '', body: '' };
+  const phase = phaseOf(d);
+  const hasStmt = !!d.artifacts.statement;
+  return `
+  ${bannerHtml(d)}
+  <div class="aisd aisd--subj">
+    <div class="aisd__main">
+      <div class="ais">
+        <div class="ais__head ais__head--subj">📄 <span class="ais__title">${esc(s.title || i18n('Untitled assignment'))}</span>
+          <span class="ais__hint">${esc(i18n('Graded by you — students upload files and a report. No judge, no test data.'))}</span></div>
+        <div class="aisd__tabs">
+          <button class="aisd__tab" data-pane="stmt">📄 ${esc(i18n('Assignment'))}</button>
+          <button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Grading briefing'))}</button>
+          <button class="aisd__tab" data-pane="ctx">📚 ${esc(i18n('Context'))} (${(d.brief.files || []).length})</button>
+        </div>
+        <div class="ais__body">
+          ${toolbarHtml(d)}
+          ${ctxPaneHtml(d)}
+
+          <div class="aisd__pane" data-pane="stmt">
+            ${hasStmt ? `
+            <div class="ais__label">${esc(i18n('Title'))}</div>
+            <input type="text" class="aisd__title" value="${esc(s.title)}">
+            <div class="aisd__fieldhead">
+              <span class="ais__label" style="margin:0;">${esc(i18n(STATEMENT_LABEL.subjective))}</span>
+              <span class="aisd__meta">${esc(i18n(STATEMENT_HINT.subjective))}</span>
+            </div>
+            ${editorHost(22, s.body)}
+            <div class="aisd__bar" style="margin-top:10px;">
+              <button class="ais__btn ais__btn--sm aisd__save" data-t="statement">💾 ${esc(i18n('Save my edits'))}</button>
+              <span class="aisd__meta">${esc(i18n('The preview toggle in the toolbar shows exactly what students will see.'))}</span>
+            </div>
+            ${chatPanel(d)}`
+    : `<div class="ais__empty">${esc(i18n('No assignment yet — press Draft the assignment above, or just start chatting once it exists.'))}</div>`}
+          </div>
+          ${reportPaneHtml(d)}
+        </div>
+      </div>
+    </div>
+    <div class="aisd__side">${sideHtml(d)}</div>
+  </div>`;
+}
+
+function render($root) {
+  const d = state;
+  lastFp = artifactFp(d);
+  lastSideFp = sideFp();
+  const kind = kindOf(d);
+  const html = kind === 'objective' ? renderObjective(d)
+    : kind === 'subjective' ? renderSubjective(d)
+      : renderProgramming(d);
+  $root.html(html);
   wire($root);
   const pane = activePane || (d.artifacts.statement ? 'stmt' : 'ctx');
-  $root.find('.aisd__tab').removeClass('aisd__tab--on').filter(`[data-pane="${pane}"]`).addClass('aisd__tab--on');
-  $root.find('.aisd__pane').removeClass('aisd__pane--on').filter(`[data-pane="${pane}"]`).addClass('aisd__pane--on');
-  mountStatementEditor($root);
+  const $tab = $root.find(`.aisd__tab[data-pane="${pane}"]`);
+  const shown = $tab.length ? pane : 'ctx'; // the tab may not exist in this phase
+  $root.find('.aisd__tab').removeClass('aisd__tab--on').filter(`[data-pane="${shown}"]`).addClass('aisd__tab--on');
+  $root.find('.aisd__pane').removeClass('aisd__pane--on').filter(`[data-pane="${shown}"]`).addClass('aisd__pane--on');
+  // The rich markdown editor suits prose. Quiz markup is easier to edit as
+  // plain text — and the source box lives inside a <details>, where a
+  // freshly mounted editor would measure zero height.
+  if (kind !== 'objective') mountStatementEditor($root);
+}
+
+/**
+ * The one place that decides what is clickable. Every AI round-trip — chat
+ * turn, generation, verification — locks the whole page except Stop, so the
+ * teacher can never start a second run against a statement that is being
+ * rewritten underneath them.
+ */
+function setLocked($root, locked) {
+  $root.find('.ais__btn').not('.aisd__stop').not('[data-hard-disabled]').prop('disabled', !!locked);
+  $root.find('.aisc__input, .aisd__body-md, .aisd__title, .aisd__answers').prop('disabled', !!locked);
+  $root.find('.aisc__send').text(locked ? i18n('Thinking…') : i18n('Send'));
+  if (locked) return;
+  // Re-apply the rules that are independent of the lock.
+  $root.find('.aisd__publish').prop('disabled', !(state.pipeline.status === 'passed' && !state.published));
+  $root.find('.aisd__discard').prop('disabled', !!state.published);
 }
 
 /* Only the sidebar refreshes during polling, so editors keep focus. */
@@ -374,20 +932,29 @@ function renderSide($root) {
   }
   lastSideFp = fp;
   $root.find('.aisd__side').html(sideHtml(state));
-  const busy = state.pipeline.status === 'running';
-  $root.find('.aisd__genall, .aisd__verify, .aisd__regen, .aisd__refine, .aisd__brief-save').prop('disabled', busy);
-  $root.find('.aisd__publish').prop('disabled', !(state.pipeline.status === 'passed' && !state.published));
-  $root.find('.aisd__discard').prop('disabled', busy || !!state.published);
+  setLocked($root, state.pipeline.status === 'running');
 }
 
 async function mountStatementEditor($root) {
+  const $ta = $root.find('.aisd__body-md');
+  // Before the first draft exists (phase 'brief') the statement pane renders
+  // an empty-state message and NO textarea. Editor.getOrConstruct would then
+  // dereference $dom.get(0) -> undefined inside initMarkdownEditor, and
+  // because the constructor kicks that off without awaiting it, the
+  // rejection escapes the try/catch below and surfaces as an uncaught
+  // runtime error overlay instead of a silent fallback.
+  if (!$ta.length) {
+    statementEditor = null;
+    return;
+  }
   try {
     const { default: Editor } = await import('vj/components/editor');
-    const $ta = $root.find('.aisd__body-md');
     // The editor appends to the textarea's PARENT — the pane div hosts it
     // right under the label, and mirrors keystrokes back into the textarea.
     statementEditor = Editor.getOrConstruct($ta, { language: 'markdown' });
-  } catch (e) { /* plain textarea fallback */ }
+  } catch (e) {
+    console.warn('[ai-studio] markdown editor unavailable, keeping the plain textarea:', (e && e.message) || e);
+  }
 }
 
 /* ---------------------------- actions ----------------------------- */
@@ -414,7 +981,7 @@ function startPolling($root) {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
     try {
-      const data = await request.get(base());
+      const data = await request.get(jsonUrl());
       const hadStmt = !!state?.artifacts?.statement;
       state = data.draft;
       if (!hadStmt && state?.artifacts?.statement && (!activePane || activePane === 'ctx')) activePane = 'stmt';
@@ -423,9 +990,17 @@ function startPolling($root) {
       if (state.pipeline.status !== 'running') {
         clearInterval(pollTimer);
         pollTimer = null;
-        if (state.pipeline.status === 'passed') Notification.success(i18n('Verification passed.'));
-        else if (state.pipeline.status === 'failed') Notification.error(`${i18n('Verification failed at')} ${state.pipeline.stage}: ${state.pipeline.message}`);
+        if (state.pipeline.status === 'idle' && phaseOf(state) === 'review') {
+          Notification.success(isObjDraft(state)
+            ? i18n('Questions drafted — review them, then press Continue.')
+            : i18n('Statement drafted — review it, then press Continue.'));
+        } else if (state.pipeline.status === 'passed') {
+          Notification.success(isSubjDraft(state) ? i18n('Ready to publish.') : i18n('Verification passed.'));
+        } else if (state.pipeline.status === 'failed') {
+          Notification.error(`${i18n('Verification failed at')} ${state.pipeline.stage}: ${state.pipeline.message}`);
+        }
         render($root); // full refresh: repaired artifacts / samples / limits
+        setLocked($root, false); // the run is over — hand the page back
       }
     } catch (e) { /* transient poll error; keep polling */ }
   }, 2000);
@@ -502,6 +1077,10 @@ function wire($root) {
     });
   });
 
+  $root.find('.aisd__qtype').on('change', function onQType() {
+    $(this).closest('.aisq__type-chip').toggleClass('aisq__type-chip--on', $(this).prop('checked'));
+  });
+
   $root.find('.aisd__brief-save').on('click', function onBrief() {
     act($(this), async () => {
       const res = await request.post(base(), {
@@ -510,11 +1089,20 @@ function wire($root) {
         payload: JSON.stringify({
           topic: String($root.find('.aisd__topic').val() || ''),
           difficulty: $root.find('.aisd__difficulty').val(),
+          // Objective-only controls; absent on the other pages, and the
+          // server ignores them unless the draft is a quiz.
+          ...($root.find('.aisd__qcount').length ? { qcount: $root.find('.aisd__qcount').val() } : {}),
+          ...($root.find('.aisd__brieflang').length ? { language: $root.find('.aisd__brieflang').val() } : {}),
+          ...($root.find('.aisd__qtype').length
+            ? { qtypes: $root.find('.aisd__qtype:checked').map(function qv() { return $(this).val(); }).get() }
+            : {}),
         }),
       });
       state = res.draft;
       render($root);
-      Notification.success(i18n('Requirement saved — run Generate & verify to synthesize against it.'));
+      Notification.success(isObjDraft(state)
+        ? i18n('Setup saved — press Generate questions to rebuild the quiz.')
+        : i18n('Requirement saved — regenerate the statement to synthesize against it.'));
     });
   });
 
@@ -562,21 +1150,89 @@ function wire($root) {
     });
   });
 
-  $root.find('.aisd__genall').on('click', function onGen() {
+  // PHASE 1: draft the statement only. Nothing downstream is touched.
+  $root.find('.aisd__gen').on('click', function onGen() {
+    if (phaseOf(state) === 'review'
+      && !window.confirm(i18n('Regenerate from scratch? The current text and this conversation will be replaced.'))) return;
     act($(this), async () => {
-      const res = await request.post(base(), { operation: 'generate', target: 'all', verify: true });
+      setLocked($root, true);
+      const res = await request.post(base(), { operation: 'generate', target: 'questions' });
       state = res.draft;
+      activePane = 'stmt';
       render($root);
-      Notification.success(i18n('Generation started — the task will appear here as each part is drafted.'));
       startPolling($root);
     });
   });
+
+  // PHASE 2: the teacher signs off on the statement.
+  $root.find('.aisd__continue').on('click', function onContinue() {
+    act($(this), async () => {
+      setLocked($root, true);
+      const res = await request.post(base(), { operation: 'continue' });
+      state = res.draft;
+      render($root);
+      Notification.success(isObjDraft(state)
+        ? i18n('Questions approved — writing the answer key.')
+        : isSubjDraft(state)
+          ? i18n('Assignment approved — assembling it now.')
+          : i18n('Statement approved — drafting the solution, cross-check and tests.'));
+      startPolling($root);
+    });
+  });
+
+  /* ---- statement-review chat ---- */
+  const $chatLog = $root.find('.aisc__log');
+  const $chatInput = $root.find('.aisc__input');
+  const sendChat = async () => {
+    const text = String($chatInput.val() || '').trim();
+    if (!text) return;
+    setLocked($root, true);
+    // Echo the teacher's turn immediately: the round-trip can take a while
+    // and an empty box with no trace of what was just asked reads as a bug.
+    $chatLog.append(`<div class="aisc__turn aisc__turn--user">${esc(text)}</div>`)
+      .append(`<div class="aisc__turn aisc__turn--ai aisc__pending"><span class="aisc__typing"><i></i><i></i><i></i></span></div>`);
+    if ($chatLog.length) $chatLog.scrollTop($chatLog[0].scrollHeight);
+    $chatInput.val('');
+    try {
+      const res = await request.post(base(), { operation: 'chat', text });
+      state = res.draft;
+      // Keep the teacher on the statement they are discussing.
+      activePane = 'stmt';
+      render($root);
+      if (res.changed) Notification.success(i18n('The AI applied your change — check the text above.'));
+    } catch (e) {
+      $chatLog.find('.aisc__pending').remove();
+      Notification.error(e.message);
+      $chatInput.val(text); // don't lose what they typed
+      setLocked($root, false);
+    }
+  };
+  $root.find('.aisc__send').on('click', sendChat);
+  $chatInput.on('keydown', (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+      ev.preventDefault();
+      sendChat();
+    }
+  });
+  $root.find('.aisc__clear').on('click', function onClearChat() {
+    act($(this), async () => {
+      const res = await request.post(base(), { operation: 'chatReset' });
+      state = res.draft;
+      render($root);
+    });
+  });
+
   $root.find('.aisd__regen').on('click', function onRegen() {
     const t = $(this).data('t');
     act($(this), async () => {
-      const res = await request.post(base(), { operation: 'generate', target: t });
-      state = res.draft;
-      render($root);
+      setLocked($root, true);
+      try {
+        const res = await request.post(base(), { operation: 'generate', target: t });
+        state = res.draft;
+        render($root);
+      } finally {
+        setLocked($root, false);
+      }
     });
   });
   $root.find('.aisd__refine').on('click', function onRefine() {
@@ -612,12 +1268,53 @@ function wire($root) {
       startPolling($root);
     });
   });
-  $root.find('.aisd__publish').on('click', function onPub() {
+  $root.find('.aisd__reveal, .aisd__unreveal').on('click', function onVis() {
+    const visible = $(this).hasClass('aisd__reveal');
     act($(this), async () => {
-      const res = await request.post(base(), { operation: 'publish' });
-      Notification.success(`${i18n('Published as')} ${res.pid}`);
-      state.published = true;
-      renderSide($root);
+      try {
+        const res = await request.post(base(), { operation: 'visibility', visible });
+        state = res.draft;
+        render($root);
+        Notification.success(visible
+          ? i18n('Students can now see this task.')
+          : i18n('Hidden — students can no longer see this task.'));
+      } catch (e) {
+        // An older backend has no postVisibility (the framework throws
+        // MethodNotAllowedError("Visibility") from its dispatch check). The
+        // problem list's bulk hide/unhide operations are CORE and take the
+        // docId, setting exactly { hidden } and nothing else — so fall back
+        // to those and keep the teacher unblocked. The draft's own
+        // publishedHidden record cannot be updated on that path; it resyncs
+        // the first time postVisibility succeeds on a current backend.
+        if (!/MethodNotAllowed|Visibility/i.test(e.message || '')) throw e;
+        if (!state.docId) throw new Error(i18n('The running backend does not have this feature yet. Restart hydrooj, then confirm the Studio header shows build 2026-08-23c-sentinel or later. Until then, toggle visibility from the problem\'s own edit page.'));
+        await request.post(`${domainPrefix()}/p`, { operation: visible ? 'unhide' : 'hide', pids: [state.docId] });
+        state.publishedHidden = !visible;
+        render($root);
+        Notification.success((visible
+          ? i18n('Students can now see this task.')
+          : i18n('Hidden — students can no longer see this task.'))
+          + ' ' + i18n('(applied via the problem list — the backend is running an older build; restart it when you can)'));
+      }
+    });
+  });
+
+  $root.find('.aisd__publish').on('click', function onPub() {
+    const keepHidden = $root.find('.aisd__pubhidden').prop('checked');
+    act($(this), async () => {
+      const res = await request.post(base(), { operation: 'publish', hidden: keepHidden });
+      const backendKnows = !!res.draft; // older backends return no draft — and IGNORED the checkbox
+      if (backendKnows) state = res.draft;
+      else { state.published = true; state.publishedHidden = false; }
+      render($root); // the toolbar becomes the visibility switch
+      if (keepHidden && !backendKnows) {
+        Notification.error(i18n('The server ignored "Keep hidden" — it is running an older backend build, so the task was published VISIBLE to students. Hide it from the problem\'s edit page, then restart hydrooj and check the build stamp in the Studio header.'));
+      } else {
+        const pubList = (res.pids || [res.pid]).join(', ');
+      Notification.success(keepHidden
+          ? `${i18n('Published as')} ${pubList} — ${i18n('hidden from students until you reveal it')}`
+          : `${i18n('Published as')} ${pubList}`);
+      }
       window.open(res.url || `${domainPrefix()}/p/${res.pid}`, '_blank');
     });
   });
@@ -636,9 +1333,10 @@ export default new NamedPage(['ai_studio_detail'], () => {
     $('<style>').attr('id', 'aisd-style').text(DETAIL_STYLE).appendTo(document.head);
   }
   const $root = $('#ais-root');
-  request.get(base()).then((data) => {
+  request.get(jsonUrl()).then((data) => {
     state = data.draft;
     langsMap = data.langs || {};
+    backendBuild = (data.provider && data.provider.build) || '';
     render($root);
     if (state.pipeline.status === 'running') startPolling($root);
   }).catch((e) => $root.html(`<div class="ais"><div class="ais__body"><div class="ais__empty">⚠ ${esc(e.message)}</div></div></div>`));

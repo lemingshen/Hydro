@@ -129,12 +129,9 @@
     <h1 class="section__title">{{ _('Related') }}</h1>
   </div>
   <div class="section__body typo">
-  {% if tdocs.length %}
-    <p>{{ _('In following training plans') }}: </p>
-    {%- for tdoc in tdocs -%}
-      <p><a href="{{ url('training_detail', tid=tdoc.docId) }}">{{ tdoc.title }}</a></p>
-    {%- endfor -%}
-  {% endif %}
+  {#- Training removed for this deployment: the "In following training
+      plans" list is gone, and with the route unregistered a url() call
+      here would throw at render time. -#}
   {% if ctdocs.length %}
     <p>{{ _('In following contests') }}: </p>
     {%- for tdoc in ctdocs -%}

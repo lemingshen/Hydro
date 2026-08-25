@@ -307,6 +307,14 @@ export class TrainingFileDownloadHandler extends Handler {
 }
 
 export async function apply(ctx) {
+    /*
+     * TRAINING IS DISABLED for this deployment: the course runs on
+     * Tests, Homework and Self-Learning. Returning before any Route()
+     * makes every /training URL a plain NotFoundError while the model
+     * and handlers stay compiled, so re-enabling is deleting this block
+     * (and restoring the Nav line in lib/ui.ts).
+     */
+    return;
     ctx.Route('training_main', '/training', TrainingMainHandler, PERM.PERM_VIEW_TRAINING);
     ctx.Route('training_create', '/training/create', TrainingEditHandler);
     ctx.Route('training_detail', '/training/:tid', TrainingDetailHandler, PERM.PERM_VIEW_TRAINING);

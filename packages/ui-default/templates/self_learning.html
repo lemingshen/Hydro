@@ -32,6 +32,36 @@
   .sll-hero .button { box-shadow: 0 8px 18px -8px rgba(0, 0, 0, .35); }
   .sll-hero .button.primary { background: rgba(255, 255, 255, .94); color: #3d4fc4; border: none; }
   .sll-hero .button.primary:hover { background: #fff; color: #3d4fc4; filter: none; transform: translateY(-1px); }
+
+  /* ---- integration repair + polish (wrapper era) ------------------------
+     The delete affordance wrapped every card in .sll-cardwrap, which broke
+     two assumptions of the rules above: the stagger targeted
+     .sll-card:nth-child(n) (now always the wrapper's first child), and the
+     card's top-right corner — where the count chip lives — was covered by
+     the absolutely-positioned Delete button. Repairs live here, at the end
+     of the cascade, instead of rewriting the block above. */
+  .sll-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .sll-cardwrap { position: relative; display: flex; }
+  .sll-cardwrap .sll-card { flex: 1 1 auto; height: 100%; animation-delay: 0s; }
+  .sll-grid > .sll-cardwrap:nth-child(1) .sll-card { animation-delay: .02s; }
+  .sll-grid > .sll-cardwrap:nth-child(2) .sll-card { animation-delay: .05s; }
+  .sll-grid > .sll-cardwrap:nth-child(3) .sll-card { animation-delay: .08s; }
+  .sll-grid > .sll-cardwrap:nth-child(4) .sll-card { animation-delay: .11s; }
+  .sll-grid > .sll-cardwrap:nth-child(5) .sll-card { animation-delay: .14s; }
+  .sll-grid > .sll-cardwrap:nth-child(6) .sll-card { animation-delay: .17s; }
+  .sll-grid > .sll-cardwrap:nth-child(7) .sll-card { animation-delay: .2s; }
+  .sll-grid > .sll-cardwrap:nth-child(8) .sll-card { animation-delay: .23s; }
+  /* Delete sits in the top-right; when it is present, the card's header row
+     leaves room for it so the count chip never hides underneath. */
+  .list-del--card { top: 12px; right: 12px; margin: 0; }
+  .sll-cardwrap:has(.list-del--card) .sll-card__top { padding-right: 96px; }
+  .sll-cardwrap .list-del__btn { padding: 3px 10px; font-size: 11.5px; border-radius: 999px; background: var(--pta-card); }
+  .sll-card__title { font-size: 15px; min-height: 2.7em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .sll-card__meta { padding-right: 20px; }
+  /* ---- hero call-to-action: self-contained, immune to global .button ---- */
+  .sll-hero__cta { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 10px 14px; border-radius: 12px; background: #fff; color: #4338ca; font-weight: 700; font-size: 13.5px; text-decoration: none; box-shadow: 0 10px 22px -10px rgba(0, 0, 0, .45); transition: transform .15s var(--pta-ease), box-shadow .15s ease; }
+  .sll-hero__cta:hover { transform: translateY(-1px); color: #4338ca; box-shadow: 0 14px 26px -10px rgba(0, 0, 0, .5); }
+  .sll-hero__cta:active { transform: translateY(0); }
 </style>
 <div class="row">
   <div class="medium-9 columns">
@@ -45,6 +75,7 @@
         {% else %}
         <div class="sll-grid">
           {%- for sdoc in sdocs -%}
+          <div class="sll-cardwrap">
           <a class="sll-card" href="{{ url('self_learning_detail', ssid=sdoc.docId) }}">
             <div class="sll-card__top">
               <span class="sll-card__emblem">🎓</span>
@@ -57,6 +88,13 @@
             </div>
             <span class="sll-card__go">→</span>
           </a>
+            {% if sdoc.owner == handler.user._id or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) %}
+            <form class="list-del list-del--card" method="post" action="{{ url('self_learning_edit', ssid=sdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
+              <input type="hidden" name="operation" value="delete">
+              <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
+            </form>
+            {% endif %}
+          </div>
           {%- endfor -%}
         </div>
         {% endif %}
@@ -68,7 +106,7 @@
       <div class="sll-hero__icon">🤖✨</div>
       <p>{{ _('Practice problems at your own pace. When a submission is not accepted, an AI Socratic tutor will guide you to find and fix the mistake yourself.') }}</p>
       {% if canCreate %}
-      <a href="{{ url('self_learning_create') }}" class="expanded rounded primary button">{{ _('Create Self-Learning Session') }}</a>
+      <a href="{{ url('self_learning_create') }}" class="sll-hero__cta">＋ {{ _('Create Self-Learning Session') }}</a>
       {% endif %}
     </div>
   </div>
