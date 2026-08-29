@@ -2,7 +2,7 @@
 {% block content %}
 {{ set(UiContext, 'docs', calendar) }}
 <div class="row">
-  <div class="medium-12 columns">
+  <div class="medium-9 columns">
     <div class="section">
       <div class="section__header">
         <h1 class="section__title">{{ _('All Homeworks') }}</h1>
@@ -29,46 +29,45 @@
               {{ _('Search') }}
             </button>
           </form>
-        {% if handler.user.hasPerm(perm.PERM_CREATE_HOMEWORK) %}
-          <a class="compact button" href="{{ url('homework_create') }}">{{ _('Create Homework') }}</a>
-        {% endif %}
         </div>
       </div>
-      <div class="section__body no-padding">
+      <div class="section__body">
       {% if not tdocs.length %}
         {{ nothing.render('There is no homework so far ╰(*°▽°*)╯') }}
       {% else %}
-        <ol class="section__list homework__list">
+        <ol class="section__list homework__list pta-rowlist">
         {%- for tdoc in tdocs -%}
-          <li class="section__list__item homework__item">
-            <div class="media">
-              <div class="media__left medium">
-                <div class="homework__date numbox">
-                  <div class="numbox__num large">{{ datetimeSpan(tdoc['penaltySince'], false, 'D')|safe }}</div>
-                  <div class="numbox__text">{{ datetimeSpan(tdoc['penaltySince'], false, 'YYYY-M')|safe }}</div>
+          <li class="section__list__item pta-rowwrap">
+            <a class="pta-row" href="{{ url('homework_detail', tid=tdoc.docId) }}">
+              <div class="pta-row__side">
+                <div class="pta-datebox">
+                  <div class="pta-datebox__num">{{ datetimeSpan(tdoc['penaltySince'], false, 'D')|safe }}</div>
+                  <div class="pta-datebox__sub">{{ datetimeSpan(tdoc['penaltySince'], false, 'YYYY-M')|safe }}</div>
                 </div>
               </div>
-              <div class="media__body medium">
-                <h1 class="homework__title"><a href="{{ url('homework_detail', tid=tdoc.docId) }}" data-emoji-enabled>{{ tdoc.title }}</a></h1>
-                {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) %}
-                <form class="list-del " method="post" action="{{ url('homework_edit', tid=tdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
-                  <input type="hidden" name="operation" value="delete">
-                  <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
-                </form>
-                {% endif %}
-                <ul class="supplementary list">
-                  <li>{{ _('Status') }}: {{ _(model.contest.statusText(tdoc)) }}</li>
-                  <li>{{ _('Open Since') }}: {{ datetimeSpan(tdoc['beginAt'])|safe }}</li>
-                  <li>
+              <div class="pta-row__main">
+                <div class="pta-row__titlerow">
+                  <span class="pta-row__title" data-emoji-enabled>{{ tdoc.title }}</span>
+                  <span class="pta-row__count">{{ tdoc.pids|length }} {{ _('Problems') }}</span>
+                </div>
+                <div class="pta-row__meta">
+                  <span class="pta-chip{% if model.contest.isNotStarted(tdoc) %} pta-chip--blue{% elif model.contest.isExtended(tdoc) %} pta-chip--gold{% elif model.contest.isDone(tdoc) %} pta-chip--dim{% else %} pta-chip--ok{% endif %}">📊 {{ _(model.contest.statusText(tdoc)) }}</span>
+                  <span class="pta-chip">🗓 {{ _('Open Since') }} {{ datetimeSpan(tdoc['beginAt'])|safe }}</span>
                   {% if model.contest.isExtended(tdoc) or model.contest.isDone(tdoc) %}
-                    {{ _('Hard Deadline') }}: {{ datetimeSpan(tdoc['endAt'])|safe }}
+                  <span class="pta-chip pta-chip--gold">⏳ {{ _('Hard Deadline') }} {{ datetimeSpan(tdoc['endAt'])|safe }}</span>
                   {% else %}
-                    {{ _('Deadline') }}: {{ datetimeSpan(tdoc['penaltySince'])|safe }}
+                  <span class="pta-chip">⏳ {{ _('Deadline') }} {{ datetimeSpan(tdoc['penaltySince'])|safe }}</span>
                   {% endif %}
-                  </li>
-                </ul>
+                </div>
               </div>
-            </div>
+              <span class="pta-row__go">→</span>
+            </a>
+            {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) %}
+            <form class="list-del list-del--card" method="post" action="{{ url('homework_edit', tid=tdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
+              <input type="hidden" name="operation" value="delete">
+              <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
+            </form>
+            {% endif %}
           </li>
         {%- endfor -%}
         </ol>
@@ -77,6 +76,20 @@
       {% endif %}
       </div>
     </div>
+  </div>
+  <div class="medium-3 columns">
+  {% if handler.user.hasPerm(perm.PERM_CREATE_HOMEWORK) %}
+    <div class="section side">
+      <div class="section__header">
+        <h1 class="section__title">
+          {{ _('Create Homework') }}
+        </h1>
+      </div>
+      <div class="section__body">
+        <p><a href="{{ url('homework_create') }}" class="expanded primary button">{{ _('Create a homework') }}</a></p>
+      </div>
+    </div>
+  {% endif %}
   </div>
 </div>
 {% endblock %}

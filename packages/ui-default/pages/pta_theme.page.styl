@@ -1605,3 +1605,129 @@ html.page--contest_paper .paper-top__saved--on, html.page--homework_paper .paper
   background: rgba(43, 138, 62, .15);
   border-color: rgba(105, 219, 124, .35);
 }
+
+
+/* ---------- floating tutor panel (shared: solve page + session paper) ---------- */
+
+.sl-float { position: fixed; right: 24px; bottom: 24px; z-index: 950; width: 400px; max-width: calc(100vw - 24px); height: unquote("min(620px, calc(100vh - 90px))"); min-width: 300px; min-height: 360px; background: var(--pta-card); border: 1px solid var(--pta-line); border-radius: var(--pta-radius-lg); box-shadow: var(--pta-shadow-pop); display: flex; flex-direction: column; overflow: hidden; animation: ptaPopIn .26s var(--pta-ease); }
+.sl-float__resize { position: absolute; left: 0; top: 0; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none; z-index: 2; }
+.sl-float__resize::after { content: ''; position: absolute; left: 4px; top: 4px; width: 10px; height: 10px; border-left: 2px solid rgba(255, 255, 255, .65); border-top: 2px solid rgba(255, 255, 255, .65); border-radius: 3px 0 0 0; transition: border-color .15s ease; }
+.sl-float__resize:hover::after { border-color: #fff; }
+.sl-float--expanded .sl-float__resize { display: none; }
+.sl-float__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px 9px 26px; background: var(--pta-grad-crimson); background-size: 220% 100%; animation: ptaSheen 11s ease infinite; box-shadow: 0 2px 8px rgba(158, 35, 53, .35); flex: 0 0 auto; }
+.sl-float__title { font-weight: bold; font-size: 14px; letter-spacing: .01em; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .18); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-spark-chip { margin-left: auto; margin-right: 6px; flex: 0 0 auto; background: rgba(255, 255, 255, .18); color: #fff; border: 1px solid rgba(255, 255, 255, .35); border-radius: 999px; font-size: 11px; font-weight: bold; padding: 2px 10px; cursor: pointer; transition: background-color .15s ease, transform .15s var(--pta-ease); }
+.sl-spark-chip:hover { background: rgba(255, 255, 255, .3); transform: translateY(-1px); }
+.sl-spark-chip:empty { display: none !important; }
+.sl-float__hint { color: #a4707d; font-size: 11px; margin: 0; padding: 6px 12px 9px; flex: 0 0 auto; background: linear-gradient(180deg, var(--pta-card), var(--pta-crimson-soft)); border-top: 1px solid var(--pta-crimson-line); }
+.pta-dark .sl-float__hint,
+.theme--dark .sl-float__hint { color: #b98b96; background: linear-gradient(180deg, var(--pta-card), #221f22); }
+.sl-chat { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; background: var(--pta-card-2); scrollbar-width: thin; }
+.sl-input-row { display: flex; margin: 0; padding: 8px; border-top: 1px solid var(--pta-crimson-line); flex: 0 0 auto; background: var(--pta-card); }
+.sl-input-row textarea { flex: 1; resize: none; height: 56px; border-radius: 10px; }
+.sl-input-row textarea:focus { border-color: var(--pta-crimson) !important; box-shadow: var(--pta-ring-crimson) !important; }
+.sl-input-row button { margin-left: 8px; align-self: flex-end; }
+.sl-float .sl-input-row .button.primary { background: var(--pta-grad-crimson); border-color: transparent; box-shadow: 0 6px 14px -6px rgba(158, 35, 53, .6); }
+.sl-float .sl-input-row .button.primary:hover { background: var(--pta-grad-crimson); filter: brightness(1.08); }
+@media (max-width: 600px) {
+  .sl-float { right: 8px; left: 8px; bottom: 8px; width: auto; max-width: none; height: unquote("min(560px, calc(100vh - 60px))"); }
+  .sl-fab { right: 12px; bottom: 12px; }
+  .sl-float__resize { display: none; }
+}
+.sl-float__qtag { flex: 0 0 auto; background: rgba(255, 255, 255, .22); color: #fff; border-radius: 999px; font-size: 10.5px; font-weight: bold; padding: 1px 9px; letter-spacing: .03em; }
+
+/* ------------------- session paper: in-place answering ------------------- */
+
+html.page--self_learning_paper .paper-q__foot { display: flex; align-items: center; gap: 12px; border-top: 1px dashed var(--pta-line); }
+html.page--self_learning_paper .paper-q__hint { font-size: 12px; color: var(--pta-ink-faint); }
+html.page--self_learning_paper .paper-q__status { display: none; margin-left: 10px; font-size: 12px; font-weight: bold; border-radius: 999px; padding: 2px 12px; border: 1px solid var(--pta-line); background: var(--pta-card-3); color: var(--pta-ink-soft); vertical-align: 2px; animation: ptaScaleIn .2s var(--pta-ease); }
+html.page--self_learning_paper .paper-q__status.on { display: inline-block; }
+html.page--self_learning_paper .paper-q__status.pending { background: var(--pta-blue-soft); border-color: var(--pta-blue-line); color: var(--pta-blue-text); }
+html.page--self_learning_paper .paper-q__status.pass { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+html.page--self_learning_paper .paper-q__status.fail { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); color: var(--pta-bad-text); }
+html.page--self_learning_paper .paper-mk--pass { background: var(--pta-ok-soft) !important; border-color: var(--pta-ok-line) !important; border-radius: 8px; }
+html.page--self_learning_paper .paper-mk--fail { background: var(--pta-bad-soft) !important; border-color: var(--pta-bad-line) !important; border-radius: 8px; }
+html.page--self_learning_paper .paper-mk--partial { background: var(--pta-gold-soft) !important; border-color: var(--pta-gold-line) !important; border-radius: 8px; }
+
+/* -------------------- session paper: schedule notes -------------------- */
+
+html.page--self_learning_paper .paper-note--warn { background: var(--pta-gold-soft); border: 1px solid var(--pta-gold-line); color: var(--pta-gold-text); border-radius: 10px; margin-top: 6px; }
+html.page--self_learning_paper .paper-note--closed { background: var(--pta-card-3); border: 1px solid var(--pta-line); color: var(--pta-ink-soft); border-radius: 10px; margin-top: 6px; }
+
+/* ------------- session-style row lists (Homework / Test parity) ------------- */
+/*
+ * The self-learning homepage's approved row anatomy — date tile · title +
+ * count pill · chips · centered Delete + arrow — extracted for the Homework
+ * and Test lists. Fresh .pta-row namespace so no legacy era (.homework__*,
+ * .contest__*, .sll-*) can interfere, and `display` is stated explicitly:
+ * the sll fifth-era lesson, applied preemptively.
+ */
+.pta-rowlist { display: grid; grid-template-columns: 1fr; gap: 12px; margin: 4px 0 2px; padding: 0; list-style: none; }
+.pta-rowlist > .pta-rowwrap { border: none; padding: 0; }
+.pta-rowwrap { position: relative; width: 100%; animation: ptaFadeUp .3s var(--pta-ease) backwards; }
+.pta-rowlist > .pta-rowwrap:nth-child(1) { animation-delay: .02s; }
+.pta-rowlist > .pta-rowwrap:nth-child(2) { animation-delay: .05s; }
+.pta-rowlist > .pta-rowwrap:nth-child(3) { animation-delay: .08s; }
+.pta-rowlist > .pta-rowwrap:nth-child(4) { animation-delay: .11s; }
+.pta-rowlist > .pta-rowwrap:nth-child(5) { animation-delay: .14s; }
+.pta-rowlist > .pta-rowwrap:nth-child(6) { animation-delay: .17s; }
+.pta-rowlist > .pta-rowwrap:nth-child(7) { animation-delay: .2s; }
+.pta-rowlist > .pta-rowwrap:nth-child(8) { animation-delay: .23s; }
+.pta-row { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 16px; width: 100%; position: relative; overflow: hidden; padding: 13px 18px 13px 14px; border: 1px solid var(--pta-line); border-radius: var(--pta-radius); background: var(--pta-card); box-shadow: var(--pta-shadow); text-decoration: none; color: inherit; transition: transform .16s var(--pta-ease), box-shadow .16s ease, border-color .16s ease; }
+.pta-row::before { content: ''; position: absolute; left: 0; top: 0; right: 0; height: 4px; background: var(--pta-grad); opacity: .9; }
+.pta-row:hover { transform: translateY(-3px); border-color: var(--pta-blue-line); box-shadow: 0 14px 30px -12px rgba(28, 126, 214, .35); }
+.theme--dark .pta-row:hover { box-shadow: 0 14px 30px -12px rgba(0, 0, 0, .6); }
+.pta-row__side { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; min-width: 64px; }
+.pta-datebox { text-align: center; min-width: 60px; padding: 5px 10px; border-radius: 10px; background: var(--pta-card-3); border: 1px solid var(--pta-line-soft); }
+.pta-datebox__num { font-size: 23px; font-weight: bold; line-height: 1.1; color: var(--pta-ink); }
+.pta-datebox__sub { font-size: 10.5px; color: var(--pta-ink-faint); letter-spacing: .03em; }
+.pta-row__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; padding-right: 30px; }
+.pta-rowwrap:has(.list-del--card) .pta-row__main { padding-right: 116px; }
+.pta-row__titlerow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pta-row__title { font-size: 16px; font-weight: bold; color: var(--pta-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .16s ease; }
+.pta-row:hover .pta-row__title { color: var(--pta-blue-text); }
+.pta-row__count { flex: 0 0 auto; font-size: 11.5px; font-weight: bold; color: var(--pta-blue-text); background: var(--pta-blue-soft); border: 1px solid var(--pta-blue-line); border-radius: 999px; padding: 2px 10px; }
+.pta-row__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.pta-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 999px; padding: 2px 9px; }
+.pta-chip .icon { font-size: 12px; }
+.pta-chip--ok { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+.pta-chip--gold { background: var(--pta-gold-soft); border-color: var(--pta-gold-line); color: var(--pta-gold-text); }
+.pta-chip--blue { background: var(--pta-blue-soft); border-color: var(--pta-blue-line); color: var(--pta-blue-text); }
+.pta-chip--dim { opacity: .75; }
+.pta-row__go { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 15px; color: var(--pta-ink-faint); transition: transform .16s var(--pta-ease), color .16s ease; }
+.pta-row:hover .pta-row__go { color: var(--pta-blue-text); transform: translateY(-50%) translateX(3px); }
+.pta-rowwrap .list-del--card { top: 50%; transform: translateY(-50%); right: 44px; }
+@media (max-width: 600px) {
+  .pta-row { gap: 10px; padding: 11px 12px; }
+  .pta-row__side { min-width: 48px; }
+  .pta-datebox { min-width: 46px; }
+  .pta-datebox__num { font-size: 18px; }
+  .pta-row__titlerow { flex-wrap: wrap; }
+  .pta-row__main { padding-right: 24px; }
+  .pta-rowwrap:has(.list-del--card) .pta-row__main { padding-right: 92px; }
+  .pta-rowwrap .list-del--card { right: 36px; }
+}
+
+/* Bottom rhythm under the row lists: the pager clears the last row, and the
+   (toggleable) calendar clears the pager — Homework and Test get the same
+   spacing the Self-Learning page defines locally. */
+.pta-rowlist + .pager { margin: 18px 0 6px; }
+.pta-rowlist ~ div[name='calendar_entry'] { margin-top: 14px; }
+
+/* -------------- picker selected items (.autocomplete-tag) -------------- */
+/*
+ * Upstream ships the multi-picker's selected items as harsh solid-red tags
+ * with no dark styling. Restyled on the token triples so both themes get
+ * the same soft pill the rest of the design uses; drag/close affordances
+ * inherit the text color.
+ */
+.autocomplete-wrapper .autocomplete-tag {
+  background: var(--pta-blue-soft);
+  border: 1px solid var(--pta-blue-line);
+  color: var(--pta-blue-text);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+.autocomplete-wrapper .autocomplete-tag:hover { filter: brightness(1.06); }

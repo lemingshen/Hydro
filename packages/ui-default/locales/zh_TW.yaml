@@ -21,8 +21,6 @@ ai_tutor.timeout: 請求逾時（秒）
 '{0} solutions': '{0} 條題解'
 '{0} views': '{0} 次檢視'
 '{0}: Permissions': '{0}: 許可權'
-'{0}: Roles': '{0}: 角色'
-'{0}: Users': '{0}: 使用者'
 '# My Submissions': '我的遞交數'
 '# Submissions': '遞交數'
 '↓ # Comments': '↓ 評論數'
@@ -38,7 +36,6 @@ ai_tutor.timeout: 請求逾時（秒）
 'Discussion: Terms Of Service': '討論區服務條款'
 'First Blood Notice\n{0} solved problem {1} ({2})': '題目首殺提示\n{0} 解決了題目 {1} ({2})'
 'Format: category 1, sub category 1.1, sub category 1.2, ..., sub category 1.x, ..., category n, sub category n.1, sub category n.2, ..., sub category n.m, ...': '格式：分類1, 子分類1.1, 子分類1.2, ..., 子分類1.x, ..., 分類n, 子分類n.1, 子分類n.2, ..., 子分類n.m, ...'
-'Format: one group per line, CSV: groupName,uid1,uid2,...': '格式：每行一個小組，CSV：組名,UID1,UID2,...'
 'No': '否'
 'Note: Problem title may not be hidden.': '注意：題目標題可能不會被隱藏。'
 'Or upload a file:': '或者上傳一個檔案：'
@@ -1295,7 +1292,6 @@ Subjective: 主觀題
 "e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides": 例如：基於本週簡報出一份 6 題的迴圈與條件小測
 "Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)": '題面（Markdown，使用 {{ input/select/multiselect/dropdown }} 題目標記）'
 "This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)": 這個需求看起來像客觀題（判斷 / 選擇 / 填空）。要改為建立客觀題任務嗎？（確定 = 客觀題任務，取消 = 保持程式任務）
-
 # AI Studio: three task kinds + statement-review phase
 AI Studio: AI 出題工作室
 Subjective task: 主觀題任務
@@ -1438,12 +1434,10 @@ publishes as: 將發布為
 separate tasks — each worth 100 points on its own: 道獨立題目——每題單獨計 100 分
 Draft problems (one per question): 草稿題目（每題一個）
 Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.: 確定永久刪除？既有的提交記錄會保留，但該項目本身無法復原。
-
 Answer: 作答
 Submitted — results are revealed when this assessment ends.: 已提交——成績將在本次測評結束後公布。
 Results are withheld until this assessment ends.: 成績將在本次測評結束後公布。
 Answers are saved on this device as you type — close the page and pick up where you left off.: 答案會隨輸入自動儲存在本裝置上——關閉頁面後再次開啟可繼續作答。
-
 # Problem picker (Test / Homework / Self-Learning editors) hover preview.
 ID: 編號
 AC rate: 通過率
@@ -1454,3 +1448,30 @@ Statement truncated.: 題面較長，此處僅顯示開頭部分。
 Add tag: 新增標籤
 Clear filters: 清除篩選
 No matching tags: 沒有符合的標籤
+'Submit this answer': 提交本題
+This session opens at: 本環節開放時間：
+closes at: 截止時間：
+Open until: 開放至
+late window until: 延期窗口至
+Late window: 延期窗口
+submissions until: 可提交至
+count at: 得分按
+'This session has ended — review and tutoring stay open; submissions are closed.': 本環節已結束——仍可回顧與使用 AI 導師；提交已關閉。
+This session has not started yet.: 本環節尚未開始。
+'This session has ended — submissions are closed.': 本環節已結束，提交已關閉。
+The problem list unlocks when the session begins.: 題目列表將在環節開始後解鎖。
+Starts: 開始於
+Due: 截止
+Ended: 已結束
+late: 延期
+Late submission: 延期提交
+Your best score: 你的最好成績
+up to: 最多
+'Students can enter from the begin time. Late submissions inside the extension are scored by the tiered rules above, exactly like homework: each line is "hours: coefficient", and once a submission is more than N hours late its score is multiplied by that coefficient (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.': '學生可從開始時間進入。延長期內的遲交按上方的分層規則計分，與作業完全一致：每行為「小時數: 係數」，遲交超過 N 小時後成績乘以該係數（未到第一層的遲交不扣分）。延長期結束後關閉提交，但回顧與 AI 導師保持開放。'
+'Search sessions...': 搜尋自主學習...
+In progress: 進行中
+Always open: 長期開放
+'{0}: Roles': '{0}: 角色'
+'{0}: Users': '{0}: 使用者'
+'Format: one group per line, CSV: groupName,uid1,uid2,...': '格式：每行一個小組，CSV：組名,UID1,UID2,...'
+Create a homework: 創建一個作業

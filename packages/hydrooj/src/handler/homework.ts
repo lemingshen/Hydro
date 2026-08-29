@@ -20,7 +20,7 @@ import {
 } from '../service/server';
 import { ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler } from './contest';
 
-const validatePenaltyRules = (input: string) => {
+export const validatePenaltyRules = (input: string) => {
     try {
         const res = yaml.load(input);
         return typeof res === 'object' && res !== null && Object.keys(res).every((key) => typeof res[key] === 'number');
@@ -28,7 +28,7 @@ const validatePenaltyRules = (input: string) => {
         return false;
     }
 };
-const convertPenaltyRules = (input: string) => yaml.load(input);
+export const convertPenaltyRules = (input: string) => yaml.load(input);
 
 class HomeworkMainHandler extends Handler {
     @param('group', Types.Name, true)

@@ -43,6 +43,14 @@
   .sld-spark__badge:hover { transform: translateY(-2px) scale(1.15); }
   .theme--dark .sld-spark { background: linear-gradient(135deg, #2c2519, #2e2126); border-color: #4a4030; color: #cfc4b4; }
   .theme--dark .sld-spark__item b { color: #ffc078; }
+.sld-sched { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 13px; border-radius: 12px; font-size: 12.5px; border: 1px solid var(--pta-line); background: var(--pta-card-3); color: var(--pta-ink-soft); animation: ptaFadeUp .28s var(--pta-ease) backwards; }
+.sld-sched--notStarted { background: var(--pta-blue-soft); border-color: var(--pta-blue-line); color: var(--pta-blue-text); }
+.sld-sched--running { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+.sld-sched--extension { background: var(--pta-gold-soft); border-color: var(--pta-gold-line); color: var(--pta-gold-text); }
+.sld-lock { color: var(--pta-ink-soft); font-size: 13px; }
+.slp-score { flex: 0 0 auto; font-size: 11.5px; font-weight: bold; border-radius: 999px; padding: 1px 10px; background: var(--pta-ok-soft); border: 1px solid var(--pta-ok-line); color: var(--pta-ok-text); }
+.slp-score--late { background: var(--pta-gold-soft); border-color: var(--pta-gold-line); color: var(--pta-gold-text); }
+.slp-score s { opacity: .65; font-weight: normal; margin-left: 3px; }
 </style>
 <div class="row">
   <div class="medium-9 columns">
@@ -73,7 +81,29 @@
         {{ sdoc.content|markdown|safe }}
       </div>
       {% endif %}
+      {% if schedule and schedule.phase != 'open' %}
+      <div class="section__body">
+        <div class="sld-sched sld-sched--{{ schedule.phase }}">
+          {%- if schedule.phase == 'notStarted' -%}
+          🕒 {{ _('This session opens at') }} {{ datetimeSpan(schedule.beginAt)|safe }} · {{ _('closes at') }} {{ datetimeSpan(schedule.endAt)|safe }}
+          {%- elif schedule.phase == 'running' -%}
+          ⏳ {{ _('Open until') }} {{ datetimeSpan(schedule.endAt)|safe }}{% if schedule.maxPenalty and schedule.hardEndAt > schedule.endAt %} · {{ _('late window until') }} {{ datetimeSpan(schedule.hardEndAt)|safe }} ({{ _('up to') }} −{{ schedule.maxPenalty }}%){% endif %}
+          {%- elif schedule.phase == 'extension' -%}
+          ⚠️ {{ _('Late window') }} — {{ _('submissions until') }} {{ datetimeSpan(schedule.hardEndAt)|safe }} {{ _('count at') }} −{{ schedule.penalty }}%
+          {%- else -%}
+          🔒 {{ _('This session has ended — review and tutoring stay open; submissions are closed.') }}
+          {%- endif -%}
+        </div>
+      </div>
+      {% endif %}
     </div>
+    {% if hideProblems %}
+    <div class="section">
+      <div class="section__body typo">
+        <p class="sld-lock">🔒 {{ _('The problem list unlocks when the session begins.') }}</p>
+      </div>
+    </div>
+    {% else %}
     <div class="section">
       <div class="section__header">
         <h1 class="section__title">{{ _('Problems') }}</h1>
@@ -100,6 +130,9 @@
             {% else %}
               <span class="slp-kind slp-kind--p">{{ _('Programming') }}</span>
             {% endif %}
+            {% if myScores and myScores[pid] %}
+              <span class="slp-score{% if myScores[pid].late %} slp-score--late{% endif %}" title="{% if myScores[pid].late %}{{ _('Late submission') }} {{ myScores[pid].score }} → {{ myScores[pid].effective }}{% else %}{{ _('Your best score') }}{% endif %}">{{ myScores[pid].effective }}{% if myScores[pid].late %} <s>{{ myScores[pid].score }}</s>{% endif %}</span>
+            {% endif %}
             {%- if pdoc.pid and (pdoc.pid|lower|first) == 'o' -%}<a class="slp-go" href="{{ url('self_learning_paper', ssid=sdoc.docId) }}#q-{{ pdoc.docId }}">📝 {{ _('Answer') }}</a>{%- else -%}<a class="slp-go" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ _('Practice') }}</a>{%- endif -%}
           </div>
           {% else %}
@@ -112,13 +145,13 @@
         </div>
       </div>
     </div>
+    {% endif %}
   </div>
   <div class="medium-3 columns">
     <div class="section side">
       <div class="section__body sld-meta">
         <div class="sld-chip">👤 <span>{{ _('Owner') }}: <a href="{{ url('user_detail', uid=sdoc.owner) }}">{{ udict[sdoc.owner].uname }}</a></span></div>
         <div class="sld-chip">🕒 <span>{{ _('Created') }}: {{ datetimeSpan(sdoc._id)|safe }}</span></div>
-        <a href="{{ url('self_learning_paper', ssid=sdoc.docId) }}" class="expanded rounded primary button">📝 {{ _('Answer as one paper') }}</a>
         {% if canEdit %}
         <a href="{{ url('self_learning_edit', ssid=sdoc.docId) }}" class="expanded rounded button">✏️ {{ _('Edit') }}</a>
         {% endif %}

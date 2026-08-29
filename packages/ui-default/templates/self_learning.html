@@ -1,5 +1,7 @@
 {% extends "layout/basic.html" %}
+{% import "components/paginator.html" as paginator with context %}
 {% block content %}
+{{ set(UiContext, 'docs', calendar) }}
 <style>
   .sll-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
   .sll-card { display: flex; flex-direction: column; gap: 8px; position: relative; border: 1px solid var(--pta-line); border-radius: var(--pta-radius); background: var(--pta-card); padding: 14px 16px 12px; text-decoration: none; color: inherit; box-shadow: var(--pta-shadow); transition: transform .16s var(--pta-ease), box-shadow .16s ease, border-color .16s ease; overflow: hidden; animation: ptaFadeUp .3s var(--pta-ease) backwards; }
@@ -62,12 +64,105 @@
   .sll-hero__cta { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 10px 14px; border-radius: 12px; background: #fff; color: #4338ca; font-weight: 700; font-size: 13.5px; text-decoration: none; box-shadow: 0 10px 22px -10px rgba(0, 0, 0, .45); transition: transform .15s var(--pta-ease), box-shadow .15s ease; }
   .sll-hero__cta:hover { transform: translateY(-1px); color: #4338ca; box-shadow: 0 14px 26px -10px rgba(0, 0, 0, .5); }
   .sll-hero__cta:active { transform: translateY(0); }
+.sll-phase--notStarted { background: var(--pta-blue-soft) !important; border-color: var(--pta-blue-line) !important; color: var(--pta-blue-text) !important; }
+.sll-phase--running { background: var(--pta-ok-soft) !important; border-color: var(--pta-ok-line) !important; color: var(--pta-ok-text) !important; }
+.sll-phase--extension { background: var(--pta-gold-soft) !important; border-color: var(--pta-gold-line) !important; color: var(--pta-gold-text) !important; }
+.sll-phase--ended { opacity: .8; }
+
+  /* ---- layout, final -----------------------------------------------------
+     Rows, toolbar and spacing in ONE section at the end of the cascade.
+     Written after discovering the FIFTH stylesheet era: pta_theme.page.styl
+     ships `.sll-cardwrap .sll-card { display: block }` (delete-affordance
+     era) — display:block silently disables the base rule's flex at higher
+     specificity, which is why flex-direction alone could never win. So this
+     section restates display ITSELF and every layout property rows depend
+     on: equal-or-higher specificity, later in document order, single source
+     of truth. The cascade prover in the build harness now checks BOTH files. */
+  .sll-grid { grid-template-columns: 1fr; gap: 12px; margin-top: 2px; }
+  .sll-cardwrap { width: 100%; }
+  .sll-cardwrap .sll-card {
+    display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center;
+    width: 100%; gap: 16px; padding: 13px 18px 13px 14px;
+  }
+  .sll-card__side { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; min-width: 64px; }
+  .sll-datebox { text-align: center; min-width: 60px; padding: 5px 10px; border-radius: 10px; background: var(--pta-card-3); border: 1px solid var(--pta-line-soft); }
+  .sll-datebox__num { font-size: 23px; font-weight: bold; line-height: 1.1; color: var(--pta-ink); }
+  .sll-datebox__sub { font-size: 10.5px; color: var(--pta-ink-faint); letter-spacing: .03em; }
+  .sll-card__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+  .sll-card__titlerow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .sll-card__titlerow .sll-card__title { font-size: 16px; min-height: 0; display: block; -webkit-line-clamp: unset; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sll-cardwrap .sll-card__meta { margin-top: 0; gap: 7px; }
+  /* Arrow rides the vertical center of the row (base put it bottom-right). */
+  .sll-cardwrap .sll-card__go { top: 50%; bottom: auto; transform: translateY(-50%); }
+  .sll-cardwrap .sll-card:hover .sll-card__go { transform: translateY(-50%) translateX(3px); }
+  /* Delete joins the right edge at the row's vertical center, before the
+     arrow; only rows that HAVE it reserve the extra clearance. */
+  .sll-cardwrap .list-del--card { top: 50%; transform: translateY(-50%); right: 44px; }
+  .sll-cardwrap .sll-card__main { padding-right: 30px; }
+  .sll-cardwrap:has(.list-del--card) .sll-card__main { padding-right: 116px; }
+  .sll-cardwrap:has(.list-del--card) .sll-card__titlerow { padding-right: 0; }
+  /* Breathing room under the list for the pager and the calendar. */
+  .section__body .pager { margin: 14px 0 2px; }
+  div[name="calendar_entry"] { margin-top: 14px; }
+
+  /* ---- header toolbar (Test-page parity) --------------------------------- */
+  .section__header { flex-wrap: wrap; row-gap: 10px; }
+  .section__tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .sll-viewpick { display: inline-flex; align-items: center; gap: 6px; color: var(--pta-ink-soft); font-size: 13px; }
+  .section__tools form[name="filter-form"] { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+  .section__tools .textbox { width: 190px; }
+  @media (max-width: 900px) {
+    .section__tools { width: 100%; }
+    .section__tools .textbox { flex: 1 1 120px; width: auto; min-width: 0; }
+  }
+
+  /* ---- hero CTA -----------------------------------------------------------
+     The dark pass recolors anchors at (0,1,1)+, which washed the label to
+     pale gray over the white pill. Restated here at the cascade end, under
+     both dark-mode classes, so the indigo-on-white CTA holds in every theme. */
+  .sll-hero .sll-hero__cta,
+  .pta-dark .sll-hero .sll-hero__cta,
+  .theme--dark .sll-hero .sll-hero__cta { background: #fff; color: #4338ca; }
+  .sll-hero .sll-hero__cta:hover,
+  .pta-dark .sll-hero .sll-hero__cta:hover,
+  .theme--dark .sll-hero .sll-hero__cta:hover { background: #fff; color: #4338ca; }
+  @media (max-width: 600px) {
+    .sll-cardwrap .sll-card { gap: 10px; padding: 11px 12px; }
+    .sll-card__side { min-width: 48px; }
+    .sll-datebox { min-width: 46px; }
+    .sll-datebox__num { font-size: 18px; }
+    .sll-card__titlerow { flex-wrap: wrap; }
+    .sll-cardwrap .sll-card__main { padding-right: 24px; }
+    .sll-cardwrap:has(.list-del--card) .sll-card__main { padding-right: 92px; }
+    .sll-cardwrap .list-del--card { right: 36px; }
+  }
 </style>
 <div class="row">
   <div class="medium-9 columns">
     <div class="section">
       <div class="section__header">
         <h1 class="section__title">{{ _('self_learning') }}</h1>
+        <div class="section__tools">
+          <span class="nojs--hide sll-viewpick">
+            {{ _('View') }}:
+            <select class="inline compact select" name="sl_display">
+              <option value="calendar">{{ _('Calendar View') }}</option>
+              <option value="list" selected>{{ _('List View') }}</option>
+            </select>
+          </span>
+          <form method="get" name="filter-form">
+            <input type="text" class="inline compact textbox" name="q" value="{{ q }}" placeholder="{{ _('Search sessions...') }}">
+            <select class="inline compact select" name="phase">
+              <option value=""{% if not phase %} selected{% endif %}>{{ _('All') }}</option>
+              <option value="running"{% if phase == 'running' %} selected{% endif %}>{{ _('In progress') }}</option>
+              <option value="notStarted"{% if phase == 'notStarted' %} selected{% endif %}>{{ _('Not started') }}</option>
+              <option value="extension"{% if phase == 'extension' %} selected{% endif %}>{{ _('Late window') }}</option>
+              <option value="ended"{% if phase == 'ended' %} selected{% endif %}>{{ _('Ended') }}</option>
+              <option value="open"{% if phase == 'open' %} selected{% endif %}>{{ _('Always open') }}</option>
+            </select>
+            <button type="submit" class="compact button">{{ _('Search') }}</button>
+          </form>
+        </div>
       </div>
       <div class="section__body">
         {% if not sdocs.length %}
@@ -77,14 +172,37 @@
           {%- for sdoc in sdocs -%}
           <div class="sll-cardwrap">
           <a class="sll-card" href="{{ url('self_learning_detail', ssid=sdoc.docId) }}">
-            <div class="sll-card__top">
+            {#- Homework-style date tile: the deadline day, large. Sessions
+                without a schedule keep the graduation emblem instead. -#}
+            <div class="sll-card__side">
+              {%- if sdoc.endAt -%}
+              <div class="sll-datebox">
+                <div class="sll-datebox__num">{{ datetimeSpan(sdoc.endAt, false, 'D')|safe }}</div>
+                <div class="sll-datebox__sub">{{ datetimeSpan(sdoc.endAt, false, 'YYYY-M')|safe }}</div>
+              </div>
+              {%- else -%}
               <span class="sll-card__emblem">🎓</span>
+              {%- endif -%}
+            </div>
+            <div class="sll-card__main">
+            <div class="sll-card__titlerow">
+              <span class="sll-card__title">{{ sdoc.title }}</span>
               <span class="sll-card__count">{{ sdoc.pids|length }} {{ _('Problems') }}</span>
             </div>
-            <div class="sll-card__title">{{ sdoc.title }}</div>
             <div class="sll-card__meta">
               <span class="sll-chip" title="{{ _('Owner') }}">👤 {{ udict[sdoc.owner].uname }}</span>
               <span class="sll-chip" title="{{ _('Created') }}">🕒 {{ datetimeSpan(sdoc._id)|safe }}</span>
+              {%- set ph = sPhase[sdoc.docId|string] if sPhase else 'open' -%}
+              {%- if ph == 'notStarted' -%}
+              <span class="sll-chip sll-phase sll-phase--notStarted">🕒 {{ _('Starts') }} {{ datetimeSpan(sdoc.beginAt)|safe }}</span>
+              {%- elif ph == 'running' -%}
+              <span class="sll-chip sll-phase sll-phase--running">⏳ {{ _('Due') }} {{ datetimeSpan(sdoc.endAt)|safe }}</span>
+              {%- elif ph == 'extension' -%}
+              <span class="sll-chip sll-phase sll-phase--extension">⚠️ {{ _('Late window') }} −{{ sPenalty[sdoc.docId|string] }}%</span>
+              {%- elif ph == 'ended' -%}
+              <span class="sll-chip sll-phase sll-phase--ended">🔒 {{ _('Ended') }}</span>
+              {%- endif -%}
+            </div>
             </div>
             <span class="sll-card__go">→</span>
           </a>
@@ -97,6 +215,8 @@
           </div>
           {%- endfor -%}
         </div>
+        {{ paginator.render(page, spcount, add_qs=qs) }}
+        <div name="calendar_entry"></div>
         {% endif %}
       </div>
     </div>

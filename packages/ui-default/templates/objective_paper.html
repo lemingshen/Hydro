@@ -23,6 +23,12 @@
         <a class="menu__link paper-top__back" href="{{ backUrl }}">&larr; {{ _('Back') }}</a>
       </div>
       <div class="section__body paper-top__note">{{ _('Answers are saved on this device as you type — close the page and pick up where you left off.') }}</div>
+      {% if schedule and schedule.phase == 'extension' %}
+      <div class="section__body paper-top__note paper-note--warn">⚠️ {{ _('Late window') }} — {{ _('submissions until') }} {{ datetimeSpan(schedule.hardEndAt)|safe }} {{ _('count at') }} −{{ schedule.penalty }}%</div>
+      {% endif %}
+      {% if scheduleClosed %}
+      <div class="section__body paper-top__note paper-note--closed">🔒 {{ _('This session has ended — review and tutoring stay open; submissions are closed.') }}</div>
+      {% endif %}
     </div>
     {%- if not tasks.length -%}
       <div class="section"><div class="section__body typo"><p>{{ _('This set contains no objective tasks.') }}</p></div></div>
@@ -39,6 +45,12 @@
       <div class="section__body typo richmedia paper-q__content">
         {{ t.content|content(handler.user.viewLang|default(''), false)|safe }}
       </div>
+      {%- if canSubmit -%}
+      <div class="section__body paper-q__foot">
+        <button type="button" class="rounded primary button paper-submit" data-doc="{{ t.docId }}">📨 {{ _('Submit this answer') }}</button>
+        <span class="paper-q__hint" data-hint-for="{{ t.docId }}"></span>
+      </div>
+      {%- endif -%}
     </div>
     {%- endfor -%}
   </div>

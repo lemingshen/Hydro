@@ -21,8 +21,6 @@ ai_tutor.timeout: 请求超时（秒）
 '{0} solutions': '{0} 条题解'
 '{0} views': '{0} 次查看'
 '{0}: Permissions': '{0}: 权限'
-'{0}: Roles': '{0}: 角色'
-'{0}: Users': '{0}: 用户'
 '# My Submissions': '我的递交数'
 '# Submissions': '递交数'
 '↓ # Comments': '↓ 评论数'
@@ -38,7 +36,6 @@ ai_tutor.timeout: 请求超时（秒）
 'Discussion: Terms Of Service': 讨论区服务条款
 'First Blood Notice\n{0} solved problem {1} ({2})': '题目一血提示\n{0} 解决了题目 {1} ({2})'
 'Format: category 1, sub category 1.1, sub category 1.2, ..., sub category 1.x, ..., category n, sub category n.1, sub category n.2, ..., sub category n.m, ...': 格式：分类 1, 子分类 1.1, 子分类 1.2, ..., 子分类 1.x, ..., 分类 n, 子分类 n.1, 子分类 n.2, ..., 子分类 n.m, ...
-'Format: one group per line, CSV: groupName,uid1,uid2,...': '格式：每行一个小组，CSV：组名,UID1,UID2,...'
 'Join {0}': '加入 {0}'
 'No': 否
 'Note: Problem title may not be hidden.': 注意：题目标题可能不会被隐藏。
@@ -1315,7 +1312,6 @@ challenges cleared: 次挑战通关
 "e.g. A 6-question check-in quiz on loops and conditionals, based on this week's slides": 例如：基于本周课件出一份 6 题的循环与条件小测
 "Statement (markdown with {{ input/select/multiselect/dropdown }} question markers)": '题面（Markdown，使用 {{ input/select/multiselect/dropdown }} 题目标记）'
 "This requirement sounds like an objective quiz. Create it as an OBJECTIVE task instead? (OK = objective task, Cancel = keep programming)": 这个需求看起来像客观题（判断 / 选择 / 填空）。要改为创建客观题任务吗？（确定 = 客观题任务，取消 = 保持编程任务）
-
 # AI Studio: three task kinds + statement-review phase
 AI Studio: AI 出题工作室
 Subjective task: 主观题任务
@@ -1458,12 +1454,10 @@ publishes as: 将发布为
 separate tasks — each worth 100 points on its own: 道独立题目——每题单独计 100 分
 Draft problems (one per question): 草稿题目（每题一个）
 Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.: 确定永久删除？已有的提交记录会保留，但该项目本身无法恢复。
-
 Answer: 作答
 Submitted — results are revealed when this assessment ends.: 已提交——成绩将在本次测评结束后公布。
 Results are withheld until this assessment ends.: 成绩将在本次测评结束后公布。
 Answers are saved on this device as you type — close the page and pick up where you left off.: 答案会随输入自动保存在本设备上——关闭页面后再次打开可继续作答。
-
 # Problem picker (Test / Homework / Self-Learning editors) hover preview.
 ID: 编号
 AC rate: 通过率
@@ -1474,3 +1468,30 @@ Statement truncated.: 题面较长，此处仅显示开头部分。
 Add tag: 添加标签
 Clear filters: 清除筛选
 No matching tags: 没有匹配的标签
+'Submit this answer': 提交本题
+This session opens at: 本环节开放时间：
+closes at: 截止时间：
+Open until: 开放至
+late window until: 延期窗口至
+Late window: 延期窗口
+submissions until: 可提交至
+count at: 得分按
+'This session has ended — review and tutoring stay open; submissions are closed.': 本环节已结束——仍可回顾与使用 AI 导师；提交已关闭。
+This session has not started yet.: 本环节尚未开始。
+'This session has ended — submissions are closed.': 本环节已结束，提交已关闭。
+The problem list unlocks when the session begins.: 题目列表将在环节开始后解锁。
+Starts: 开始于
+Due: 截止
+Ended: 已结束
+late: 延期
+Late submission: 延期提交
+Your best score: 你的最好成绩
+up to: 最多
+'Students can enter from the begin time. Late submissions inside the extension are scored by the tiered rules above, exactly like homework: each line is "hours: coefficient", and once a submission is more than N hours late its score is multiplied by that coefficient (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.': '学生可从开始时间进入。延长期内的迟交按上方的分层规则计分，与作业完全一致：每行为「小时数: 系数」，迟交超过 N 小时后成绩乘以该系数（未到第一层的迟交不扣分）。延长期结束后关闭提交，但回顾与 AI 导师保持开放。'
+'Search sessions...': 搜索自主学习...
+In progress: 进行中
+Always open: 长期开放
+'{0}: Roles': '{0}: 角色'
+'{0}: Users': '{0}: 用户'
+'Format: one group per line, CSV: groupName,uid1,uid2,...': '格式：每行一个小组，CSV：组名,UID1,UID2,...'
+Create a homework: 创建一个作业

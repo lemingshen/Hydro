@@ -1,4 +1,6 @@
-import { load as yamlLoad } from 'js-yaml';
+import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
+import { escapeRegExp } from 'lodash';
+import moment from 'moment-timezone';
 import { ObjectId } from 'mongodb';
 import { STATUS, STATUS_SHORT_TEXTS, STATUS_TEXTS } from '@hydrooj/common';
 import { Context } from '../context';
@@ -7,10 +9,11 @@ import { ContestNotLiveError, ContestNotAttendedError,
     BadRequestError, ForbiddenError, NotFoundError, PermissionError,
     ProblemConfigError, ProblemNotAllowLanguageError, ValidationError,
 } from '../error';
-import type { ProblemDoc, RecordDoc } from '../interface';
+import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
 import { AiStudioDetailHandler, AiStudioHandler, registerAiStudioTemplates } from './ai_author';
 import { ContestDetailBaseHandler } from './contest';
+import { convertPenaltyRules, validatePenaltyRules } from './homework';
 import { PERM, PRIV } from '../model/builtin';
 import * as contest from '../model/contest';
 import domain from '../model/domain';
@@ -31,15 +34,139 @@ async function loadSession(domainId: string, ssid: ObjectId): Promise<SelfLearni
     return sdoc;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type SessionPhase = 'open' | 'notStarted' | 'running' | 'extension' | 'ended';
+
+/**
+ * Homework-parity schedule resolution for a session. Field mapping:
+ * beginAt ↔ homework beginAt, endAt ↔ homework penaltySince (the nominal
+ * deadline), endAt + extensionDays ↔ homework endAt (the hard stop). Legacy
+ * sessions without dates resolve to 'open' — always available, no penalty —
+ * so nothing changes for documents created before this feature.
+ */
+export function sessionSchedule(sdoc: SelfLearningDoc, now = new Date()) {
+    if (!sdoc?.beginAt || !sdoc?.endAt) {
+        return {
+            phase: 'open' as SessionPhase, penalty: 0, maxPenalty: 0, beginAt: null, endAt: null, hardEndAt: null,
+        };
+    }
+    const extMs = Math.max(0, Math.round((sdoc.extensionDays || 0) * DAY_MS));
+    const hardEndAt = new Date(sdoc.endAt.getTime() + extMs);
+    let phase: SessionPhase;
+    if (now < sdoc.beginAt) phase = 'notStarted';
+    else if (now <= sdoc.endAt) phase = 'running';
+    else if (extMs > 0 && now <= hardEndAt) phase = 'extension';
+    else phase = 'ended';
+    // Percent view of the tier that applies RIGHT NOW (0 before the
+    // deadline and inside the grace tier), plus the deepest tier for
+    // "up to −N%" previews before the window opens.
+    const penalty = Math.round((1 - penaltyCoefficientAt(sdoc, now)) * 100);
+    const factors = (sdoc.penaltyRules && Object.keys(sdoc.penaltyRules).length)
+        ? Object.values(sdoc.penaltyRules).map((v) => Math.min(1, Math.max(0, +v || 0)))
+        : (typeof sdoc.penalty === 'number' ? [Math.min(1, Math.max(0, (100 - sdoc.penalty) / 100))] : []);
+    const maxPenalty = factors.length ? Math.round((1 - Math.min(...factors)) * 100) : 0;
+    return {
+        phase, penalty, maxPenalty, beginAt: sdoc.beginAt, endAt: sdoc.endAt, hardEndAt,
+    };
+}
+
+/**
+ * Homework's exact tier selection (model/contest.ts penaltyScore): keys are
+ * HOURS past the deadline; sorted ascending, the largest key whose hour-mark
+ * has elapsed supplies the coefficient — so lateness inside the first key's
+ * hour rides free at 1.0, exactly as homework grades it. Legacy sessions
+ * saved with the earlier single `penalty` percent map to
+ * { 0: (100 - penalty) / 100 }: the same flat factor from the first late
+ * second that they had before this feature existed.
+ */
+export function penaltyCoefficientAt(sdoc: SelfLearningDoc, at: Date): number {
+    if (!sdoc?.endAt) return 1;
+    const exceedSeconds = Math.floor((at.getTime() - sdoc.endAt.getTime()) / 1000);
+    if (exceedSeconds < 0) return 1;
+    const rules: PenaltyRules | null = (sdoc.penaltyRules && Object.keys(sdoc.penaltyRules).length)
+        ? sdoc.penaltyRules
+        : (typeof sdoc.penalty === 'number'
+            ? { 0: Math.min(1, Math.max(0, (100 - sdoc.penalty) / 100)) }
+            : null);
+    if (!rules) return 1;
+    let coefficient = 1;
+    const keys = Object.keys(rules).map(Number.parseFloat).sort((a, b) => a - b);
+    for (const i of keys) {
+        if (i * 3600 <= exceedSeconds) coefficient = rules[i];
+        else break;
+    }
+    return Math.min(1, Math.max(0, coefficient));
+}
+
 class SelfLearningMainHandler extends Handler {
-    async get({ domainId }) {
-        const sdocs = await SelfLearningModel.getMulti(domainId).limit(100).toArray();
+    @param('page', Types.PositiveInt, true)
+    @param('q', Types.String, true)
+    @param('phase', Types.Name, true)
+    async get({ domainId }, page = 1, q = '', phase = '') {
+        // Homework-parity toolbar: title search, a phase filter standing in
+        // for homework's group filter (sessions have no groups), and a
+        // calendar view fed exactly like homework's.
+        if (!['open', 'notStarted', 'running', 'extension', 'ended'].includes(phase)) phase = '';
+        const escaped = escapeRegExp(q.toLowerCase());
+        const query = q ? { title: { $regex: new RegExp(q.length >= 2 ? escaped : `^${escaped}`, 'im') } } : {};
+        /*
+         * A course runs dozens of sessions, not thousands — fetch the
+         * q-matched set once, compute each schedule once, then filter and
+         * paginate in memory so the phase filter (a COMPUTED property)
+         * cannot punch holes in server-side pages.
+         */
+        const all = await SelfLearningModel.getMulti(domainId, query).limit(500).toArray();
+        const now = new Date();
+        const scheds = new Map(all.map((s) => [s.docId.toHexString(), sessionSchedule(s, now)]));
+        const filtered = phase ? all.filter((s) => scheds.get(s.docId.toHexString())!.phase === phase) : all;
+        const PER_PAGE = 20;
+        const spcount = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+        page = Math.min(page, spcount);
+        const sdocs = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
         const udict = await user.getList(domainId, sdocs.map((i) => i.owner));
+        const sPhase: Record<string, SessionPhase> = {};
+        const sPenalty: Record<string, number> = {};
+        for (const s of sdocs) {
+            const sc = scheds.get(s.docId.toHexString())!;
+            sPhase[s.docId.toHexString()] = sc.phase;
+            sPenalty[s.docId.toHexString()] = sc.penalty;
+        }
+        /*
+         * Calendar events, homework's exact convention: the solid bar runs
+         * begin → nominal deadline; once the session is extended or done the
+         * bar runs to the hard stop with the extension masked from the
+         * deadline ("Time Extension" hatch). Always-open sessions have no
+         * dates to sit on — they stay list-only.
+         */
+        const calendar: any[] = [];
+        for (const s of filtered) {
+            if (!s.beginAt || !s.endAt) continue;
+            const sc = scheds.get(s.docId.toHexString())!;
+            const cal: any = {
+                _id: s.docId, title: s.title, beginAt: s.beginAt, url: this.url('self_learning_detail', { ssid: s.docId }),
+            };
+            if (sc.hardEndAt && sc.hardEndAt > s.endAt && ['extension', 'ended'].includes(sc.phase)) {
+                cal.endAt = sc.hardEndAt;
+                cal.penaltySince = s.endAt;
+            } else cal.endAt = s.endAt;
+            calendar.push(cal);
+        }
+        let qs = q ? `q=${encodeURIComponent(q)}` : '';
+        if (phase) qs += `${qs ? '&' : ''}phase=${phase}`;
         this.response.template = 'self_learning.html';
         this.response.body = {
             sdocs,
             udict,
-            canCreate: this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK) || this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM),
+            sPhase,
+            sPenalty,
+            calendar,
+            page,
+            spcount,
+            qs,
+            q,
+            phase,
+            canCreate: this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK),
         };
     }
 }
@@ -56,10 +183,24 @@ class SelfLearningEditHandler extends Handler {
     }
 
     async get() {
+        // Prefill exactly like HomeworkEditHandler: existing values in the
+        // teacher's timezone, or tomorrow-00:00 → +14 days 23:59 defaults.
+        const beginAt = this.sdoc?.beginAt
+            ? moment(this.sdoc.beginAt).tz(this.user.timeZone)
+            : moment().add(1, 'day').tz(this.user.timeZone).hour(0).minute(0).second(0).millisecond(0);
+        const endAt = this.sdoc?.endAt
+            ? moment(this.sdoc.endAt).tz(this.user.timeZone)
+            : beginAt.clone().add(14, 'days').hour(23).minute(59);
         this.response.template = 'self_learning_edit.html';
         this.response.body = {
             sdoc: this.sdoc,
             pids: this.sdoc ? this.sdoc.pids.join(',') : '',
+            dateBeginText: beginAt.format('YYYY-M-D'),
+            timeBeginText: beginAt.format('H:mm'),
+            dateEndText: endAt.format('YYYY-M-D'),
+            timeEndText: endAt.format('H:mm'),
+            extensionDays: this.sdoc?.extensionDays ?? 1,
+            penaltyRules: this.sdoc?.penaltyRules ? yamlDump(this.sdoc.penaltyRules) : null,
             page_name: this.sdoc ? 'self_learning_edit' : 'self_learning_create',
         };
     }
@@ -67,15 +208,38 @@ class SelfLearningEditHandler extends Handler {
     @param('title', Types.Title)
     @param('content', Types.Content)
     @param('pids', Types.Content)
-    async postUpdate({ domainId }, title: string, content: string, _pids: string) {
+    @param('beginAtDate', Types.Date)
+    @param('beginAtTime', Types.Time)
+    @param('endAtDate', Types.Date)
+    @param('endAtTime', Types.Time)
+    @param('extensionDays', Types.Float)
+    @param('penaltyRules', Types.Content, validatePenaltyRules, convertPenaltyRules)
+    async postUpdate(
+        { domainId }, title: string, content: string, _pids: string,
+        beginAtDate: string, beginAtTime: string, endAtDate: string, endAtTime: string,
+        extensionDays: number, penaltyRules: PenaltyRules,
+    ) {
         const pids = _pids.replace(/，/g, ',').split(',').map((i) => +i).filter((i) => i);
         if (!pids.length) throw new ValidationError('pids');
+        // Same parsing + ordering rules as HomeworkEditHandler.postUpdate:
+        // teacher-timezone wall-clock in, UTC Dates stored.
+        const beginAt = moment.tz(`${beginAtDate} ${beginAtTime}`, this.user.timeZone);
+        if (!beginAt.isValid()) throw new ValidationError('beginAtDate', 'beginAtTime');
+        const endAt = moment.tz(`${endAtDate} ${endAtTime}`, this.user.timeZone);
+        if (!endAt.isValid()) throw new ValidationError('endAtDate', 'endAtTime');
+        if (beginAt.isSameOrAfter(endAt)) throw new ValidationError('endAtDate', 'endAtTime');
+        if (!(extensionDays >= 0)) throw new ValidationError('extensionDays');
+        const schedule = {
+            beginAt: beginAt.toDate(), endAt: endAt.toDate(), extensionDays, penaltyRules,
+        };
         await problem.getList(domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true);
         if (this.sdoc) {
-            await SelfLearningModel.edit(domainId, this.sdoc.docId, { title, content, pids });
+            await SelfLearningModel.edit(domainId, this.sdoc.docId, {
+                title, content, pids, ...schedule,
+            });
             this.response.redirect = this.url('self_learning_detail', { ssid: this.sdoc.docId });
         } else {
-            const ssid = await SelfLearningModel.add(domainId, this.user._id, title, content, pids);
+            const ssid = await SelfLearningModel.add(domainId, this.user._id, title, content, pids, schedule);
             this.response.redirect = this.url('self_learning_detail', { ssid });
         }
     }
@@ -116,6 +280,40 @@ class SelfLearningDetailHandler extends Handler {
             }
         }
         const solvedCount = sdoc.pids.filter((pid) => psdict[pid]?.status === STATUS.STATUS_ACCEPTED).length;
+        const schedule = sessionSchedule(sdoc);
+        // Before the begin time students see the schedule, not the problems.
+        const hideProblems = isStudentView && schedule.phase === 'notStarted';
+        /*
+         * Per-problem effective score for the student: their best record on
+         * each task, with the late penalty applied when that record was
+         * submitted after endAt. Records keep their TRUE score (exactly like
+         * homework, where the penalty lives in contest scoring, not on the
+         * record) — the session interprets them.
+         */
+        let myScores: Record<number, { score: number, late: boolean, effective: number }> | null = null;
+        if (isStudentView && !hideProblems && schedule.phase !== 'open' && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
+            try {
+                const rdocs = await record.getMulti(domainId, { uid: this.user._id, pid: { $in: sdoc.pids } })
+                    .project({ pid: 1, score: 1 }).toArray();
+                myScores = {};
+                for (const r of rdocs as any[]) {
+                    const at = r._id.getTimestamp();
+                    const score = r.score || 0;
+                    // The coefficient of the tier THIS record landed in —
+                    // exactly how homework grades each late submission.
+                    const effective = Math.round(score * penaltyCoefficientAt(sdoc, at));
+                    // "late" drives the strikethrough: only when a tier
+                    // actually reduced the score (the grace tier rides free).
+                    const late = !!(sdoc.endAt && at > sdoc.endAt) && effective !== score;
+                    const cur = myScores[r.pid];
+                    // Best = highest EFFECTIVE score (what the session counts);
+                    // on equal effective scores the on-time attempt wins.
+                    if (!cur || effective > cur.effective || (effective === cur.effective && cur.late && !late)) {
+                        myScores[r.pid] = { score, late, effective };
+                    }
+                }
+            } catch (e) { /* score chips are optional */ }
+        }
         this.response.template = 'self_learning_detail.html';
         this.response.body = {
             sdoc,
@@ -124,6 +322,9 @@ class SelfLearningDetailHandler extends Handler {
             udict,
             spark,
             solvedCount,
+            schedule,
+            hideProblems,
+            myScores,
             canEdit: sdoc.owner === this.user._id
                 || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)
                 || this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM),
@@ -142,6 +343,13 @@ class SelfLearningProblemBaseHandler extends Handler {
         if (!this.sdoc.pids.includes(pid)) throw new NotFoundError(domainId, pid);
         this.pdoc = await problem.get(domainId, pid);
         if (!this.pdoc) throw new NotFoundError(domainId, pid);
+        // Homework-style schedule: before beginAt the session is closed to
+        // students on every surface this base serves (solve, record, tutor).
+        // After the end everything stays OPEN for review and tutoring; only
+        // NEW submissions are refused (SelfLearningSolveHandler.post).
+        if (this.isStudent && sessionSchedule(this.sdoc).phase === 'notStarted') {
+            throw new ForbiddenError('This session has not started yet.');
+        }
     }
 
     /**
@@ -187,6 +395,18 @@ class SelfLearningProblemBaseHandler extends Handler {
 
 class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
     async get({ domainId }) {
+        /*
+         * PTA UI: objective tasks are answered on the session's combined
+         * paper — the same on-page answering surface Tests and Homework use
+         * — so every HTML entry point (detail rows, rail chips, old
+         * bookmarks) funnels there, anchored at this very question. XHR/json
+         * callers and this handler's POST, /record and /tutor sub-routes are
+         * untouched: the paper itself submits and tutors through them.
+         */
+        if (this.problemKind === 'objective' && !this.request.json) {
+            this.response.redirect = `${this.url('self_learning_paper', { ssid: this.sdoc.docId })}#q-${this.pdoc.docId}`;
+            return;
+        }
         const langRange = (this.pdoc.config && typeof this.pdoc.config === 'object' && this.pdoc.config.langs)
             ? Object.fromEntries(this.pdoc.config.langs.map((i) => [i, setting.langs[i]?.display || i]))
             : setting.SETTINGS_BY_KEY.codeLang.range;
@@ -194,6 +414,16 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
         this.UiContext.slPid = this.pdoc.docId;
         this.UiContext.slTutor = aiTutor.tutorConfigured() && this.isStudent;
         this.UiContext.slType = this.problemKind;
+        // Schedule cues for the fullscreen IDE (students only — the page
+        // itself shows the notice; enforcement stays in post()).
+        if (this.isStudent) {
+            const sched = sessionSchedule(this.sdoc);
+            if (sched.phase !== 'open') {
+                this.UiContext.slSchedule = {
+                    phase: sched.phase, penalty: sched.penalty, endAt: sched.endAt, hardEndAt: sched.hardEndAt,
+                };
+            }
+        }
         // The full session problem list feeds the PTA-style rail inside the IDE.
         try {
             const listPdict = await problem.getList(
@@ -225,6 +455,10 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
     @param('code', Types.String)
     @param('pretest', Types.Boolean)
     async post({ domainId }, lang: string, code: string, pretest = false) {
+        const schedNow = sessionSchedule(this.sdoc);
+        if (this.isStudent && schedNow.phase === 'ended') {
+            throw new ForbiddenError('This session has ended — submissions are closed.');
+        }
         const config = this.pdoc.config;
         if (typeof config === 'string' || config === null) throw new ProblemConfigError();
         if (['submit_answer', 'objective'].includes(config.type)) {
@@ -259,7 +493,13 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
                 domain.incUserInDomain(domainId, this.user._id, 'nSubmit'),
             ]);
         }
-        this.response.body = { rid: rid.toHexString() };
+        this.response.body = {
+            rid: rid.toHexString(),
+            // Lateness is decided HERE, per submission — not from whatever
+            // phase the client happened to render at page load.
+            late: this.isStudent && schedNow.phase === 'extension',
+            penalty: schedNow.penalty,
+        };
     }
 }
 
@@ -1836,15 +2076,43 @@ class SelfLearningPaperHandler extends Handler {
     @param('ssid', Types.ObjectId)
     async get({ domainId }, ssid: ObjectId) {
         const sdoc = await loadSession(domainId, ssid);
+        /*
+         * Unlike the Test/Homework papers (an answer sheet whose judging
+         * story lives with the assessment), the SELF-LEARNING paper is the
+         * primary answering surface for objective tasks — the solve route
+         * redirects here. So each section carries its own submit + record
+         * + tutor endpoints (the solve handler's POST and sub-routes, so
+         * records, verdict polling, Spark and the Boss Challenge behave
+         * exactly as the single-problem page did).
+         */
+        const isStudentView = !this.user.own(sdoc)
+            && !this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK)
+            && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
+        const schedule = sessionSchedule(sdoc);
+        // Not started: students get the schedule on the detail page instead.
+        if (isStudentView && schedule.phase === 'notStarted') {
+            this.response.redirect = this.url('self_learning_detail', { ssid });
+            return;
+        }
+        const closed = isStudentView && schedule.phase === 'ended';
+        const solveUrl = (docId: number) => this.url('self_learning_solve', { ssid, pid: docId });
         await respondObjectivePaper(this, domainId, {
             heading: sdoc.title,
             backUrl: this.url('self_learning_detail', { ssid }),
             pageName: 'self_learning_paper',
             storeKey: ssid.toHexString(),
             docIds: sdoc.pids || [],
-            submitUrlFor: (docId) => this.url('problem_submit', { pid: docId }),
+            canSubmit: !closed,
+            slTutor: aiTutor.tutorConfigured() && isStudentView,
+            ssid: ssid.toHexString(),
+            submitUrlFor: (docId) => solveUrl(docId),
+            recordUrlFor: (docId) => `${solveUrl(docId)}/record`,
+            tutorUrlFor: (docId) => `${solveUrl(docId)}/tutor`,
             chipHrefFor: (pdoc) => this.url('self_learning_solve', { ssid, pid: pdoc.docId }),
         });
+        Object.assign(this.response.body, { schedule, scheduleClosed: closed });
+        // The verdict chip appends the late note only while it applies.
+        this.UiContext.paperPenalty = (isStudentView && schedule.phase === 'extension') ? schedule.penalty : 0;
     }
 }
 
@@ -1859,6 +2127,13 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
     docIds: number[], submitUrlFor: (docId: number) => string,
     chipHrefFor: (pdoc: any) => string,
     resultsWithheld?: boolean,
+    /** Self-learning: the paper answers in place (per-task submit + verdicts). */
+    canSubmit?: boolean,
+    /** Self-learning: mount the floating Socratic tutor on the paper. */
+    slTutor?: boolean,
+    ssid?: string,
+    recordUrlFor?: (docId: number) => string,
+    tutorUrlFor?: (docId: number) => string,
 }) {
     const pdocs = (await Promise.all((opts.docIds || []).map((docId) => problem.get(domainId, docId))))
         .filter((x) => x);
@@ -1869,6 +2144,8 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
         index: k + 1,
         title: pdoc.title,
         submitUrl: opts.submitUrlFor(pdoc.docId),
+        recordUrl: opts.recordUrlFor ? opts.recordUrlFor(pdoc.docId) : '',
+        tutorUrl: opts.tutorUrlFor ? opts.tutorUrlFor(pdoc.docId) : '',
         content: pdoc.content,
     }));
     h.response.template = 'objective_paper.html';
@@ -1876,12 +2153,16 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
         heading: opts.heading,
         backUrl: opts.backUrl,
         tasks,
+        canSubmit: !!opts.canSubmit,
         othersCount: pdocs.length - objective.length,
         page_name: opts.pageName,
     };
     h.UiContext.paperTasks = tasks.map(({ content, ...t }) => t);
     h.UiContext.paperKey = opts.storeKey;
     h.UiContext.paperWithheld = !!opts.resultsWithheld;
+    h.UiContext.paperCanSubmit = !!opts.canSubmit;
+    if (opts.slTutor !== undefined) h.UiContext.slTutor = !!opts.slTutor;
+    if (opts.ssid) h.UiContext.slSsid = opts.ssid;
     /*
      * The fixed-left problems rail (auto_scratchpad's sl-rail) replaces the
      * paper's own sidebar: every task of the container, all kinds, with the

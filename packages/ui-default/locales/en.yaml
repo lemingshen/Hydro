@@ -138,7 +138,6 @@ wiki_help: Help
 'Earlier attempts': Earlier attempts
 'Best': Best
 'solved': solved
-
 # Site vocabulary: this deployment calls contests "tests"
 All Contests: All Tests
 All {0} Contests: All {0} Tests
@@ -197,3 +196,28 @@ We will check code similarity after this contest.: We will check code similarity
 You haven't attended this contest yet.: You haven't attended this test yet.
 You've already attended this contest.: You've already attended this test.
 contest: test
+'Submit this answer': Submit this answer
+This session opens at: This session opens at
+closes at: closes at
+Open until: Open until
+late window until: late window until
+Late window: Late window
+submissions until: submissions until
+count at: count at
+'This session has ended — review and tutoring stay open; submissions are closed.': This session has ended — review and tutoring stay open; submissions are closed.
+This session has not started yet.: This session has not started yet.
+'This session has ended — submissions are closed.': This session has ended — submissions are closed.
+The problem list unlocks when the session begins.: The problem list unlocks when the session begins.
+Starts: Starts
+Due: Due
+Ended: Ended
+late: late
+Late submission: Late submission
+Your best score: Your best score
+up to: up to
+'Students can enter from the begin time. Late submissions inside the extension are scored by the tiered rules above, exactly like homework: each line is "hours: coefficient", and once a submission is more than N hours late its score is multiplied by that coefficient (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.': 'Students can enter from the begin time. Late submissions inside the extension are scored by the tiered rules above, exactly like homework: each line is "hours: coefficient", and once a submission is more than N hours late its score is multiplied by that coefficient (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.'
+'Search sessions...': Search sessions...
+In progress: In progress
+Not started: Not started
+Always open: Always open
+Create a homework: Create a homework

@@ -1,4 +1,5 @@
 import { ObjectId } from 'mongodb';
+import type { PenaltyRules } from '../interface';
 import db from '../service/db';
 import * as document from './document';
 
@@ -13,6 +14,22 @@ export interface SelfLearningDoc {
     title: string;
     content: string;
     pids: number[];
+    /*
+     * Homework-style schedule (all optional: legacy sessions without these
+     * fields are treated as always-open). `endAt` is the nominal deadline —
+     * homework's penaltySince — and the hard stop is endAt + extensionDays.
+     * `penaltyRules` is homework's tiered shape verbatim — { hours:
+     * coefficient }, the largest elapsed hour-key wins — and `penalty` is
+     * the legacy single-percent form from the first iteration of this
+     * feature, kept so sessions saved with it keep their exact behavior
+     * (it maps to { 0: (100 - penalty) / 100 }).
+     */
+    beginAt?: Date;
+    endAt?: Date;
+    extensionDays?: number;
+    /** Legacy: flat percent deducted while late. Superseded by penaltyRules. */
+    penalty?: number;
+    penaltyRules?: PenaltyRules;
     createdAt: Date;
     updateAt: Date;
 }
@@ -135,10 +152,13 @@ export const SPARK_BADGES: SparkBadge[] = [
 ];
 
 export class SelfLearningModel {
-    static add(domainId: string, owner: number, title: string, content: string, pids: number[]): Promise<ObjectId> {
+    static add(
+        domainId: string, owner: number, title: string, content: string, pids: number[],
+        extra: Partial<SelfLearningDoc> = {},
+    ): Promise<ObjectId> {
         return document.add(
             domainId, content, owner, TYPE_SELF_LEARNING, null, null, null,
-            { title, pids, createdAt: new Date(), updateAt: new Date() },
+            { title, pids, ...extra, createdAt: new Date(), updateAt: new Date() },
         );
     }
 

@@ -199,6 +199,13 @@ function caseKey(c) {
 
 export default new NamedPage('self_learning_solve', async () => {
   if (getTheme() === 'dark') document.documentElement.classList.add('pta-dark'); // panel styles are template-side
+  // Homework-style schedule cues (students only; the server enforces).
+  const slSched = UiContext.slSchedule;
+  if (slSched && slSched.phase === 'extension') {
+    Notification.warn(`⚠️ ${i18n('Late window')} — ${i18n('submissions until')} ${new Date(slSched.hardEndAt).toLocaleString()} ${i18n('count at')} −${slSched.penalty}%`);
+  } else if (slSched && slSched.phase === 'ended') {
+    Notification.info(i18n('This session has ended — review and tutoring stay open; submissions are closed.'));
+  }
   const tutorUrl = `${window.location.pathname}/tutor`;
   const recordUrl = `${window.location.pathname}/record`;
   const isObjective = UiContext.slType === 'objective';

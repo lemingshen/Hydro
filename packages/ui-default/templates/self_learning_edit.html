@@ -29,6 +29,20 @@
               value:pids,
               help_text:_('Search and pick problems from the problem set; entries are separated with ",". Both programming problems and quiz problems (true/false, multiple choice, fill-in-the-blank) are supported.')
           }) }}
+          <div class="row">
+            {{ form.form_text({ columns:2, label:'Begin Date', name:'beginAtDate', placeholder:'YYYY-mm-dd', value:dateBeginText, date:true, row:false }) }}
+            {{ form.form_text({ columns:2, label:'Begin Time', name:'beginAtTime', placeholder:'HH:MM', value:timeBeginText, time:true, row:false }) }}
+            {{ form.form_text({ columns:2, label:'End Date', name:'endAtDate', placeholder:'YYYY-mm-dd', value:dateEndText, date:true, row:false }) }}
+            {{ form.form_text({ columns:2, label:'End Time', name:'endAtTime', placeholder:'HH:MM', value:timeEndText, time:true, row:false }) }}
+            {{ form.form_text({ columns:2, label:'Extension (days)', name:'extensionDays', value:extensionDays, row:false }) }}
+          </div>
+          <div class="row"><div class="columns">
+            <label>
+              {{ _('Extension Score Penalty') }}
+              <textarea name="penaltyRules" class="monospace textbox" data-yaml>{% if sdoc and sdoc.penaltyRules %}{{ penaltyRules }}{% else %}{% include 'partials/homework_default_penalty_rules.yaml' %}{% endif %}</textarea>
+            </label>
+          </div></div>
+          <p class="help-text sle-sched-help">{{ _('Students can enter from the begin time. Late submissions inside the extension are scored by the tiered rules above, exactly like homework: each line is "hours: coefficient", and once a submission is more than N hours late its score is multiplied by that coefficient (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.') }}</p>
           {{ form.form_textarea({
               columns:null,
               label:'Content',

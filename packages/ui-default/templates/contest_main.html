@@ -83,49 +83,47 @@
           </form>
         </div>
       </div>
-      <div class="section__body no-padding">
+      <div class="section__body">
       {% if not tdocs.length %}
         {{ nothing.render('There are no contests...') }}
       {% else %}
-        <ol class="section__list contest__list">
+        <ol class="section__list contest__list pta-rowlist">
         {%- for tdoc in tdocs -%}
-          <li class="section__list__item contest__item contest-type--{{ tdoc['rule'] }}">
-            <div class="media">
-              <div class="media__left medium">
-                <div class="contest__date numbox">
-                  <div class="numbox__num large">{{ datetimeSpan(tdoc['beginAt'], false, 'D')|safe }}</div>
-                  <div class="numbox__text">{{ datetimeSpan(tdoc['beginAt'], false, 'YYYY-M')|safe }}</div>
+          <li class="section__list__item pta-rowwrap contest-type--{{ tdoc['rule'] }}">
+            <a class="pta-row" href="{{ url('contest_detail', tid=tdoc.docId) }}">
+              <div class="pta-row__side">
+                <div class="pta-datebox">
+                  <div class="pta-datebox__num">{{ datetimeSpan(tdoc['beginAt'], false, 'D')|safe }}</div>
+                  <div class="pta-datebox__sub">{{ datetimeSpan(tdoc['beginAt'], false, 'YYYY-M')|safe }}</div>
                 </div>
               </div>
-              <div class="media__body medium">
-                <h1 class="contest__title"><a href="{{ url('contest_detail', tid=tdoc.docId) }}" data-emoji-enabled>{{ tdoc.title }}</a></h1>
-                {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_CONTEST) %}
-                <form class="list-del " method="post" action="{{ url('contest_edit', tid=tdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
-                  <input type="hidden" name="operation" value="delete">
-                  <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
-                </form>
-                {% endif %}
-                <ul class="supplementary list">
-                  <li>
-                    <a href="?rule={{ tdoc['rule'] }}" class="contest-type-tag"><span class="icon icon-award"></span>{{ _(model.contest.RULES[tdoc.rule].TEXT) }}</a>
-                  </li>
+              <div class="pta-row__main">
+                <div class="pta-row__titlerow">
+                  <span class="pta-row__title" data-emoji-enabled>{{ tdoc.title }}</span>
+                  <span class="pta-row__count">👥 {{ tdoc['attend']|default(0) }}</span>
+                </div>
+                <div class="pta-row__meta">
+                  {#- The rule pill was a ?rule= quick-filter link; inside the
+                      whole-row anchor it becomes a plain chip — the toolbar's
+                      rule dropdown carries that filter now. -#}
+                  <span class="pta-chip pta-chip--blue">🏆 {{ _(model.contest.RULES[tdoc.rule].TEXT) }}</span>
                   {% if tdoc.rated %}
-                    <li class="contest-tag-rated"><span class="icon icon-star"></span>Rated</li>
+                  <span class="pta-chip pta-chip--gold">⭐ Rated</span>
                   {% endif %}
-                  <li>
-                    <span class="icon icon-schedule--fill text-blue"></span> {{ contest.render_duration(tdoc) }} {{ _('hour(s)') }}
-                  </li>
-                  <li>
-                    <span class="icon icon-user--multiple"></span> {{ tdoc['attend']|default(0) }}
-                  </li>
-                {% if tsdict[tdoc.docId].attend %}
-                  <li class="contest__info-attended">
-                    <span class="icon icon-check"></span> {{ _('Attended') }}
-                  </li>
-                {% endif %}
-                </ul>
+                  <span class="pta-chip">🕐 {{ contest.render_duration(tdoc) }} {{ _('hour(s)') }}</span>
+                  {% if tsdict[tdoc.docId].attend %}
+                  <span class="pta-chip pta-chip--ok">✓ {{ _('Attended') }}</span>
+                  {% endif %}
+                </div>
               </div>
-            </div>
+              <span class="pta-row__go">→</span>
+            </a>
+            {% if handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_CONTEST) %}
+            <form class="list-del list-del--card" method="post" action="{{ url('contest_edit', tid=tdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
+              <input type="hidden" name="operation" value="delete">
+              <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
+            </form>
+            {% endif %}
           </li>
         {%- endfor -%}
         </ol>
