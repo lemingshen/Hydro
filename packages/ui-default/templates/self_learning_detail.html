@@ -17,6 +17,57 @@
   .theme--dark .slp-row:hover { box-shadow: var(--pta-shadow-hover); }
   .slp-st { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; font-size: 13px; font-weight: bold; flex: 0 0 auto; background: var(--pta-card-3); border: 1.5px solid var(--pta-line); color: var(--pta-ink-faint); transition: transform .15s var(--pta-ease); }
   .slp-row:hover .slp-st { transform: scale(1.08); }
+  /* one task at a time */
+  .slp-gate { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; font-size: 12px; flex: 0 0 auto; }
+  .slp-gate--locked { color: var(--pta-ink-faint); }
+  .slp-gate--current { background: var(--pta-violet); color: #fff; box-shadow: 0 0 0 3px var(--pta-violet-soft); }
+  .slp-gate--skipped { background: var(--pta-warn-soft); color: var(--pta-warn-text); }
+  .slp-gate--done { background: var(--pta-ok-soft); color: var(--pta-ok-text); }
+  .slp-title--locked { color: var(--pta-ink-faint); }
+  .slp-row--locked { opacity: .62; }
+  .slp-go--locked { color: var(--pta-ink-faint); cursor: not-allowed; }
+  .slp-gate-banner { margin: 0 0 10px; padding: 9px 13px; border-radius: 12px; border: 1px solid var(--pta-violet-line); background: var(--pta-violet-soft); font-size: 12.5px; color: var(--pta-ink); }
+  /* teacher results: a score board that scrolls both ways and never truncates a value */
+  .sld-results__note { margin: 0 0 10px; padding: 8px 12px; border-radius: 10px; background: var(--pta-card-2); border: 1px solid var(--pta-line); font-size: 12.5px; color: var(--pta-ink-soft); }
+  .sld-results__note--final { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+  .sld-results__wrap { overflow: auto; max-height: 460px; border: 1px solid var(--pta-line); border-radius: 10px; background: var(--pta-card); }
+  .sld-results__table { display: table; width: max-content; min-width: 100%; table-layout: auto; border-collapse: separate; border-spacing: 0; font-size: 12.5px; color: var(--pta-ink); }
+  .sld-results__table thead, .sld-results__table tbody { display: table-row-group; }
+  .sld-results__table tr { display: table-row; }
+  .sld-results__table th, .sld-results__table td { display: table-cell; white-space: nowrap; overflow: visible; text-overflow: clip; max-width: none; width: auto; padding: 8px 14px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--pta-line-soft); }
+  .sld-results__table thead th { position: sticky; top: 0; z-index: 2; background: var(--pta-card-2); color: var(--pta-ink-faint); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; border-bottom: 2px solid var(--pta-line); }
+  .sld-results__table tbody tr:nth-child(even) td { background: var(--pta-card-2); }
+  .sld-results__table tbody tr:hover td { background: var(--pta-violet-soft); }
+  .sld-results__table td:first-child, .sld-results__table th:first-child { color: var(--pta-ink-faint); }
+  .sld-results__num { text-align: center !important; }
+  /* expanded (full-screen) board */
+  .sld-results--full { position: fixed !important; inset: 14px !important; z-index: 2001 !important; margin: 0 !important; overflow: auto; border-radius: 16px; background: var(--pta-card); box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .55); animation: none !important; transform: none !important; }
+  .sld-results--full .section__body { display: flex; flex-direction: column; height: calc(100% - 58px); box-sizing: border-box; }
+  .sld-results--full .sld-results__wrap { flex: 1 1 auto; max-height: none; }
+  .sld-results__backdrop { position: fixed; inset: 0; z-index: 2000; background: rgba(15, 12, 30, .58); }
+  .sld-results__total { background: var(--pta-violet-soft); }
+  .sld-results__num.is-full { color: var(--pta-ok-text); font-weight: 600; }
+  .sld-results__num.is-none { color: var(--pta-ink-faint); }
+  .sld-results__late { font-size: 10px; margin-left: 2px; color: var(--pta-warn-text); }
+  .sld-results__name { color: var(--pta-ink-faint); font-size: 11.5px; margin-left: 4px; }
+  .sld-results__legend { margin-top: 8px; font-size: 11.5px; color: var(--pta-ink-faint); line-height: 1.5; }
+  .sld-results .section__tools { display: flex; gap: 6px; align-items: center; }
+  .sld-myscore__body { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+  .sld-myscore__main { font-size: 14px; color: var(--pta-ink); }
+  .sld-myscore__main b { font-size: 24px; color: var(--pta-violet-text); margin-left: 6px; }
+  .sld-myscore__main small { color: var(--pta-ink-faint); margin-left: 2px; }
+  .sld-myscore__meta { font-size: 12px; color: var(--pta-ink-soft); line-height: 1.6; }
+  .sld-myscore__diff { color: var(--pta-warn-text); }
+  .slp-bonus { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 9px; }
+  .slp-bonus__head { font-size: 13px; font-weight: 700; color: var(--pta-ink); display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+  .slp-bonus__hint { font-size: 11.5px; font-weight: normal; color: var(--pta-ink-faint); }
+  .slp-row--bonus { border-style: dashed; border-color: var(--pta-violet-line); }
+  .slp-gate--bonus { background: var(--pta-violet-soft); }
+  .slp-bonus__kp { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .slp-bonus__st { font-size: 11.5px; border-radius: 999px; padding: 2px 8px; }
+  .slp-bonus__st--ready { background: var(--pta-ok-soft); color: var(--pta-ok-text); }
+  .slp-bonus__st--failed { background: var(--pta-fail-soft, #fff5f5); color: var(--pta-fail); }
+  .slp-bonus__st--busy { background: var(--pta-warn-soft); color: var(--pta-warn-text); }
   .slp-st--ac { background: linear-gradient(135deg, #40c057, #2f9e44); border-color: transparent; color: #fff; box-shadow: 0 4px 10px -4px rgba(47, 158, 68, .6); }
   .slp-st--tried { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); color: var(--pta-bad-text); }
   .slp-pid { font-size: 12px; font-weight: bold; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 7px; padding: 1px 8px; flex: 0 0 auto; font-family: var(--code-font-family); }
@@ -35,14 +86,6 @@
   .sld-meta { display: flex; flex-direction: column; gap: 8px; }
   .sld-chip { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 10px; padding: 7px 11px; }
   .sld-chip a { font-weight: 500; }
-  .sld-sparkwrap { padding-top: 0 !important; }
-  .sld-spark { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 13px; border-radius: 12px; background: linear-gradient(135deg, #fff8e9, #fff1f4); border: 1px solid #f6e3c8; font-size: 12.5px; color: #6b5d4f; animation: ptaFadeUp .28s var(--pta-ease) backwards; }
-  .sld-spark__item b { color: #b45309; }
-  .sld-spark__badges { display: inline-flex; gap: 3px; margin-left: auto; }
-  .sld-spark__badge { font-size: 17px; line-height: 1; cursor: default; transition: transform .12s var(--pta-ease); }
-  .sld-spark__badge:hover { transform: translateY(-2px) scale(1.15); }
-  .theme--dark .sld-spark { background: linear-gradient(135deg, #2c2519, #2e2126); border-color: #4a4030; color: #cfc4b4; }
-  .theme--dark .sld-spark__item b { color: #ffc078; }
 .sld-sched { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 13px; border-radius: 12px; font-size: 12.5px; border: 1px solid var(--pta-line); background: var(--pta-card-3); color: var(--pta-ink-soft); animation: ptaFadeUp .28s var(--pta-ease) backwards; }
 .sld-sched--notStarted { background: var(--pta-blue-soft); border-color: var(--pta-blue-line); color: var(--pta-blue-text); }
 .sld-sched--running { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
@@ -58,24 +101,6 @@
       <div class="section__header">
         <h1 class="section__title">{{ sdoc.title }}</h1>
       </div>
-      {% if spark %}
-      <div class="section__body sld-sparkwrap">
-        <div class="sld-spark">
-          <span class="sld-spark__item">🔥 <b>{{ spark.streak }}</b> {{ _('day streak') }}</span>
-          <span class="sld-spark__item">⭐ <b>{{ solvedCount }}</b> / {{ sdoc.pids|length }} {{ _('solved') }}</span>
-          {% if spark.challengesCleared %}
-          <span class="sld-spark__item">⚔️ <b>{{ spark.challengesCleared }}</b> {{ _('challenges cleared') }}</span>
-          {% endif %}
-          {% if spark.badges.length %}
-          <span class="sld-spark__badges">
-            {%- for b in spark.badges -%}
-            <span class="sld-spark__badge" title="{{ b.title }} — {{ b.desc }}">{{ b.icon }}</span>
-            {%- endfor -%}
-          </span>
-          {% endif %}
-        </div>
-      </div>
-      {% endif %}
       {% if sdoc.content %}
       <div class="section__body typo richmedia">
         {{ sdoc.content|markdown|safe }}
@@ -97,6 +122,79 @@
       </div>
       {% endif %}
     </div>
+    {#-
+      Teacher view: the session's RESULTS — every student's summed score.
+      "Evaluate all students now" computes and updates every score at any
+      time; the same evaluation runs automatically once the deadline (with
+      extension) has passed.
+    -#}
+    {% if staffView %}
+    <div class="section sld-results">
+      <div class="section__header">
+        <h1 class="section__title">📊 {{ _('Results') }}</h1>
+        <div class="section__tools">
+          {% if results and results.rows.length %}<button type="button" class="rounded button sld-results__expand" title="{{ _('Expand the score board') }}">⛶ <span>{{ _('Expand') }}</span></button>{% endif %}
+          {% if results %}<a class="rounded button" href="{{ url('self_learning_detail', ssid=sdoc.docId) }}?export=csv">⬇ {{ _('Export CSV') }}</a>{% endif %}
+          <form method="post" style="display:inline"><button name="operation" value="recompute" type="submit" class="rounded primary button">📊 {{ _('Evaluate all students now') }}</button></form>
+        </div>
+      </div>
+      <div class="section__body">
+        {% if resultsState == 'final' %}
+        <div class="sld-results__note sld-results__note--final">✅ {{ _('Last evaluated') }} {{ datetimeSpan(results.computedAt)|safe }} · {{ _('the session has ended, so the evaluation ran automatically; you can re-evaluate at any time.') }}</div>
+        {% elif resultsState == 'provisional' %}
+        <div class="sld-results__note">✅ {{ _('Last evaluated') }} {{ datetimeSpan(results.computedAt)|safe }}. {% if schedule.hardEndAt %}{{ _('Students are evaluated automatically again after') }} {{ datetimeSpan(schedule.hardEndAt)|safe }}.{% endif %}</div>
+        {% elif resultsState == 'pending' %}
+        <div class="sld-results__note">🕒 {{ _('Not evaluated yet.') }} {% if schedule.hardEndAt %}{{ _('Students are evaluated automatically after') }} {{ datetimeSpan(schedule.hardEndAt)|safe }} — {% endif %}{{ _('or press Evaluate all students now.') }}</div>
+        {% else %}
+        <div class="sld-results__note">🕒 {{ _('Not evaluated yet. This session has no deadline, so press Evaluate all students now whenever you want the scores.') }}</div>
+        {% endif %}
+        {% if results %}
+        {% if results.rows.length %}
+        <div class="sld-results__wrap">
+        <table class="sld-results__table">
+          <thead><tr>
+            <th>#</th><th>{{ _('Student') }}</th>
+            {% for pid in sdoc.pids %}<th class="sld-results__num" title="{{ pdict[pid].title if pdict[pid] else pid }}">{{ pdict[pid].pid if pdict[pid] else pid }}</th>{% endfor %}
+            <th class="sld-results__num sld-results__total">{{ _('Total') }} / {{ results.maxTotal }}</th>
+            <th class="sld-results__num">{{ _('Attempts') }}</th>
+            <th class="sld-results__num">🏁</th><th class="sld-results__num">⏭</th><th class="sld-results__num">🎁</th>
+          </tr></thead>
+          <tbody>
+          {% for r in results.rows %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td><a href="{{ url('user_detail', uid=r.uid) }}">{{ r.uname }}</a>{% if r.name %} <span class="sld-results__name">{{ r.name }}</span>{% endif %}</td>
+            {% for pid in sdoc.pids %}{% set sc = r.scores[pid|string] %}
+            <td class="sld-results__num{% if sc and sc.effective >= 100 %} is-full{% elif not sc %} is-none{% endif %}">{% if sc %}{{ sc.effective }}{% if sc.late %}<span class="sld-results__late" title="{{ _('Late: raw score {0}').replace('{0}', sc.score) }}">⏱</span>{% endif %}{% else %}—{% endif %}</td>
+            {% endfor %}
+            <td class="sld-results__num sld-results__total"><b>{{ r.total }}</b></td>
+            <td class="sld-results__num">{{ r.attempts }}</td>
+            <td class="sld-results__num">{{ r.done }}</td><td class="sld-results__num">{{ r.skipped }}</td>
+            <td class="sld-results__num">{% if r.bonus == 'accepted' %}✓{% elif r.bonus == 'ready' %}·{% elif r.bonus == 'none' %}—{% else %}{{ r.bonus }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        <div class="sld-results__legend">{{ _('Score per task = best judged submission, late tier applied (⏱ = reduced for lateness; hover for the raw score). Total = sum over the session\u2019s tasks. 🏁 finished · ⏭ skipped · 🎁 bonus task (✓ accepted).') }}</div>
+        {% else %}
+        <div class="sld-results__note">{{ _('No student has attempted this session yet.') }}</div>
+        {% endif %}
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+    {% if myScore %}
+    <div class="section sld-myscore">
+      <div class="section__body sld-myscore__body">
+        <div class="sld-myscore__main">📊 <span>{{ _('Your score') }}</span> <b>{{ myScore.total }}</b><small>/ {{ myScore.max }}</small></div>
+        <div class="sld-myscore__meta">
+          {{ _('{0} of {1} tasks attempted').replace('{0}', myScore.attempted).replace('{1}', sdoc.pids.length) }} · {{ _('best judged submission per task, late tier applied') }}
+          {% if myScore.evaluatedTotal is number %}<br>✅ {{ _('Evaluated by your teacher') }} {{ datetimeSpan(myScore.evaluatedAt)|safe }}: <b>{{ myScore.evaluatedTotal }}</b> / {{ myScore.max }}{% if myScore.evaluatedTotal != myScore.total %} <span class="sld-myscore__diff">({{ _('your current score differs — the next evaluation will pick it up') }})</span>{% endif %}{% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% if hideProblems %}
     <div class="section">
       <div class="section__body typo">
@@ -109,11 +207,17 @@
         <h1 class="section__title">{{ _('Problems') }}</h1>
       </div>
       <div class="section__body no-padding">
+        {% if gateInfo %}
+        <div class="slp-gate-banner">
+          {% if gateInfo.finished %}🏁 {{ _('You have worked through every task. Finished and skipped tasks stay open — retry any of them.') }}
+          {% else %}▶ {{ _('One task at a time: task {0} of {1} is open now. Finish it (get accepted and answer the tutor), or skip it after talking to the tutor, to unlock the next one. Finished and skipped tasks stay open for retries.').replace('{0}', gateInfo.index).replace('{1}', gateInfo.total) }}{% endif %}
+        </div>
+        {% endif %}
         <div class="slp-list">
           {%- for pid in sdoc.pids -%}
           {%- set pdoc = pdict[pid] -%}
           {% if pdoc %}
-          <div class="slp-row">
+          <div class="slp-row{% if gateOf and gateOf[pid] == 'locked' %} slp-row--locked{% endif %}">
             {% if psdict[pid] and psdict[pid]['status'] == 1 %}
               <span class="slp-st slp-st--ac" title="{{ _('Accepted') }}">✓</span>
             {% elif psdict[pid] and psdict[pid]['status'] %}
@@ -121,8 +225,15 @@
             {% else %}
               <span class="slp-st" title="{{ _('Not started') }}">○</span>
             {% endif %}
+            {#- One task at a time (students): the gate state of this task. -#}
+            {%- set _g = gateOf[pid] if gateOf else '' -%}
+            {%- if _g == 'locked' -%}<span class="slp-gate slp-gate--locked" title="{{ _('Unlocks after you finish or skip the previous task') }}">🔒</span>
+            {%- elif _g == 'current' -%}<span class="slp-gate slp-gate--current" title="{{ _('Your current task') }}">▶</span>
+            {%- elif _g == 'skipped' -%}<span class="slp-gate slp-gate--skipped" title="{{ _('Skipped — come back any time') }}">⏭</span>
+            {%- elif _g == 'done' -%}<span class="slp-gate slp-gate--done" title="{{ _('Finished — you can retry any time') }}">🏁</span>{%- endif -%}
             <span class="slp-pid">{{ pdoc.pid|default(pid) }}</span>
-            {%- if pdoc.pid and (pdoc.pid|lower|first) == 'o' -%}<a class="slp-title" href="{{ url('self_learning_paper', ssid=sdoc.docId) }}#q-{{ pdoc.docId }}">{{ pdoc.title }}</a>{%- else -%}<a class="slp-title" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ pdoc.title }}</a>{%- endif -%}
+            {%- if _g == 'locked' -%}<span class="slp-title slp-title--locked">{{ pdoc.title }}</span>
+            {%- elif pdoc.pid and (pdoc.pid|lower|first) == 'o' -%}<a class="slp-title" href="{{ url('self_learning_paper', ssid=sdoc.docId) }}#q-{{ pdoc.docId }}">{{ pdoc.title }}</a>{%- else -%}<a class="slp-title" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ pdoc.title }}</a>{%- endif -%}
             {% if pdoc.config and pdoc.config.type == 'objective' %}
               <span class="slp-kind slp-kind--o">{{ _('Quiz') }}</span>
             {% elif pdoc.config and pdoc.config.type == 'submit_answer' %}
@@ -133,7 +244,8 @@
             {% if myScores and myScores[pid] %}
               <span class="slp-score{% if myScores[pid].late %} slp-score--late{% endif %}" title="{% if myScores[pid].late %}{{ _('Late submission') }} {{ myScores[pid].score }} → {{ myScores[pid].effective }}{% else %}{{ _('Your best score') }}{% endif %}">{{ myScores[pid].effective }}{% if myScores[pid].late %} <s>{{ myScores[pid].score }}</s>{% endif %}</span>
             {% endif %}
-            {%- if pdoc.pid and (pdoc.pid|lower|first) == 'o' -%}<a class="slp-go" href="{{ url('self_learning_paper', ssid=sdoc.docId) }}#q-{{ pdoc.docId }}">📝 {{ _('Answer') }}</a>{%- else -%}<a class="slp-go" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{{ _('Practice') }}</a>{%- endif -%}
+            {%- if _g == 'locked' -%}<span class="slp-go slp-go--locked">{{ _('Locked') }}</span>
+            {%- elif pdoc.pid and (pdoc.pid|lower|first) == 'o' -%}<a class="slp-go" href="{{ url('self_learning_paper', ssid=sdoc.docId) }}#q-{{ pdoc.docId }}">📝 {{ _('Answer') }}</a>{%- else -%}<a class="slp-go" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=pid) }}">{% if _g == 'done' or _g == 'skipped' %}{{ _('Retry') }}{% elif _g == 'current' %}▶ {{ _('Continue') }}{% else %}{{ _('Practice') }}{% endif %}</a>{%- endif -%}
           </div>
           {% else %}
           <div class="slp-row slp-row--gone">
@@ -143,6 +255,24 @@
           {% endif %}
           {%- endfor -%}
         </div>
+        {% if bonuses and bonuses.length %}
+        <div class="slp-bonus">
+          <div class="slp-bonus__head">🎁 {{ _('Bonus task') }} <span class="slp-bonus__hint">{{ _('Made for you from your own attempts and tutor exchanges — no tutor here: submit, see the verdict, retry.') }}</span></div>
+          {% for b in bonuses %}
+          <div class="slp-row slp-row--bonus">
+            <span class="slp-gate slp-gate--bonus">🎁</span>
+            {% if b.docId and (b.status == 'ready' or b.status == 'building') %}<a class="slp-title" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=b.docId) }}">{{ b.title or _('Bonus task') }}</a>{% else %}<span class="slp-title slp-title--locked">{{ b.title or _('Bonus task') }}</span>{% endif %}
+            {% if b.weakPoints and b.weakPoints.length %}<span class="slp-bonus__kp">{% for w in b.weakPoints %}<span class="slp-kind slp-kind--p">{{ w }}</span>{% endfor %}</span>{% endif %}
+            {% if b.status == 'ready' %}<span class="slp-bonus__st slp-bonus__st--ready">✓ {{ _('Ready') }}</span> <a class="slp-bonus__st" href="{{ url('problem_detail', pid=b.pid or b.docId) }}" title="{{ _('This bonus task was added to the domain\u2019s problem set') }}">📚 {{ _('In the Problem Set') }}</a>
+            {% elif b.status == 'failed' %}<span class="slp-bonus__st slp-bonus__st--failed" title="{{ b.message }}">⚠ {{ _('Failed') }}</span>
+            {% else %}<span class="slp-bonus__st slp-bonus__st--busy">⏳ {{ _('Preparing…') }}</span>{% endif %}
+            {% if b.docId and (b.status == 'ready' or b.status == 'building') %}<a class="slp-go" href="{{ url('self_learning_solve', ssid=sdoc.docId, pid=b.docId) }}">{{ _('Practice') }}</a>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% elif bonusEligibleNow %}
+        <div class="slp-gate-banner">🎁 {{ _('You have attempted every task — open any task and press “Bonus Task” in the side panel to get a challenge made for your weak points.') }}</div>
+        {% endif %}
       </div>
     </div>
     {% endif %}

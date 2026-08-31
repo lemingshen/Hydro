@@ -11,16 +11,22 @@ import { ContestNotLiveError, ContestNotAttendedError,
 } from '../error';
 import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
-import { AiStudioDetailHandler, AiStudioHandler, registerAiStudioTemplates } from './ai_author';
 import { ContestDetailBaseHandler } from './contest';
 import { convertPenaltyRules, validatePenaltyRules } from './homework';
+import { PROBLEM_KIND_FILTERS } from './problem';
+// Bonus tasks reuse the AI Studio's draft + verification pipeline. (Cross-file
+// function import: under dev-mode hot reload an edit to ai_author.ts keeps
+// these references on the previous module instance until a restart.)
+import { bonusState, createBonusDraft, materializeBonus, retryBonus } from './ai_author';
+import KnowledgeModel from '../model/knowledge';
+import * as document from '../model/document';
 import { PERM, PRIV } from '../model/builtin';
 import * as contest from '../model/contest';
 import domain from '../model/domain';
 import problem from '../model/problem';
 import record from '../model/record';
 import storage from '../model/storage';
-import SelfLearningModel, { getClassReport, getSubjective, getSuggestionReportsIn, getTutorThreadsIn, listSubjective, removeSubjectiveFile, setClassReport, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc } from '../model/selflearning';
+import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, collProgress, getClassReport, getSubjective, getSuggestionReportsIn, getTutorThreadsIn, listSubjective, removeSubjectiveFile, setClassReport, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
@@ -35,6 +41,29 @@ async function loadSession(domainId: string, ssid: ObjectId): Promise<SelfLearni
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type SessionTaskKind = 'programming' | 'objective' | 'subjective';
+
+/**
+ * Site convention (handler/problem.ts problemKindOf): the display pid's
+ * first letter is authoritative — P programming, O objective, S subjective —
+ * and the judge config is only the fallback for legacy problems without a
+ * prefix. Accepts both config shapes: the raw config.yaml STRING that list
+ * projections carry, and the parsed object that problem.get / getList
+ * return.
+ *
+ * Self-learning sessions are programming-only: the editor validates every
+ * pid against this, and the tutor / scratchpad surfaces key off it too.
+ */
+export function sessionKindOf(pdoc: any): SessionTaskKind {
+    const pid = String(pdoc?.pid || '');
+    if (/^s/i.test(pid)) return 'subjective';
+    if (/^o/i.test(pid)) return 'objective';
+    if (/^p/i.test(pid)) return 'programming';
+    const conf = pdoc?.config;
+    if (typeof conf === 'string') return /^\s*type:\s*['"]?objective/im.test(conf) ? 'objective' : 'programming';
+    return aiTutor.problemKindOf(conf) === 'objective' ? 'objective' : 'programming';
+}
 
 export type SessionPhase = 'open' | 'notStarted' | 'running' | 'extension' | 'ended';
 
@@ -171,6 +200,76 @@ class SelfLearningMainHandler extends Handler {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/*  AI task advisor for session creation                               */
+/* ------------------------------------------------------------------ */
+/*
+ * The teacher describes what the session should train ("for-loops with
+ * sentinel input"); the advisor proposes 3-8 of the domain's programming
+ * tasks that (a) exercise the knowledge points the goal maps to and
+ * (b) INTERLOCK — every suggested task shares a knowledge point with
+ * another one — so a misconception observed in one task can be observed
+ * again in the next. Reasons are per task; the overlap table names the
+ * shared points. The teacher then adds tasks freely; nothing is chosen
+ * for them. Follow-up messages refine the set (stateless: the client
+ * keeps the short conversation and sends it back).
+ */
+const ADVISOR_SYSTEM = `You are a course assistant helping a programming teacher assemble a SELF-LEARNING SESSION: a small set of programming tasks students solve on their own with an AI tutor, chosen so that a mistake (a missed knowledge point) revealed in one task can be observed again in another. You know the course's task catalog and its knowledge-point vocabulary. You only ever recommend tasks from the candidate list you are given, by their exact pid. You write in English only, whatever language the teacher uses.`;
+
+const ADVISOR_PROMPT = `From the CANDIDATE TASKS below (the domain's programming tasks with their knowledge-point labels), suggest 3 to 8 tasks for the teacher's goal.
+Selection rules:
+1. RELEVANCE — every task must exercise the knowledge points the goal is about. Interpret the goal with the CATALOG: it may be phrased loosely ("for-loop" covers labels such as "For loop reading n values" or "Loop boundary off-by-one").
+2. MUTUAL RELEVANCE — the set must interlock: each suggested task shares at least one goal-relevant knowledge point with at least one other suggested task, and the goal's core points should each be carried by two or more suggested tasks, so a mistake in one task can recur in another.
+3. PROGRESSION — the tasks form a LEARNING PATH that students work through in order, from simple to hard. Order primarily by knowledge-point load: step 1 needs only the goal's most basic point(s) in their plainest form; every later step keeps what came before and adds at most one or two new points, or a harder application of the same points (bigger constraints, a pitfall, a combination). Difficulty (1-10) and acceptance rates are hints, not the rule. Prefer varied scenarios over near-duplicates. Say what each step adds and what it builds on.
+4. Use pids from the candidate list ONLY, exactly as written. If fewer than 3 candidates fit, return what fits and say in "notes" what is missing (e.g. a knowledge point no task carries yet — the teacher can create one in the AI Studio).
+Reply with ONLY JSON:
+{"points": [string], "path": string, "tasks": [{"step": number, "pid": string, "level": "basic"|"intermediate"|"advanced", "buildsOn": string, "newPoints": [string], "reason": string, "points": [string]}], "overlap": [{"point": string, "pids": [string]}], "notes": string}
+- "points": the catalog knowledge points the goal maps to (exact catalog names, most central first).
+- "path": two or three sentences describing the progression as a whole — where it starts, how the demand grows, where it ends.
+- "tasks": in learning order; "step" is 1, 2, 3 ... in that order.
+- "tasks[].level": the student's expected effort at this step relative to the others.
+- "tasks[].buildsOn": the pid of the earlier suggested task this step builds on ("" for step 1).
+- "tasks[].newPoints": the goal-relevant knowledge points first required at this step (exact names from its label list; empty when the step deepens earlier points instead).
+- "tasks[].reason": one or two sentences — why this task, why at this position, and which other suggested task it connects to through which knowledge point.
+- "tasks[].points": the labels of that task that matter for this goal (exact names from its label list).
+- "overlap": each goal-relevant knowledge point carried by two or more suggested tasks, with those pids.
+- "notes": one short paragraph for the teacher — coverage, gaps, and how the set lets repeated mistakes be observed.
+Write "path", "reason" and "notes" in English only, whatever language the teacher writes in.`;
+
+/** Wrapping-fence tolerant JSON extraction (the model is asked for bare JSON). */
+function parseJsonLoose(text: string): any {
+    const raw = String(text || '').trim();
+    const fenced = /^```(?:json|jsonc)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(raw);
+    const body = fenced ? fenced[1].trim() : raw;
+    try {
+        return JSON.parse(body);
+    } catch (e) {
+        const a = body.indexOf('{');
+        const b = body.lastIndexOf('}');
+        if (a >= 0 && b > a) return JSON.parse(body.slice(a, b + 1));
+        throw e;
+    }
+}
+
+interface AdvisorCandidate {
+    docId: number;
+    pid: string;
+    title: string;
+    difficulty: number;
+    nSubmit: number;
+    nAccept: number;
+    hidden: boolean;
+    tags: string[];
+}
+
+/** Crude lexical relevance of a task to the goal — only used to bound the candidate list. */
+function goalScore(goalWords: string[], c: AdvisorCandidate): number {
+    const hay = `${c.title} ${c.tags.join(' ')}`.toLowerCase();
+    let score = 0;
+    for (const w of goalWords) if (w.length >= 3 && hay.includes(w)) score += 1;
+    return score * 10 + Math.min(c.tags.length, 8); // richer labeling breaks ties
+}
+
 class SelfLearningEditHandler extends Handler {
     sdoc?: SelfLearningDoc;
 
@@ -191,10 +290,31 @@ class SelfLearningEditHandler extends Handler {
         const endAt = this.sdoc?.endAt
             ? moment(this.sdoc.endAt).tz(this.user.timeZone)
             : beginAt.clone().add(14, 'days').hour(23).minute(59);
+        /*
+         * Sessions are programming-only. A session saved before that rule
+         * may still list quiz / subjective tasks; the picker is locked to
+         * programming, so it cannot ADD any, but the teacher must remove the
+         * old ones before postUpdate accepts the form — list them so the
+         * rejection never comes as a surprise.
+         */
+        let legacyTasks: { pid: string, title: string, kind: SessionTaskKind }[] = [];
+        if (this.sdoc?.pids?.length) {
+            try {
+                const pdict = await problem.getList(
+                    this.args.domainId, this.sdoc.pids, true, false, problem.PROJECTION_CONTEST_LIST, true,
+                );
+                legacyTasks = this.sdoc.pids
+                    .map((pid) => pdict[pid])
+                    .filter((pdoc) => pdoc && pdoc.docId && sessionKindOf(pdoc) !== 'programming')
+                    .map((pdoc) => ({ pid: String(pdoc.pid || pdoc.docId), title: pdoc.title, kind: sessionKindOf(pdoc) }));
+            } catch (e) { /* the warning is best-effort; postUpdate still enforces the rule */ }
+        }
         this.response.template = 'self_learning_edit.html';
         this.response.body = {
             sdoc: this.sdoc,
             pids: this.sdoc ? this.sdoc.pids.join(',') : '',
+            legacyTasks,
+            advisorAvailable: aiTutor.tutorEnabled() && aiTutor.tutorConfigured(),
             dateBeginText: beginAt.format('YYYY-M-D'),
             timeBeginText: beginAt.format('H:mm'),
             dateEndText: endAt.format('YYYY-M-D'),
@@ -202,6 +322,153 @@ class SelfLearningEditHandler extends Handler {
             extensionDays: this.sdoc?.extensionDays ?? 1,
             penaltyRules: this.sdoc?.penaltyRules ? yamlDump(this.sdoc.penaltyRules) : null,
             page_name: this.sdoc ? 'self_learning_edit' : 'self_learning_create',
+        };
+    }
+
+    /**
+     * AI task advisor: `message` is the teacher's goal (first turn) or a
+     * refinement; `history` is the prior conversation as JSON
+     * [{role:'user'|'assistant', content}] (assistant turns are the compact
+     * summaries this handler returned), so the model can revise its own
+     * suggestion. Stateless — nothing is stored.
+     */
+    @param('message', Types.String)
+    @param('history', Types.String, true)
+    async postSuggest({ domainId }, message: string, history = '') {
+        if (!aiTutor.tutorEnabled() || !aiTutor.tutorConfigured()) throw new ForbiddenError('The AI assistant is not configured. Please ask the administrator to set an API key.');
+        const goal = String(message || '').trim().slice(0, 2000);
+        if (!goal) throw new BadRequestError('Describe what the session should train first.');
+        await this.limitRate('ai_tutor', 60, 10, '{{user}}');
+
+        // Candidates: the domain's programming tasks this teacher may see.
+        const visible = KnowledgeModel.visibilityFilter(this.user, PERM.PERM_VIEW_PROBLEM_HIDDEN);
+        const rows = await problem.getMulti(domainId, { $and: [PROBLEM_KIND_FILTERS.programming, visible] },
+            ['docId', 'pid', 'title', 'tag', 'difficulty', 'nSubmit', 'nAccept', 'hidden'] as any)
+            .limit(2000).toArray();
+        const all: AdvisorCandidate[] = rows.map((p: any) => ({
+            docId: p.docId,
+            pid: String(p.pid || p.docId),
+            title: p.title || '',
+            difficulty: p.difficulty || 0,
+            nSubmit: p.nSubmit || 0,
+            nAccept: p.nAccept || 0,
+            hidden: !!p.hidden,
+            tags: (p.tag || []).map((t: any) => String(t)).filter((t: string) => t),
+        }));
+        if (!all.length) throw new BadRequestError('This domain has no programming tasks yet — create some in the AI Studio first.');
+        // Labeled tasks carry the knowledge points the advisor reasons
+        // about; unlabeled ones join only when labeled ones are scarce.
+        const labeled = all.filter((c) => c.tags.length);
+        const pool = labeled.length >= 30 ? labeled : all;
+        const goalWords = [...new Set(goal.toLowerCase().split(/[^\p{L}\p{N}+#-]+/u).filter((w) => w))];
+        const candidates = [...pool].sort((a, b) => goalScore(goalWords, b) - goalScore(goalWords, a)).slice(0, 120);
+        const byPid = new Map<string, AdvisorCandidate>();
+        for (const c of candidates) byPid.set(c.pid.toLowerCase(), c);
+
+        const catalog = await KnowledgeModel.list(domainId, '', 400);
+        const catalogBlock = catalog.length
+            ? `=== CATALOG: the domain's knowledge points (name — description) ===\n${catalog.map((k) => `- ${k.name}${k.description ? ` — ${k.description.slice(0, 100)}` : ''}`).join('\n').slice(0, 7000)}\n=== END CATALOG ===`
+            : '=== CATALOG: (empty — rely on the task labels) ===';
+        const candidateBlock = `=== CANDIDATE TASKS (${candidates.length}) — pid | title | difficulty 1-10 | accepted/submissions | knowledge points ===\n${candidates.map((c) => `${c.pid} | ${c.title} | ${c.difficulty || '?'} | ${c.nAccept}/${c.nSubmit} | ${c.tags.length ? c.tags.join('; ') : '(unlabeled)'}`).join('\n')}\n=== END CANDIDATES ===`;
+
+        // Conversation: the big context rides in the first user turn; the
+        // client's prior turns follow verbatim; the new message closes.
+        let turns: { role: 'user' | 'assistant', content: string }[] = [];
+        try {
+            const parsed = JSON.parse(history || '[]');
+            if (Array.isArray(parsed)) {
+                turns = parsed
+                    .filter((t) => t && (t.role === 'user' || t.role === 'assistant') && typeof t.content === 'string')
+                    .slice(-10)
+                    .map((t) => ({ role: t.role, content: String(t.content).slice(0, 4000) }));
+            }
+        } catch (e) { turns = []; }
+        const first = turns.length && turns[0].role === 'user' ? turns[0].content : goal;
+        const rest = turns.length && turns[0].role === 'user' ? turns.slice(1) : turns;
+        const messages: aiTutor.ChatMessage[] = [
+            { role: 'user', content: `${ADVISOR_PROMPT}\n\n${catalogBlock}\n\n${candidateBlock}\n\nTEACHER'S GOAL: ${first}` },
+            ...rest,
+            ...(turns.length ? [{ role: 'user' as const, content: `TEACHER'S FOLLOW-UP: ${goal}\nRevise the suggestion accordingly and reply with the full JSON again.` }] : []),
+        ];
+        const raw = await aiTutor.callProvider(ADVISOR_SYSTEM, messages, { temperature: 0.3 });
+        let j: any;
+        try {
+            j = parseJsonLoose(raw);
+        } catch (e) {
+            const retry = await aiTutor.callProvider(ADVISOR_SYSTEM, [
+                ...messages,
+                { role: 'assistant', content: raw.slice(0, 6000) },
+                { role: 'user', content: 'Your previous reply was not valid JSON. Reply again with ONLY the JSON value, no prose, no markdown fences.' },
+            ], { temperature: 0 });
+            j = parseJsonLoose(retry);
+        }
+
+        // Validate against the candidates; unknown pids are dropped, never
+        // invented. The learning order is the model's "step" (its array
+        // order as fallback), re-numbered 1..n after validation.
+        const LEVELS = ['basic', 'intermediate', 'advanced'];
+        const seen = new Set<string>();
+        const rawTasks = (Array.isArray(j?.tasks) ? j.tasks : []).map((t: any, i: number) => ({ t, i }));
+        rawTasks.sort((a, b) => (Number(a.t?.step) || a.i + 1) - (Number(b.t?.step) || b.i + 1) || a.i - b.i);
+        const tasks = rawTasks.map(({ t }) => {
+            const c = byPid.get(String(t?.pid || '').trim().toLowerCase());
+            if (!c || seen.has(c.pid)) return null;
+            seen.add(c.pid);
+            const tagLower = new Map(c.tags.map((x) => [x.toLowerCase(), x] as const));
+            const pick = (list: any) => (Array.isArray(list) ? list : [])
+                .map((x: any) => tagLower.get(String(x || '').toLowerCase())).filter((x: any) => x);
+            const level = String(t.level || '').toLowerCase();
+            return {
+                docId: c.docId,
+                pid: c.pid,
+                title: c.title,
+                difficulty: c.difficulty,
+                nSubmit: c.nSubmit,
+                nAccept: c.nAccept,
+                hidden: c.hidden,
+                points: c.tags,
+                goalPoints: pick(t.points),
+                newPoints: pick(t.newPoints),
+                level: LEVELS.includes(level) ? level : '',
+                buildsOn: String(t.buildsOn || '').trim(),
+                reason: String(t.reason || '').slice(0, 600),
+            };
+        }).filter((x: any) => x).slice(0, 8);
+        const suggestedPids = new Set(tasks.map((t: any) => t.pid.toLowerCase()));
+        tasks.forEach((t: any, i: number) => {
+            t.step = i + 1;
+            // buildsOn must name an EARLIER suggested task; otherwise it is the previous step.
+            const ref = tasks.find((o: any, k: number) => k < i && o.pid.toLowerCase() === t.buildsOn.toLowerCase());
+            t.buildsOn = i === 0 ? '' : (ref ? ref.pid : tasks[i - 1].pid);
+            // A level for every step, monotone along the path when the model left gaps.
+            if (!t.level) t.level = i === 0 ? 'basic' : i === tasks.length - 1 && tasks.length > 2 ? 'advanced' : (tasks[i - 1].level || 'intermediate');
+        });
+        const path = String(j?.path || '').slice(0, 900);
+        const overlap = (Array.isArray(j?.overlap) ? j.overlap : [])
+            .map((o: any) => ({
+                point: String(o?.point || '').slice(0, 60),
+                pids: (Array.isArray(o?.pids) ? o.pids : []).map((p: any) => String(p)).filter((p: string) => suggestedPids.has(p.toLowerCase())),
+            }))
+            .filter((o: any) => o.point && o.pids.length >= 2)
+            .slice(0, 20);
+        const points = (Array.isArray(j?.points) ? j.points : []).map((x: any) => String(x || '').slice(0, 60)).filter((x: string) => x).slice(0, 12);
+        const notes = String(j?.notes || '').slice(0, 1500);
+        this.response.body = {
+            points,
+            path,
+            tasks,
+            overlap,
+            notes,
+            candidates: candidates.length,
+            labeled: labeled.length,
+            // What the client stores as the assistant turn for follow-ups.
+            summary: JSON.stringify({
+                points,
+                path,
+                tasks: tasks.map((t: any) => ({ step: t.step, pid: t.pid, level: t.level, buildsOn: t.buildsOn, newPoints: t.newPoints, points: t.goalPoints })),
+                overlap,
+                notes,
+            }),
         };
     }
 
@@ -232,7 +499,21 @@ class SelfLearningEditHandler extends Handler {
         const schedule = {
             beginAt: beginAt.toDate(), endAt: endAt.toDate(), extensionDays, penaltyRules,
         };
-        await problem.getList(domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true);
+        const pdict = await problem.getList(
+            domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true,
+            problem.PROJECTION_CONTEST_LIST, true,
+        );
+        // Programming tasks only. The picker already hides quiz / subjective
+        // tasks, but the rule is enforced HERE: a crafted form, an old
+        // client, or a legacy session that still lists such tasks must all
+        // be refused with the offending pids named.
+        const rejected = pids
+            .map((pid) => pdict[pid])
+            .filter((pdoc) => pdoc && sessionKindOf(pdoc) !== 'programming')
+            .map((pdoc) => `${pdoc.pid || pdoc.docId} (${sessionKindOf(pdoc)})`);
+        if (rejected.length) {
+            throw new ValidationError('pids', null, `Only programming tasks can be added to a self-learning session. Remove: ${rejected.join(', ')}`);
+        }
         if (this.sdoc) {
             await SelfLearningModel.edit(domainId, this.sdoc.docId, {
                 title, content, pids, ...schedule,
@@ -251,9 +532,134 @@ class SelfLearningEditHandler extends Handler {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Session results: every student's summed score (auto after deadline) */
+/* ------------------------------------------------------------------ */
+/*
+ * The SAME rule the student sees on the session page (myScores): a task's
+ * score is the student's best record on it — judged, no pretests, and no
+ * later than the hard end — with the late-tier coefficient applied by the
+ * time that record was submitted. The session total is the sum over the
+ * session's tasks (bonus tasks are reported beside it, not summed).
+ * Finalized automatically once endAt + extension has passed (see
+ * finalizeDueSessions); before that a teacher can compute a provisional
+ * table on demand.
+ */
+export async function computeSessionResults(domainId: string, sdoc: SelfLearningDoc, final: boolean): Promise<SessionResults> {
+    const pids = sdoc.pids || [];
+    const sched = sessionSchedule(sdoc);
+    const hardEnd = sched.hardEndAt || null;
+    const rows = await record.getMulti(domainId, {
+        pid: { $in: pids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+    }).project({ uid: 1, pid: 1, score: 1 }).limit(200000).toArray();
+    const best = new Map<number, Map<number, { score: number, effective: number, late: boolean, attempts: number }>>();
+    for (const r of rows as any[]) {
+        const at = r._id.getTimestamp();
+        if (hardEnd && at > hardEnd) continue;
+        const score = r.score || 0;
+        const effective = Math.round(score * penaltyCoefficientAt(sdoc, at));
+        const late = !!(sdoc.endAt && at > sdoc.endAt) && effective !== score;
+        if (!best.has(r.uid)) best.set(r.uid, new Map());
+        const m = best.get(r.uid)!;
+        const cur = m.get(r.pid);
+        if (!cur) m.set(r.pid, { score, effective, late, attempts: 1 });
+        else {
+            cur.attempts += 1;
+            if (effective > cur.effective || (effective === cur.effective && cur.late && !late)) {
+                cur.score = score; cur.effective = effective; cur.late = late;
+            }
+        }
+    }
+    const progress = await collProgress.find({ domainId, ssid: sdoc.docId }).toArray();
+    const progressOf = new Map(progress.map((p) => [p.uid, p]));
+    const uids = [...new Set([...best.keys(), ...progressOf.keys()])].filter((uid) => uid !== sdoc.owner);
+    const udict = uids.length ? await user.getList(domainId, uids) : {};
+    const result: SessionResultRow[] = [];
+    for (const uid of uids) {
+        const udoc: any = udict[uid];
+        // Course staff who tried the tasks are not students of the session.
+        try {
+            if (udoc && typeof udoc.hasPerm === 'function' && (udoc.hasPerm(PERM.PERM_EDIT_HOMEWORK) || udoc.hasPerm(PERM.PERM_CREATE_HOMEWORK))) continue;
+        } catch (e) { /* keep the row */ }
+        const m = best.get(uid) || new Map();
+        const scores: SessionResultRow['scores'] = {};
+        let total = 0;
+        let attempts = 0;
+        for (const pid of pids) {
+            const v = m.get(pid);
+            if (v) {
+                scores[String(pid)] = v;
+                total += v.effective;
+                attempts += v.attempts;
+            }
+        }
+        const pg = progressOf.get(uid);
+        const bonus = (pg?.bonuses || [])[0];
+        let bonusState = 'none';
+        if (bonus) {
+            bonusState = bonus.status;
+            if (bonus.status === 'ready' && bonus.docId) {
+                const acc = await record.getMulti(domainId, { uid, pid: bonus.docId, status: STATUS.STATUS_ACCEPTED }).project({ _id: 1 }).limit(1).toArray();
+                if (acc.length) bonusState = 'accepted';
+            }
+        }
+        result.push({
+            uid,
+            uname: udoc?.uname || String(uid),
+            name: `${udoc?.firstName || ''} ${udoc?.lastName || ''}`.trim(),
+            scores,
+            total,
+            attempts,
+            done: (pg?.done || []).filter((x) => pids.includes(x)).length,
+            skipped: (pg?.skipped || []).filter((x) => pids.includes(x)).length,
+            bonus: bonusState,
+        });
+    }
+    result.sort((a, b) => b.total - a.total || a.uname.localeCompare(b.uname));
+    const results: SessionResults = { computedAt: new Date(), final, maxTotal: pids.length * 100, rows: result };
+    await SelfLearningModel.edit(domainId, sdoc.docId, { results });
+    return results;
+}
+
+/**
+ * Sessions whose hard end has passed and whose results are not final yet:
+ * compute them. Runs on a timer in apply() (first worker only) and when a
+ * teacher opens a closed session, so results exist whichever comes first.
+ */
+export async function finalizeDueSessions(): Promise<number> {
+    const now = new Date();
+    const due = await document.coll.find({
+        docType: TYPE_SELF_LEARNING, endAt: { $exists: true, $ne: null }, 'results.final': { $ne: true },
+    } as any).project({ domainId: 1, docId: 1, endAt: 1, extensionDays: 1 }).limit(500).toArray();
+    let n = 0;
+    for (const d of due as any[]) {
+        const hardEnd = new Date(new Date(d.endAt).getTime() + (d.extensionDays || 0) * DAY_MS);
+        if (hardEnd > now) continue;
+        try {
+            const sdoc = await SelfLearningModel.get(d.domainId, d.docId);
+            if (!sdoc) continue;
+            await computeSessionResults(d.domainId, sdoc, true);
+            n++;
+        } catch (e) {
+            logger.warn('[self-learning] results for %s/%s failed: %s', d.domainId, d.docId, e.message);
+        }
+    }
+    return n;
+}
+
 class SelfLearningDetailHandler extends Handler {
+    /** Teacher: (re)compute the results now — final if the session is closed, provisional otherwise. */
     @param('ssid', Types.ObjectId)
-    async get({ domainId }, ssid: ObjectId) {
+    async postRecompute({ domainId }, ssid: ObjectId) {
+        const sdoc = await loadSession(domainId, ssid);
+        if (!this.user.own(sdoc) && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)) throw new PermissionError();
+        await computeSessionResults(domainId, sdoc, sessionSchedule(sdoc).phase === 'closed');
+        this.response.redirect = this.url('self_learning_detail', { ssid });
+    }
+
+    @param('ssid', Types.ObjectId)
+    @param('export', Types.String, true)
+    async get({ domainId }, ssid: ObjectId, exportAs = '') {
         const sdoc = await loadSession(domainId, ssid);
         const pdict = await problem.getList(
             domainId, sdoc.pids, true, false, problem.PROJECTION_CONTEST_LIST, true,
@@ -262,25 +668,35 @@ class SelfLearningDetailHandler extends Handler {
             ? await problem.getListStatus(domainId, this.user._id, sdoc.pids)
             : {};
         const udict = await user.getList(domainId, [sdoc.owner]);
-        // Tutor Spark strip: the student's own momentum, rendered server-side
-        // so the page needs no extra scripting. Staff accounts see nothing.
+        // Staff accounts (owner, homework editors) see the teacher view.
         const isStudentView = !this.user.own(sdoc)
             && !this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK)
             && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
-        let spark: any = null;
-        if (isStudentView && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
-            const sp = await SelfLearningModel.getSpark(domainId, this.user._id).catch(() => null);
-            if (sp) {
-                const owned = new Set(sp.badges || []);
-                spark = {
-                    streak: sp.streak || 0,
-                    challengesCleared: sp.challengesCleared || 0,
-                    badges: SelfLearningModel.badgeCatalog().filter((b) => owned.has(b.id)),
-                };
-            }
-        }
         const solvedCount = sdoc.pids.filter((pid) => psdict[pid]?.status === STATUS.STATUS_ACCEPTED).length;
         const schedule = sessionSchedule(sdoc);
+        // One task at a time: the student's gate (finished / skipped /
+        // current / locked per task) for the task list. Staff see no gate.
+        let gateOf: Record<number, string> | null = null;
+        let gateInfo: any = null;
+        if (isStudentView && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
+            const g = computeGate(sdoc.pids, await SelfLearningModel.getProgress(domainId, sdoc.docId, this.user._id));
+            gateOf = {};
+            for (const pid of sdoc.pids) {
+                gateOf[pid] = g.done.includes(pid) ? 'done'
+                    : g.skipped.includes(pid) ? 'skipped'
+                        : g.current === pid ? 'current'
+                            : g.unlocked.includes(pid) ? 'open' : 'locked';
+            }
+            gateInfo = { current: g.current, index: g.index, total: g.total, finished: g.current === null, done: g.done.length, skipped: g.skipped.length };
+        }
+        // Bonus tasks earned in this session (students only).
+        let bonuses: any[] = [];
+        let bonusEligibleNow = false;
+        if (isStudentView && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
+            bonuses = await refreshBonuses(domainId, sdoc, this.user._id);
+            bonusEligibleNow = await bonusEligible(domainId, sdoc, this.user._id);
+        }
+
         // Before the begin time students see the schedule, not the problems.
         const hideProblems = isStudentView && schedule.phase === 'notStarted';
         /*
@@ -291,10 +707,11 @@ class SelfLearningDetailHandler extends Handler {
          * record) — the session interprets them.
          */
         let myScores: Record<number, { score: number, late: boolean, effective: number }> | null = null;
-        if (isStudentView && !hideProblems && schedule.phase !== 'open' && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
+        if (isStudentView && !hideProblems && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
             try {
-                const rdocs = await record.getMulti(domainId, { uid: this.user._id, pid: { $in: sdoc.pids } })
-                    .project({ pid: 1, score: 1 }).toArray();
+                const rdocs = await record.getMulti(domainId, {
+                    uid: this.user._id, pid: { $in: sdoc.pids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+                }).project({ pid: 1, score: 1 }).toArray();
                 myScores = {};
                 for (const r of rdocs as any[]) {
                     const at = r._id.getTimestamp();
@@ -314,17 +731,73 @@ class SelfLearningDetailHandler extends Handler {
                 }
             } catch (e) { /* score chips are optional */ }
         }
+        /*
+         * The student's own score: the live total (same rule as the
+         * teacher's evaluation, so both always agree) and, when the teacher
+         * has evaluated the session, that recorded total and time.
+         */
+        let myScore: any = null;
+        if (myScores) {
+            const total = sdoc.pids.reduce((acc, pid) => acc + (myScores![pid]?.effective || 0), 0);
+            const evaluated = sdoc.results?.rows?.find((r) => r.uid === this.user._id) || null;
+            myScore = {
+                total,
+                max: sdoc.pids.length * 100,
+                attempted: sdoc.pids.filter((pid) => myScores![pid]).length,
+                evaluatedTotal: evaluated ? evaluated.total : null,
+                evaluatedAt: sdoc.results?.computedAt || null,
+                evaluatedFinal: !!sdoc.results?.final,
+            };
+        }
+        /*
+         * Teacher view: the results table. Once the deadline (with extension)
+         * has passed, results are FINAL — computed here on first sight if the
+         * timer has not got to this session yet; before that, whatever
+         * provisional table the teacher last asked for.
+         */
+        let results: SessionResults | null = null;
+        let resultsState = 'none';
+        if (!isStudentView) {
+            const closed = schedule.phase === 'closed';
+            results = sdoc.results || null;
+            if (closed && !results?.final) {
+                try { results = await computeSessionResults(domainId, sdoc, true); } catch (e) { /* the table is optional */ }
+            }
+            resultsState = results ? (results.final ? 'final' : 'provisional') : (schedule.phase === 'open' ? 'open' : 'pending');
+            if (exportAs === 'csv' && results) {
+                const csvEsc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+                const head = ['uid', 'username', 'name', ...sdoc.pids.map((pid) => pdict[pid]?.pid || String(pid)), 'total', 'max', 'attempts', 'finished', 'skipped', 'bonus'];
+                const lines = [head.map(csvEsc).join(',')];
+                for (const r of results.rows) {
+                    lines.push([
+                        r.uid, r.uname, r.name, ...sdoc.pids.map((pid) => r.scores[String(pid)]?.effective ?? 0),
+                        r.total, results.maxTotal, r.attempts, r.done, r.skipped, r.bonus,
+                    ].map(csvEsc).join(','));
+                }
+                this.response.type = 'text/csv';
+                this.response.disposition = `attachment; filename="session-${sdoc.docId.toHexString()}-results.csv"`;
+                this.response.body = `\ufeff${lines.join('\r\n')}\r\n`;
+                return;
+            }
+        }
         this.response.template = 'self_learning_detail.html';
         this.response.body = {
             sdoc,
             pdict,
             psdict,
             udict,
-            spark,
             solvedCount,
             schedule,
+            staffView: !isStudentView,
+            results,
+            resultsState,
             hideProblems,
             myScores,
+            myScore,
+            gateOf,
+            gateInfo,
+            bonuses,
+            bonusEligibleNow,
             canEdit: sdoc.owner === this.user._id
                 || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)
                 || this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM),
@@ -335,12 +808,19 @@ class SelfLearningDetailHandler extends Handler {
 class SelfLearningProblemBaseHandler extends Handler {
     sdoc: SelfLearningDoc;
     pdoc: ProblemDoc;
+    /** Students only: the task progression (one task at a time). */
+    gate?: SessionGate;
+    /** Set when `pid` is one of THIS student's bonus tasks (hidden, session-only, no tutor). */
+    bonus?: SelfLearningBonusEntry;
 
     @param('ssid', Types.ObjectId)
     @param('pid', Types.PositiveInt)
     async _prepare({ domainId }, ssid: ObjectId, pid: number) {
         this.sdoc = await loadSession(domainId, ssid);
-        if (!this.sdoc.pids.includes(pid)) throw new NotFoundError(domainId, pid);
+        const progress = this.user.hasPriv(PRIV.PRIV_USER_PROFILE)
+            ? await SelfLearningModel.getProgress(domainId, this.sdoc.docId, this.user._id) : null;
+        this.bonus = (progress?.bonuses || []).find((b) => b.docId === pid);
+        if (!this.sdoc.pids.includes(pid) && !this.bonus) throw new NotFoundError(domainId, pid);
         this.pdoc = await problem.get(domainId, pid);
         if (!this.pdoc) throw new NotFoundError(domainId, pid);
         // Homework-style schedule: before beginAt the session is closed to
@@ -350,6 +830,77 @@ class SelfLearningProblemBaseHandler extends Handler {
         if (this.isStudent && sessionSchedule(this.sdoc).phase === 'notStarted') {
             throw new ForbiddenError('This session has not started yet.');
         }
+        /*
+         * One task at a time: a student may open the current task and any
+         * task before it (finished or skipped — retries are always
+         * welcome); later tasks are locked until the current one is
+         * finished or skipped. Staff see everything.
+         */
+        if (this.isStudent) {
+            this.gate = computeGate(this.sdoc.pids, progress);
+            // A bonus task belongs to the student who earned it: always open.
+            if (!this.bonus && !this.gate.unlocked.includes(pid)) {
+                throw new ForbiddenError('This task unlocks after you finish or skip the previous one.');
+            }
+        }
+    }
+
+    /** Reload the gate after a progress change and shape it for the client. */
+    async refreshGate(domainId: string, engaged?: boolean) {
+        if (!this.isStudent) return null;
+        this.gate = computeGate(this.sdoc.pids, await SelfLearningModel.getProgress(domainId, this.sdoc.docId, this.user._id));
+        return await this.gateView(engaged);
+    }
+
+    /**
+     * The gate as the page sees it. `engaged` = the student has made at
+     * least one real, judged attempt on this task (Scratchpad pretests do
+     * not count); that is what makes Skip available — a task can be set
+     * aside only after trying it.
+     */
+    async gateView(engaged?: boolean) {
+        if (!this.gate) return null;
+        const pid = this.pdoc.docId;
+        const g = this.gate;
+        if (this.bonus) {
+            return {
+                current: g.current, next: g.next, index: g.index, total: g.total, done: g.done, skipped: g.skipped, unlocked: g.unlocked,
+                pid, isCurrent: false, isDone: false, isSkipped: false, engaged: false, canSkip: false, finished: g.current === null, isBonus: true,
+            };
+        }
+        let eng = engaged;
+        if (eng === undefined) {
+            eng = (await record.getMulti(this.args.domainId, {
+                pid, uid: this.user._id, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+            }).project({ _id: 1 }).limit(1).toArray()).length > 0;
+        }
+        return {
+            current: g.current,
+            next: g.next,
+            index: g.index,
+            total: g.total,
+            done: g.done,
+            skipped: g.skipped,
+            unlocked: g.unlocked,
+            pid,
+            isCurrent: g.current === pid,
+            isDone: g.done.includes(pid),
+            isSkipped: g.skipped.includes(pid),
+            engaged: !!eng,
+            canSkip: g.current === pid && !!eng,
+            finished: g.current === null,
+        };
+    }
+
+    /**
+     * The task counts as finished once the student is accepted AND has
+     * answered the tutor's post-acceptance question — or is accepted with
+     * no tutor to answer to. Idempotent.
+     */
+    async finishTask(domainId: string) {
+        if (!this.isStudent) return null;
+        await SelfLearningModel.markDone(domainId, this.sdoc.docId, this.user._id, this.pdoc.docId);
+        return await this.refreshGate(domainId, true);
     }
 
     /**
@@ -364,9 +915,25 @@ class SelfLearningProblemBaseHandler extends Handler {
             && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
     }
 
-    /** 'programming' | 'objective' (quiz) | 'submit_answer'. */
+    /** 'programming' | 'objective' (quiz) | 'submit_answer' — from the parsed judge config. */
     get problemKind() {
         return aiTutor.problemKindOf(this.pdoc.config);
+    }
+
+    /** P / O / S classification of this task by the site convention. */
+    get sessionKind() {
+        return sessionKindOf(this.pdoc);
+    }
+
+    /**
+     * The AI tutor exists for PROGRAMMING tasks only: a P-kind task whose
+     * config is a real judged-program type. Objective quizzes, subjective
+     * project tasks and answer-submission problems get no tutor on any
+     * surface (solve page, paper, record page).
+     */
+    get tutorEligible() {
+        if (this.bonus) return false; // bonus tasks: submit, see the verdict, retry — no tutor
+        return this.sessionKind === 'programming' && this.problemKind === 'programming';
     }
 
     /**
@@ -407,12 +974,26 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
             this.response.redirect = `${this.url('self_learning_paper', { ssid: this.sdoc.docId })}#q-${this.pdoc.docId}`;
             return;
         }
+        /*
+         * Subjective (S) tasks have no judge and no tutor: they are answered
+         * with a report + file upload on the problem page itself
+         * (subjective_task.page.js). Nothing in a session should ever open
+         * the IDE for one; legacy sessions that still list an S task are
+         * forwarded there.
+         */
+        if (this.sessionKind === 'subjective' && !this.request.json) {
+            this.response.redirect = this.url('problem_detail', { pid: this.pdoc.docId });
+            return;
+        }
         const langRange = (this.pdoc.config && typeof this.pdoc.config === 'object' && this.pdoc.config.langs)
             ? Object.fromEntries(this.pdoc.config.langs.map((i) => [i, setting.langs[i]?.display || i]))
             : setting.SETTINGS_BY_KEY.codeLang.range;
         this.UiContext.slSsid = this.sdoc.docId.toHexString();
         this.UiContext.slPid = this.pdoc.docId;
-        this.UiContext.slTutor = aiTutor.tutorConfigured() && this.isStudent;
+        // Students cannot select / copy the statement or the tutor's text.
+        this.UiContext.noCopy = this.isStudent;
+        // The tutor flows only run for programming tasks (see tutorEligible).
+        this.UiContext.slTutor = aiTutor.tutorConfigured() && this.isStudent && this.tutorEligible;
         this.UiContext.slType = this.problemKind;
         // Schedule cues for the fullscreen IDE (students only — the page
         // itself shows the notice; enforcement stays in post()).
@@ -432,12 +1013,34 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
             const listPsdict = this.user.hasPriv(PRIV.PRIV_USER_PROFILE)
                 ? await problem.getListStatus(domainId, this.user._id, this.sdoc.pids)
                 : {};
+            const g = this.gate;
             this.UiContext.slProblems = this.sdoc.pids.map((pid) => ({
                 pid,
                 title: listPdict[pid]?.title || String(pid),
-                kind: aiTutor.problemKindOf(listPdict[pid]?.config),
+                kind: listPdict[pid] ? sessionKindOf(listPdict[pid]) : 'programming',
                 status: listPsdict[pid]?.status || 0,
+                // Students: one task at a time (staff chips carry no gate).
+                ...(g ? {
+                    gate: g.done.includes(pid) ? 'done'
+                        : g.skipped.includes(pid) ? 'skipped'
+                            : g.current === pid ? 'current'
+                                : g.unlocked.includes(pid) ? 'open' : 'locked',
+                } : {}),
             }));
+            this.UiContext.slGate = await this.gateView();
+            // Bonus tasks (students): the student's own list (rail chips) and
+            // whether a new one may be requested; on a bonus task, its state.
+            if (this.isStudent) {
+                const bonuses = await refreshBonuses(domainId, this.sdoc, this.user._id);
+                this.UiContext.slBonuses = bonuses;
+                this.UiContext.slBonus = {
+                    eligible: await bonusEligible(domainId, this.sdoc, this.user._id),
+                    inProgress: bonuses.some((b) => b.status === 'drafting' || b.status === 'building'),
+                    available: aiTutor.tutorEnabled() && aiTutor.tutorConfigured(),
+                    count: bonuses.length,
+                };
+                if (this.bonus) this.UiContext.slBonusTask = bonuses.find((b) => b.docId === this.pdoc.docId) || null;
+            }
         } catch (e) { /* the rail is optional */ }
         this.response.template = 'self_learning_solve.html';
         this.response.body = {
@@ -446,6 +1049,7 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
             langRange,
             problemKind: this.problemKind,
             tutorConfigured: aiTutor.tutorConfigured(),
+            tutorEligible: this.tutorEligible,
             isStudent: this.isStudent,
             providerInfo: aiTutor.tutorProviderInfo(),
         };
@@ -458,6 +1062,16 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
         const schedNow = sessionSchedule(this.sdoc);
         if (this.isStudent && schedNow.phase === 'ended') {
             throw new ForbiddenError('This session has ended — submissions are closed.');
+        }
+        if (this.sessionKind === 'subjective') {
+            throw new BadRequestError('Subjective tasks are not judged: submit the report and files from the task page instead.');
+        }
+        if (this.bonus && !pretest) {
+            // The judge (testdata + limits) arrives with the background build.
+            const st = await bonusState(domainId, this.bonus.id);
+            if (st.status !== 'ready') throw new BadRequestError(st.status === 'failed'
+                ? 'The bonus task could not be prepared. Ask for a retry from the task list.'
+                : 'The judge for this bonus task is still being prepared — you can keep writing; submissions open in a moment.');
         }
         const config = this.pdoc.config;
         if (typeof config === 'string' || config === null) throw new ProblemConfigError();
@@ -503,6 +1117,242 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Bonus task: an AI-made challenge aimed at the student's weak points */
+/* ------------------------------------------------------------------ */
+/*
+ * Once a student has attempted every task of the session, the rail offers
+ * a Bonus Task. The AI reads the student's work — each task's knowledge
+ * points, the submission trajectory, the tutor exchanges, what was skipped
+ * — diagnoses the weak points, and writes a brief for ONE new, harder task
+ * that exercises exactly those. The AI Studio pipeline then builds it in
+ * two phases (see ai_author.ts materializeBonus): the statement first, so
+ * the student can open it right away, then the solution, cross-check,
+ * tests and sandbox verification in the background. No tutor on bonus
+ * tasks: submit, see the verdict, retry.
+ */
+const BONUS_SYSTEM = `You are the assistant of a programming tutor. From one student's work in a self-learning session you identify the student's WEAK POINTS and design the brief for ONE new programming task that makes them practise exactly those. You never solve anything for the student; you only design practice. You write in English only, whatever language the student's code, comments or the session's tasks use.`;
+
+const BONUS_PROMPT = `Below is a student's complete work in a session: each task with its knowledge points, the student's judged attempts (verdicts, scores, the latest code), and the exchanges with the Socratic tutor. Diagnose and design.
+Reply with ONLY JSON:
+{"weakPoints": [{"name": string, "evidence": string}], "strengths": [string], "difficulty": "medium"|"challenge", "brief": string}
+Rules:
+- "weakPoints": 2 to 5 knowledge points the student struggled with — repeated wrong verdicts on the same point, tutor questions answered incorrectly or only after several hints, tasks skipped, patterns visible in the code. Use the EXACT names from the knowledge-point list when they match; "evidence" is one short sentence pointing at the attempts or exchanges that show it.
+- "strengths": 1 to 3 points the student clearly handles (so the task does not waste effort there).
+- "difficulty": "challenge" when the student solved most tasks quickly, "medium" when they struggled a lot.
+- "brief": 4 to 8 sentences describing ONE self-contained programming task (standard input / output, deterministic answer) whose correct solution REQUIRES every weak point, in a FRESH scenario — never a rephrasing of a session task — and harder than the session's tasks. Describe the scenario, the input and output, and which weak points it forces; do not write the full statement or any solution. Write everything in English only.`;
+
+/** Every session task has at least one judged, non-pretest attempt by the student. */
+async function bonusEligible(domainId: string, sdoc: SelfLearningDoc, uid: number): Promise<boolean> {
+    if (!sdoc.pids.length) return false;
+    const rows = await record.getMulti(domainId, {
+        pid: { $in: sdoc.pids }, uid, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+    }).project({ pid: 1 }).toArray();
+    const tried = new Set(rows.map((r: any) => r.pid));
+    return sdoc.pids.every((pid) => tried.has(pid));
+}
+
+/** Refresh the student's bonus entries from their drafts and return the client shape. */
+async function refreshBonuses(domainId: string, sdoc: SelfLearningDoc, uid: number) {
+    const progress = await SelfLearningModel.getProgress(domainId, sdoc.docId, uid);
+    const out: any[] = [];
+    for (const b of progress?.bonuses || []) {
+        let entry = b;
+        if (b.status !== 'ready' && b.status !== 'failed') {
+            try {
+                const st = await bonusState(domainId, b.id);
+                const patch: any = { status: st.status, message: st.message.slice(0, 300) };
+                if (st.docId && !b.docId) { patch.docId = st.docId; patch.pid = st.pid; }
+                if (st.title && !b.title) patch.title = st.title;
+                if (st.status === 'ready' && !b.readyAt) patch.readyAt = new Date();
+                await SelfLearningModel.updateBonus(domainId, sdoc.docId, uid, b.id, patch);
+                entry = { ...b, ...patch };
+            } catch (e) { /* keep the stored state */ }
+        }
+        out.push({
+            id: entry.id.toHexString(),
+            docId: entry.docId || null,
+            pid: entry.pid || null,
+            title: entry.title || '',
+            status: entry.status,
+            message: entry.message || '',
+            weakPoints: entry.weakPoints || [],
+            createdAt: entry.createdAt,
+        });
+    }
+    return out;
+}
+
+class SelfLearningBonusHandler extends Handler {
+    sdoc: SelfLearningDoc;
+
+    @param('ssid', Types.ObjectId)
+    async prepare({ domainId }, ssid: ObjectId) {
+        this.sdoc = await loadSession(domainId, ssid);
+        if (!this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) throw new ForbiddenError('Please sign in.');
+        // Same student test as the task surfaces: staff have the Studio.
+        const staff = this.user.own(this.sdoc) || this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK) || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
+        if (staff) throw new ForbiddenError('Bonus tasks are generated for students of the session.');
+        if (sessionSchedule(this.sdoc).phase === 'notStarted') throw new ForbiddenError('This session has not started yet.');
+    }
+
+    async get({ domainId }) {
+        const bonuses = await refreshBonuses(domainId, this.sdoc, this.user._id);
+        this.response.body = {
+            bonuses,
+            eligible: await bonusEligible(domainId, this.sdoc, this.user._id),
+            inProgress: bonuses.some((b) => b.status === 'drafting' || b.status === 'building'),
+            available: aiTutor.tutorEnabled() && aiTutor.tutorConfigured(),
+        };
+    }
+
+    /** Diagnose the student's weak points and start a new bonus task. */
+    async postCreate({ domainId }) {
+        if (!(aiTutor.tutorEnabled() && aiTutor.tutorConfigured())) throw new ForbiddenError('The AI assistant is not configured. Please ask the administrator to set an API key.');
+        if (!await bonusEligible(domainId, this.sdoc, this.user._id)) throw new BadRequestError('Attempt every task of the session first — then a bonus task can be made for you.');
+        // ONE bonus task per student per session: it is the session's
+        // capstone, built from the whole body of work. A failed build can be
+        // retried (postRetry); a second task is never created.
+        const existing = await refreshBonuses(domainId, this.sdoc, this.user._id);
+        if (existing.length) {
+            const b = existing[0];
+            throw new BadRequestError(b.status === 'failed'
+                ? 'Your bonus task could not be prepared — retry it from the side panel instead of creating another.'
+                : 'This session already has your bonus task; each session offers exactly one.');
+        }
+        await this.limitRate('ai_tutor', 60, 3, '{{user}}');
+        const uid = this.user._id;
+
+        // ---- the student's work, task by task ----
+        const pdict = await problem.getList(domainId, this.sdoc.pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
+        const progress = await SelfLearningModel.getProgress(domainId, this.sdoc.docId, uid);
+        const langCount = new Map<string, number>();
+        const blocks: string[] = [];
+        for (const pid of this.sdoc.pids) {
+            const pdoc = pdict[pid];
+            if (!pdoc) continue;
+            const recs = await record.getMulti(domainId, { pid, uid, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING } })
+                .sort({ _id: 1 }).limit(20).project({ status: 1, score: 1, lang: 1, code: 1 }).toArray();
+            for (const r of recs as any[]) if (r.lang) langCount.set(r.lang, (langCount.get(r.lang) || 0) + 1);
+            const trajectory = (recs as any[]).map((r, i) => `${i + 1}:${STATUS_SHORT_TEXTS[r.status] || STATUS_TEXTS[r.status] || r.status}${r.score ? `(${r.score})` : ''}`).join(' → ');
+            const last = (recs as any[])[recs.length - 1];
+            const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, pid, uid);
+            const exchanges = (thread?.messages || []).filter((m: any) => m.kind === 'anno').slice(-10)
+                .map((m: any) => `${m.role === 'user' ? 'STUDENT' : 'TUTOR'}${m.line ? ` [line ${m.line}]` : ''}: ${String(m.content).replace(/\s+/g, ' ').slice(0, 220)}`).join('\n');
+            const state = progress?.done?.includes(pid) ? 'finished' : progress?.skipped?.includes(pid) ? 'SKIPPED' : 'in progress';
+            blocks.push([
+                `=== TASK ${pdoc.pid || pid}: ${pdoc.title} [${state}] ===`,
+                `Knowledge points: ${(pdoc.tag || []).join('; ') || '(none)'}`,
+                `Attempts: ${trajectory || '(none)'}`,
+                last?.code ? `Latest code (${last.lang}):\n${String(last.code).slice(0, 1200)}` : '',
+                exchanges ? `Tutor exchanges:\n${exchanges}` : 'Tutor exchanges: (none)',
+            ].filter((x) => x).join('\n'));
+        }
+        const language = [...langCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || this.sdoc.pids.length && (pdict[this.sdoc.pids[0]]?.config as any)?.langs?.[0] || 'cc.cc17';
+        const catalog = await KnowledgeModel.list(domainId, '', 300);
+        const catalogBlock = catalog.length ? `Knowledge-point list of this course (use exact names): ${catalog.map((k) => k.name).join('; ')}` : '';
+        const raw = await aiTutor.callProvider(BONUS_SYSTEM, [{
+            role: 'user',
+            content: [BONUS_PROMPT, catalogBlock, blocks.join('\n\n').slice(0, 24000)].filter((x) => x).join('\n\n'),
+        }], { temperature: 0.4 });
+        let j: any;
+        try {
+            j = parseJsonLoose(raw);
+        } catch (e) {
+            const retry = await aiTutor.callProvider(BONUS_SYSTEM, [
+                { role: 'user', content: [BONUS_PROMPT, catalogBlock, blocks.join('\n\n').slice(0, 24000)].filter((x) => x).join('\n\n') },
+                { role: 'assistant', content: raw.slice(0, 6000) },
+                { role: 'user', content: 'Your previous reply was not valid JSON. Reply again with ONLY the JSON value.' },
+            ], { temperature: 0 });
+            j = parseJsonLoose(retry);
+        }
+        const weak: { name: string, description?: string }[] = [];
+        for (const w of (Array.isArray(j?.weakPoints) ? j.weakPoints : []).slice(0, 5)) {
+            const name = KnowledgeModel.normalizeName(w?.name);
+            if (!name) continue;
+            const canonical = await KnowledgeModel.resolve(domainId, name);
+            const doc = canonical ? await KnowledgeModel.getByName(domainId, canonical) : null;
+            weak.push(doc?.description ? { name: doc.name, description: doc.description } : { name: canonical || name });
+        }
+        const brief = String(j?.brief || '').trim();
+        if (!brief) throw new BadRequestError('The AI could not design a bonus task from your work yet. Please try again.');
+        const evidence = (Array.isArray(j?.weakPoints) ? j.weakPoints : []).map((w: any) => `- ${w?.name}: ${w?.evidence || ''}`).join('\n');
+        const titles = this.sdoc.pids.map((pid) => pdict[pid]?.title).filter((x) => x).join('; ');
+        const id = await createBonusDraft(domainId, this.sdoc.owner, {
+            topic: brief,
+            notes: [
+                'This is a BONUS TASK generated for ONE student who has attempted every task of a self-learning session. It exists to make them practise their weak points.',
+                `Weak points (evidence from their work):\n${evidence}`,
+                (Array.isArray(j?.strengths) && j.strengths.length) ? `Already solid (do not center the task on these): ${j.strengths.join('; ')}` : '',
+                `Must be clearly harder than the session's tasks and use a fresh scenario. Never reuse or rephrase these: ${titles}.`,
+                'Single program, standard input/output, deterministic output. Keep the statement self-contained; do not mention that it targets weak points.',
+            ].filter((x) => x).join('\n\n'),
+            language,
+            difficulty: j?.difficulty === 'medium' ? 'medium' : 'challenge',
+            knowledge: weak,
+        }, { ssid: this.sdoc.docId, uid });
+        const entry: SelfLearningBonusEntry = {
+            id, status: 'drafting', message: 'Drafting the statement…', weakPoints: weak.map((w) => w.name), createdAt: new Date(),
+        };
+        await SelfLearningModel.addBonus(domainId, this.sdoc.docId, uid, entry);
+        // Phase 1 in the background: the statement, then the hidden problem;
+        // phase 2 (solution, tests, verification) follows on its own.
+        const ssid = this.sdoc.docId;
+        materializeBonus(domainId, id).then(async (m) => {
+            await SelfLearningModel.updateBonus(domainId, ssid, uid, id, { docId: m.docId, pid: m.pid, title: m.title, status: 'building', message: 'Preparing the judge…' });
+        }).catch(async (e) => {
+            await SelfLearningModel.updateBonus(domainId, ssid, uid, id, { status: 'failed', message: String(e.message || e).slice(0, 300) });
+        });
+        this.response.body = {
+            bonus: {
+                id: id.toHexString(), docId: null, pid: null, title: '', status: 'drafting', message: entry.message, weakPoints: entry.weakPoints, createdAt: entry.createdAt,
+            },
+        };
+    }
+
+    /** Retry a failed bonus build. */
+    @param('id', Types.ObjectId)
+    async postRetry({ domainId }, id: ObjectId) {
+        const progress = await SelfLearningModel.getProgress(domainId, this.sdoc.docId, this.user._id);
+        const b = (progress?.bonuses || []).find((x) => x.id.equals(id));
+        if (!b) throw new NotFoundError(id);
+        if (b.status !== 'failed') throw new BadRequestError('Only a failed bonus task can be retried.');
+        await this.limitRate('ai_tutor', 60, 3, '{{user}}');
+        await SelfLearningModel.updateBonus(domainId, this.sdoc.docId, this.user._id, id, { status: b.docId ? 'building' : 'drafting', message: 'Retrying…' });
+        const ssid = this.sdoc.docId;
+        const uid = this.user._id;
+        retryBonus(domainId, id).catch(async (e) => {
+            await SelfLearningModel.updateBonus(domainId, ssid, uid, id, { status: 'failed', message: String(e.message || e).slice(0, 300) });
+        });
+        this.response.body = { ok: 1 };
+    }
+}
+
+/*
+ * Skip: after at least one judged attempt and still being stuck, the student
+ * sets the CURRENT task aside and moves on; it stays open for a retry any
+ * time. Its own sub-route (like /tutor and /record): the framework runs the
+ * solve handler's plain post() — the code submission — before ANY operation
+ * post, so a skip operation on the solve URL would hit the submission's
+ * validators first.
+ */
+class SelfLearningSkipHandler extends SelfLearningProblemBaseHandler {
+    async post({ domainId }) {
+        if (!this.isStudent) throw new ForbiddenError('Only students move through a session one task at a time.');
+        const view = await this.gateView();
+        if (!view || !view.isCurrent) throw new BadRequestError('Only the current task can be skipped.');
+        if (!view.engaged) throw new BadRequestError('Submit at least one attempt first — then you may skip this task.');
+        await SelfLearningModel.markSkipped(domainId, this.sdoc.docId, this.user._id, this.pdoc.docId);
+        const gate = await this.refreshGate(domainId, true);
+        this.response.body = {
+            gate,
+            nextUrl: gate?.current
+                ? this.url('self_learning_solve', { ssid: this.sdoc.docId, pid: gate.current })
+                : this.url('self_learning_detail', { ssid: this.sdoc.docId }),
+        };
+    }
+}
+
 class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
     @param('rid', Types.ObjectId, true)
     @param('full', Types.Boolean)
@@ -517,7 +1367,15 @@ class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
         if (!rdoc || rdoc.pid !== this.pdoc.docId) throw new NotFoundError(domainId, rid);
         if (rdoc.uid !== this.user._id && !this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM)) throw new PermissionError();
         const judged = !JUDGING.includes(rdoc.status);
+        // Progression: the first judged attempt makes Skip available; an
+        // accepted verdict with no tutor to answer to finishes the task.
+        let gate: any = null;
+        if (judged && rdoc.uid === this.user._id && this.isStudent) {
+            const noTutor = !(aiTutor.tutorEnabled() && aiTutor.tutorConfigured() && this.tutorEligible);
+            gate = (rdoc.status === STATUS.STATUS_ACCEPTED && noTutor) ? await this.finishTask(domainId) : await this.refreshGate(domainId, true);
+        }
         this.response.body = {
+            gate,
             rid: rid.toHexString(),
             status: rdoc.status,
             statusText: STATUS_TEXTS[rdoc.status] || `${rdoc.status}`,
@@ -565,87 +1423,18 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
     checkTutorAllowed() {
         if (!aiTutor.tutorEnabled()) throw new ForbiddenError('The AI tutor is disabled.');
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
+        // Programming tasks only — every operation of this handler, history
+        // included, is refused for objective / subjective / answer tasks.
+        if (!this.tutorEligible) throw new ForbiddenError('The AI tutor is only available for programming tasks.');
         if (!this.isStudent) throw new ForbiddenError('The AI tutor is only available to student accounts.');
     }
 
-    /** Best-effort spark update — motivation must never break tutoring. */
-    async sparkTouch(domainId: string, inc: any = {}) {
-        try {
-            return await SelfLearningModel.touchSpark(domainId, this.user._id, inc);
-        } catch (e) {
-            logger.warn('[pta-ui] spark update failed: %s', e.message);
-            return null;
-        }
-    }
-
-    static sparkView(s: any) {
-        if (!s) return null;
-        return {
-            streak: s.streak || 0,
-            accepted: s.accepted || 0,
-            cleanSolves: s.cleanSolves || 0,
-            comebacks: s.comebacks || 0,
-            cardAnswers: s.cardAnswers || 0,
-            challengesCleared: s.challengesCleared || 0,
-            badges: s.badges || [],
-        };
-    }
-
-    static publicBadges(badges: any[]) {
-        return (badges || []).map((b) => ({ id: b.id, icon: b.icon, title: b.title, desc: b.desc }));
-    }
-
-    /** The Boss Challenge offer/state payload for the client. */
-    challengePayload(thread: TutorThreadDoc | null) {
-        if (!['programming', 'objective'].includes(this.problemKind)) return null;
-        const c = thread?.challenge;
-        if (c?.state === 'cleared') return { state: 'cleared' };
-        if (c?.state === 'declined') return { state: 'declined' };
-        if (c?.state === 'active') {
-            return {
-                state: 'active', available: true, title: c.title || 'Boss Challenge', hook: c.hook || '', question: c.question || '',
-            };
-        }
-        return { state: 'offered', available: true };
-    }
-
-    /**
-     * First-accept bookkeeping shared by every path a fresh Accepted verdict
-     * can arrive through (postAnnotate for programming, postAccepted for
-     * quizzes, postStart for the record-page flows). attemptCountAtAc counts
-     * the accepted attempt itself; the thread flag makes it fire exactly once
-     * per student per problem.
-     */
-    async sparkOnAccepted(domainId: string, thread: TutorThreadDoc | null, attemptCountAtAc: number) {
-        if (!thread || thread.firstAcceptedAt) return this.sparkTouch(domainId);
-        try {
-            await SelfLearningModel.setThreadFields(thread._id, { firstAcceptedAt: new Date() });
-        } catch (e) {
-            logger.warn('[pta-ui] firstAcceptedAt stamp failed: %s', e.message);
-        }
-        return this.sparkTouch(domainId, {
-            accepted: 1,
-            cleanSolves: attemptCountAtAc <= 1 ? 1 : 0,
-            comebacks: attemptCountAtAc >= 4 ? 1 : 0,
-        });
-    }
 
     async tutorCtx(rdoc: RecordDoc | null, attemptCount: number, everAccepted: boolean): Promise<aiTutor.TutorTurnContext> {
         const uiLang = this.user.viewLang || this.session.viewLang || system.get('server.language') || 'en';
         const problemKind = this.problemKind;
-        let objective: aiTutor.ObjectiveAnalysis | null = null;
-        if (problemKind === 'objective') {
-            // The answer key lives only in the raw testdata config.yaml. We load it
-            // server-side for the tutor's private aiming; it is never sent to the client.
-            let rawConfig = '';
-            try {
-                const raw = await problem.get(this.args.domainId, this.pdoc.docId, ['docId', 'config'] as any, true);
-                if (typeof raw?.config === 'string') rawConfig = raw.config;
-            } catch (e) { /* the tutor still works without the key */ }
-            objective = aiTutor.analyzeObjective(this.pdoc, rawConfig, rdoc, uiLang);
-        }
         let attempts: aiTutor.TutorAttempt[] | undefined;
-        if (problemKind !== 'objective' && rdoc) {
+        if (rdoc) {
             // Requirement: every tutor turn sees the WHOLE submission history so
             // its questions stay consistent across resubmissions. Older attempts
             // are truncated harder; the latest rdoc is excluded (it appears in
@@ -672,7 +1461,6 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             everAccepted,
             uiLang,
             problemKind,
-            objective,
             attempts,
         };
     }
@@ -690,11 +1478,11 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
     }
 
     /**
-     * Every judged submission gets exactly one divider in the thread. With the
-     * pop-up cards as the sole channel for programming problems, this is now
-     * shared bookkeeping: postAnnotate calls it on failures, postAccepted on
-     * successes. Returns the divider text when one was just created so the
-     * client can mirror it live.
+     * Every judged submission gets exactly one divider in the thread. The
+     * pop-up cards are the interaction channel, so this is shared
+     * bookkeeping between postAnnotate and postAnnotateReply (and the
+     * chat-style postAccepted). Returns the divider text when one was just
+     * created so the client can mirror it live.
      */
     async ensureAttemptMarker(domainId: string, rdoc: RecordDoc): Promise<{ thread: TutorThreadDoc, marker: string | null, accepted: boolean }> {
         const accepted = rdoc.status === STATUS.STATUS_ACCEPTED;
@@ -712,13 +1500,9 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
     async get() {
         this.checkTutorAllowed();
         const thread = await SelfLearningModel.getThread(this.args.domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
-        const spark = await SelfLearningModel.getSpark(this.args.domainId, this.user._id).catch(() => null);
         this.response.body = {
             messages: (thread?.messages || []).map(SelfLearningTutorHandler.mapMsg),
             attemptCount: thread?.attemptCount || 0,
-            spark: SelfLearningTutorHandler.sparkView(spark),
-            badgeCatalog: SelfLearningModel.badgeCatalog(),
-            challenge: this.challengePayload(thread),
         };
     }
 
@@ -740,13 +1524,9 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         const lastMsg = thread.messages[thread.messages.length - 1];
         // Reopening the chat on the same submission: just return existing history.
         if (sameRid && lastMsg?.role === 'assistant') {
-            const sparkNow = await SelfLearningModel.getSpark(domainId, this.user._id).catch(() => null);
             this.response.body = {
                 messages: thread.messages.map(SelfLearningTutorHandler.mapMsg),
-                spark: SelfLearningTutorHandler.sparkView(sparkNow),
-                badgeCatalog: SelfLearningModel.badgeCatalog(),
-                challenge: this.challengePayload(thread),
-            };
+                };
             return;
         }
         // First tutoring turn if the tutor has never spoken in this thread yet.
@@ -772,15 +1552,8 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         const reply = await aiTutor.runTutorTurn(ctx, thread.messages, directive);
         await SelfLearningModel.pushMessages(thread._id, [{ role: 'assistant', kind: 'chat', content: reply }]);
         const messages = [...thread.messages, { role: 'assistant', kind: 'chat', content: reply }];
-        const touched = accepted && !sameRid
-            ? await this.sparkOnAccepted(domainId, thread, attemptCount || 1)
-            : await this.sparkTouch(domainId);
         this.response.body = {
             messages: messages.map((m: any) => SelfLearningTutorHandler.mapMsg(m)),
-            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
-            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
-            badgeCatalog: SelfLearningModel.badgeCatalog(),
-            challenge: this.challengePayload(await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id)),
         };
     }
 
@@ -817,18 +1590,14 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 role: 'assistant', kind: 'anno', content: annotation.question, line: annotation.line, endLine: annotation.endLine,
             }]);
         }
-        // Spark: a FRESH accepted divider means this attempt just won —
-        // counted once per problem; every call keeps the daily streak alive.
-        const touched = accepted && marker
-            ? await this.sparkOnAccepted(domainId, thread, thread?.attemptCount || 1)
-            : await this.sparkTouch(domainId);
+        // Progression: accepted and nothing left for the tutor to ask → the
+        // task is finished right away (otherwise the reflection answer does it).
+        const gate = (accepted && !annotation) ? await this.finishTask(domainId) : await this.gateView();
         this.response.body = {
             annotation,
             marker,
             markerAccepted: accepted,
-            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
-            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
-            challenge: accepted ? this.challengePayload(thread) : null,
+            gate,
         };
     }
 
@@ -878,18 +1647,22 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 role: 'assistant', kind: 'anno', content: result.reply, line, endLine, resolved: result.resolved,
             },
         ]);
-        const touched = await this.sparkTouch(domainId, { cardAnswers: 1 });
+        // Progression: the task is finished only when the tutor RESOLVES the
+        // post-acceptance reflection — the moment the card shows "you have
+        // truly mastered this problem". An unresolved answer (the tutor asks
+        // a follow-up) leaves the task open; the student answers again.
+        const gate = (rdoc.status === STATUS.STATUS_ACCEPTED && result.resolved)
+            ? await this.finishTask(domainId)
+            : await this.refreshGate(domainId);
         this.response.body = {
             ...result,
-            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
-            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+            gate,
         };
     }
 
     @param('text', Types.String)
     async postMessage({ domainId }, text: string) {
         this.checkTutorAllowed();
-        this.sparkTouch(domainId); // fire-and-forget: chatting counts as a practice day
         await this.limitRate('ai_tutor', 60, 10, '{{user}}');
         text = text.trim();
         if (!text) throw new ValidationError('text');
@@ -917,163 +1690,18 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         await this.limitRate('ai_tutor', 60, 10, '{{user}}');
         const rdoc = await this.loadOwnRecord(domainId, rid);
         if (rdoc.status !== STATUS.STATUS_ACCEPTED) throw new BadRequestError('This submission was not accepted.');
-        if (this.problemKind === 'programming') {
-            // The card channel asks nothing on success (the student should not
-            // lose patience after winning); just record the accepted divider so
-            // the read-only history shows the milestone. Spark counting also
-            // lives in postAnnotate — the firstAcceptedAt stamp keeps the two
-            // paths from ever double-counting.
-            const { thread, marker } = await this.ensureAttemptMarker(domainId, rdoc);
-            const touched = marker
-                ? await this.sparkOnAccepted(domainId, thread, thread?.attemptCount || 1)
-                : await this.sparkTouch(domainId);
-            this.response.body = {
-                reply: null,
-                marker,
-                markerAccepted: true,
-                spark: SelfLearningTutorHandler.sparkView(touched?.spark),
-                newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
-                challenge: this.challengePayload(thread),
-            };
-            return;
-        }
-        // Quizzes: ensure the thread + accepted divider exist even when this
-        // is a clean first-try accept (no failed attempts, so no prior chat).
-        const { thread, marker: attemptMarker } = await this.ensureAttemptMarker(domainId, rdoc);
-        const touched = attemptMarker
-            ? await this.sparkOnAccepted(domainId, thread, thread?.attemptCount || 1)
-            : await this.sparkTouch(domainId);
-        const sparkFields = {
-            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
-            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
-            challenge: this.challengePayload(thread),
-        };
-        const hasDialogue = (thread?.messages || []).some((m) => m.role === 'assistant');
-        if (!thread || !hasDialogue) {
-            // Nothing to congratulate in-chat yet — the client celebrates via
-            // spark and offers the Boss Challenge directly.
-            this.response.body = { reply: null, marker: attemptMarker, markerAccepted: true, ...sparkFields };
-            return;
-        }
-        const marker: Omit<TutorMessage, 'at'> = { role: 'user', kind: 'accepted', content: 'My new submission was ACCEPTED!' };
-        const ctx = await this.tutorCtx(rdoc, thread.attemptCount || 1, true);
-        const reply = await aiTutor.runTutorTurn(ctx, [...thread.messages, { ...marker, at: new Date() }], aiTutor.ACCEPTED_DIRECTIVE);
-        await SelfLearningModel.pushMessages(thread._id, [marker, { role: 'assistant', kind: 'chat', content: reply }], { rid });
-        this.response.body = { reply, ...sparkFields };
-    }
-
-    /**
-     * Boss Challenge: start (or resume) the optional post-acceptance stretch
-     * goal. Generation runs once per problem; the stored question survives
-     * page reloads so the student can come back to it.
-     */
-    @param('rid', Types.ObjectId, true)
-    async postChallenge({ domainId }, rid?: ObjectId) {
-        this.checkTutorAllowed();
-        if (!['programming', 'objective'].includes(this.problemKind)) throw new BadRequestError('The Boss Challenge is only available for programming and quiz problems.');
-        await this.limitRate('ai_tutor', 60, 10, '{{user}}');
-        const thread = await SelfLearningModel.ensureThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
-        if (thread.challenge?.state === 'cleared') throw new BadRequestError('You already cleared the Boss Challenge for this problem.');
-        if (thread.challenge?.state === 'active' && thread.challenge.question) {
-            this.response.body = {
-                title: thread.challenge.title || 'Boss Challenge',
-                hook: thread.challenge.hook || '',
-                question: thread.challenge.question,
-                resumed: true,
-            };
-            return;
-        }
-        if (!thread.firstAcceptedAt && !(await this.everAccepted(domainId))) {
-            throw new BadRequestError('Get the problem Accepted first — then the Boss Challenge unlocks.');
-        }
-        // The challenge grows out of the student's own accepted solution.
-        let rdoc: RecordDoc | null = null;
-        if (rid) rdoc = await this.loadOwnRecord(domainId, rid);
-        if (!rdoc || rdoc.status !== STATUS.STATUS_ACCEPTED) {
-            const [latest] = await record.getMulti(domainId, {
-                uid: this.user._id, pid: this.pdoc.docId, status: STATUS.STATUS_ACCEPTED,
-            }).sort({ _id: -1 }).limit(1).toArray();
-            rdoc = latest || rdoc;
-        }
-        const ctx = await this.tutorCtx(rdoc, thread.attemptCount || 1, true);
-        const gen = await aiTutor.runChallengeGeneration(ctx);
-        await SelfLearningModel.pushMessages(thread._id, [{
-            role: 'assistant', kind: 'anno', content: `🔥 ${gen.title} — ${gen.challenge}`,
-        }], {
-            challenge: {
-                state: 'active', title: gen.title, hook: gen.hook, question: gen.challenge, rid: rdoc?._id,
-            },
-        });
-        await this.sparkTouch(domainId);
-        this.response.body = { title: gen.title, hook: gen.hook, question: gen.challenge };
-    }
-
-    @param('text', Types.String)
-    @param('history', Types.String, true)
-    async postChallengeReply({ domainId }, text: string, history = '') {
-        this.checkTutorAllowed();
-        await this.limitRate('ai_tutor', 60, 10, '{{user}}');
-        const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
-        if (!thread || thread.challenge?.state !== 'active' || !thread.challenge.question) {
-            throw new BadRequestError('No active Boss Challenge. Start one first.');
-        }
-        const maxMessages = +system.get('ai_tutor.max_messages') || 80;
-        if (thread.messages.length >= maxMessages) {
-            throw new BadRequestError('This tutoring conversation reached its length limit. Please reset it to continue.');
-        }
-        let turns: { role: string, content: string }[] = [];
-        try {
-            const parsed = JSON.parse(history || '[]');
-            if (Array.isArray(parsed)) {
-                turns = parsed
-                    .filter((t) => t && typeof t === 'object')
-                    .map((t) => ({ role: String(t.role || ''), content: String(t.content || '').slice(0, 800) }))
-                    .slice(-12);
-            }
-        } catch (e) { /* ignore malformed history */ }
-        let rdoc: RecordDoc | null = null;
-        if (thread.challenge.rid) rdoc = await record.get(domainId, thread.challenge.rid).catch(() => null);
-        if (rdoc && (rdoc.uid !== this.user._id || rdoc.pid !== this.pdoc.docId)) rdoc = null;
-        const ctx = await this.tutorCtx(rdoc, thread.attemptCount || 1, true);
-        if (typeof this.args.code === 'string' && this.args.code.trim()) {
-            ctx.liveCode = String(this.args.code).slice(0, 8000);
-        }
-        const result = await aiTutor.runChallengeTurn(ctx, {
-            challenge: thread.challenge.question,
-            history: turns,
-            answer: text.slice(0, 1500),
-        });
-        await SelfLearningModel.pushMessages(thread._id, [
-            { role: 'user', kind: 'anno', content: text.slice(0, 1500) },
-            {
-                role: 'assistant', kind: 'anno', content: result.reply, resolved: result.cleared,
-            },
-        ], result.cleared ? { 'challenge.state': 'cleared', 'challenge.clearedAt': new Date() } : {});
-        const touched = await this.sparkTouch(domainId, { cardAnswers: 1, challengesCleared: result.cleared ? 1 : 0 });
+        // The card channel asks nothing on success (the student should not
+        // lose patience after winning); just record the accepted divider so
+        // the read-only history shows the milestone.
+        const { thread, marker } = await this.ensureAttemptMarker(domainId, rdoc);
         this.response.body = {
-            reply: result.reply,
-            cleared: result.cleared,
-            spark: SelfLearningTutorHandler.sparkView(touched?.spark),
-            newBadges: SelfLearningTutorHandler.publicBadges(touched?.newBadges || []),
+            reply: null,
+            marker,
+            markerAccepted: true,
         };
     }
 
-    async postChallengeDecline({ domainId }) {
-        this.checkTutorAllowed();
-        const thread = await SelfLearningModel.ensureThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
-        if (thread.challenge?.state === 'cleared') {
-            this.response.body = { ok: 1, state: 'cleared' };
-            return;
-        }
-        await SelfLearningModel.setThreadFields(thread._id, { challenge: { ...(thread.challenge || {}), state: 'declined' } });
-        this.response.body = { ok: 1, state: 'declined' };
-    }
 
-    async postReset({ domainId }) {
-        this.checkTutorAllowed();
-        await SelfLearningModel.resetThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
-        this.response.body = { ok: 1 };
-    }
 }
 
 const logger = new Logger('self-learning');
@@ -2081,9 +2709,11 @@ class SelfLearningPaperHandler extends Handler {
          * story lives with the assessment), the SELF-LEARNING paper is the
          * primary answering surface for objective tasks — the solve route
          * redirects here. So each section carries its own submit + record
-         * + tutor endpoints (the solve handler's POST and sub-routes, so
-         * records, verdict polling, Spark and the Boss Challenge behave
-         * exactly as the single-problem page did).
+         * endpoints (the solve handler's POST and /record sub-route), giving
+         * per-question verdict polling. There is NO tutor on the paper: the
+         * AI tutor is a programming-only feature. New sessions cannot list
+         * objective tasks at all (see SelfLearningEditHandler); this page
+         * keeps legacy sessions answerable.
          */
         const isStudentView = !this.user.own(sdoc)
             && !this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK)
@@ -2103,11 +2733,8 @@ class SelfLearningPaperHandler extends Handler {
             storeKey: ssid.toHexString(),
             docIds: sdoc.pids || [],
             canSubmit: !closed,
-            slTutor: aiTutor.tutorConfigured() && isStudentView,
-            ssid: ssid.toHexString(),
             submitUrlFor: (docId) => solveUrl(docId),
             recordUrlFor: (docId) => `${solveUrl(docId)}/record`,
-            tutorUrlFor: (docId) => `${solveUrl(docId)}/tutor`,
             chipHrefFor: (pdoc) => this.url('self_learning_solve', { ssid, pid: pdoc.docId }),
         });
         Object.assign(this.response.body, { schedule, scheduleClosed: closed });
@@ -2129,11 +2756,7 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
     resultsWithheld?: boolean,
     /** Self-learning: the paper answers in place (per-task submit + verdicts). */
     canSubmit?: boolean,
-    /** Self-learning: mount the floating Socratic tutor on the paper. */
-    slTutor?: boolean,
-    ssid?: string,
     recordUrlFor?: (docId: number) => string,
-    tutorUrlFor?: (docId: number) => string,
 }) {
     const pdocs = (await Promise.all((opts.docIds || []).map((docId) => problem.get(domainId, docId))))
         .filter((x) => x);
@@ -2145,7 +2768,6 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
         title: pdoc.title,
         submitUrl: opts.submitUrlFor(pdoc.docId),
         recordUrl: opts.recordUrlFor ? opts.recordUrlFor(pdoc.docId) : '',
-        tutorUrl: opts.tutorUrlFor ? opts.tutorUrlFor(pdoc.docId) : '',
         content: pdoc.content,
     }));
     h.response.template = 'objective_paper.html';
@@ -2161,8 +2783,7 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
     h.UiContext.paperKey = opts.storeKey;
     h.UiContext.paperWithheld = !!opts.resultsWithheld;
     h.UiContext.paperCanSubmit = !!opts.canSubmit;
-    if (opts.slTutor !== undefined) h.UiContext.slTutor = !!opts.slTutor;
-    if (opts.ssid) h.UiContext.slSsid = opts.ssid;
+    h.UiContext.noCopy = !(h.user.hasPerm(PERM.PERM_EDIT_PROBLEM) || h.user.hasPerm(PERM.PERM_CREATE_PROBLEM));
     /*
      * The fixed-left problems rail (auto_scratchpad's sl-rail) replaces the
      * paper's own sidebar: every task of the container, all kinds, with the
@@ -2210,16 +2831,22 @@ export async function apply(ctx: Context) {
     // Subjective (project-level) tasks: submissions + file downloads.
     ctx.Route('subjective_task', '/p/:pid/subjective', SubjectiveTaskHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('subjective_task_file', '/p/:pid/subjective/file', SubjectiveFileHandler, PRIV.PRIV_USER_PROFILE);
-    // AI Studio (teacher problem authoring). Registered HERE, not in
-    // ai_author.ts: new handler files are only discovered at boot and the
-    // HMR watcher cannot see them, so their routes would 404 until a cold
-    // restart. self_learning.ts is always loaded and hot-reloads.
+    // The AI Studio routes (/ai-studio, /ai-studio/:id) are registered by
+    // ai_author.ts itself — see the HMR note in that file's apply().
     ctx.Route('contest_paper', '/contest/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_CONTEST);
     ctx.Route('homework_paper', '/homework/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_HOMEWORK);
     ctx.Route('self_learning_paper', '/self-learning/:ssid/paper', SelfLearningPaperHandler, PRIV.PRIV_USER_PROFILE);
-    ctx.Route('ai_studio', '/ai-studio', AiStudioHandler, PRIV.PRIV_USER_PROFILE);
-    ctx.Route('ai_studio_detail', '/ai-studio/:id', AiStudioDetailHandler, PRIV.PRIV_USER_PROFILE);
-    registerAiStudioTemplates(ctx); // template registry survives hot-reload; no cold restart needed
+    ctx.Route('self_learning_bonus', '/self-learning/:ssid/bonus', SelfLearningBonusHandler, PRIV.PRIV_USER_PROFILE);
+    ctx.Route('self_learning_skip', '/self-learning/:ssid/p/:pid/skip', SelfLearningSkipHandler, PRIV.PRIV_USER_PROFILE);
+    // Results finalize themselves: once a session's deadline (with extension)
+    // has passed, every student's summed score is computed and stored. One
+    // worker runs the sweep; the teacher's page also computes on first sight.
+    if (!process.env.NODE_APP_INSTANCE || process.env.NODE_APP_INSTANCE === '0') {
+        const sweep = () => finalizeDueSessions().catch((e) => logger.warn('[self-learning] results sweep failed: %s', e.message));
+        const first = setTimeout(sweep, 60 * 1000);
+        const every = setInterval(sweep, 10 * 60 * 1000);
+        ctx.on('dispose', () => { clearTimeout(first); clearInterval(every); });
+    }
     const setKinds = async (h: any, source: string) => {
         if (!h?.UiContext || h.UiContext.tdocKinds || h.UiContext.trainingRail || h.UiContext.psetRail) return;
         let tdoc = h.tdoc || h.response?.body?.tdoc;

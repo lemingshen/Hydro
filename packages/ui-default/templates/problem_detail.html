@@ -108,9 +108,10 @@
             <span class="problem__tag-item interactive">{{ _('Uploaded By') }}: {{ user.render_inline(udoc, badge=false) }}</span>
           {% endif %}
           {% if pdoc.tag.length %}
-            <span name="show_tags" class="problem__tag-item interactive nojs--hide icon icon-tag">{{ _('Tags') + '>' }}</span>
+            <span name="show_tags" class="problem__tag-item interactive nojs--hide icon icon-tag">{{ _('Knowledge points') + '>' }}</span>
+            {%- set _kind = 'objective' if (pdoc.pid and (pdoc.pid|lower|first) == 'o') else ('subjective' if (pdoc.pid and (pdoc.pid|lower|first) == 's') else 'programming') -%}
             {%- for tag in pdoc.tag -%}
-              <span class="problem__tag-item tags hasjs--hide">{{ tag }}</span>
+              <a class="problem__tag-item tags hasjs--hide interactive" href="{{ url('problem_main', query={kind:_kind, tags:tag}) }}">{{ tag }}</a>
             {%- endfor -%}
           {% endif %}
         </ul>

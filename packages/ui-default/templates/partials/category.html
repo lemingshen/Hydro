@@ -1,19 +1,50 @@
-<ul class="group-list" data-widget-cf-container>
-  {% set _categories = handler.ctx.setting.get('problem.categories')|parseYaml %}
-  {%- for category, sub_categories in _categories -%}
-    <li class="group-list__item">
-      <h2 class="section__title">
-        <a href="{{ url('problem_main', query={q:'category:'+category}) }}">{{ category }}</a>
-      </h2>
-      {% if sub_categories | length > 0 %}
-        <ol class="chip-list">
-          {%- for sub_category in sub_categories -%}
-            <li class="chip-list__item">
-              <a class="typo-a" href="{{ url('problem_main', query={q:'category:'+sub_category}) }}">{{ sub_category }}</a>
-            </li>
-          {%- endfor -%}
-        </ol>
-      {% endif %}
-    </li>
+{#-
+  PTA fork: the KNOWLEDGE POINTS panel (model/knowledge.ts) — tags and
+  knowledge points are one concept, so this replaces Hydro's site-wide
+  category setting on every page that used it.
+  Two modes, decided by knowledgePanel.mode:
+    'filter' (problem set): each chip is a plain toggle link on the tags=
+      filter — comma-separated, so multi-word names are safe, unlike the
+      category: search grammar the old widget used; counts follow the
+      current tab and the viewer's visibility.
+    'pick' (problem create / edit): chips carry data-kp and the page script
+      toggles them into the tag input ("click to add").
+-#}
+<style>
+  .kpp__group { margin: 8px 0 4px; font-size: 11px; font-weight: bold; letter-spacing: .06em; text-transform: uppercase; color: var(--pta-ink-faint); }
+  .kpp__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .kpp__chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 10px; border-radius: 999px; font-size: 12px; line-height: 1.5; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-soft); text-decoration: none; transition: background .12s ease, border-color .12s ease, transform .12s var(--pta-ease); }
+  .kpp__chip:hover { border-color: var(--pta-violet-line); background: var(--pta-violet-soft); color: var(--pta-violet-text); transform: translateY(-1px); }
+  .kpp__chip--on { border-color: var(--pta-violet); background: var(--pta-violet); color: #fff; }
+  .kpp__chip--on:hover { background: var(--pta-violet); color: #fff; }
+  .kpp__chip--on::after { content: '\00d7'; opacity: .8; }
+  .kpp__n { font-size: 10.5px; opacity: .75; }
+  .kpp__foot { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+  .kpp__foot a { color: var(--pta-ink-faint); }
+  .kpp__empty { font-size: 12.5px; color: var(--pta-ink-faint); margin: 0; }
+  .kpp__hint { color: var(--pta-ink-faint); }
+</style>
+{%- set kp = knowledgePanel -%}
+{% if kp and kp.groups.length %}
+<div class="kpp">
+  {%- for g in kp.groups -%}
+    {% if g.name %}<div class="kpp__group">{% if g.name == 'Other' %}{{ _('Other') }}{% else %}{{ g.name }}{% endif %}</div>{% endif %}
+    <div class="kpp__chips">
+    {%- for p in g.points -%}
+      {%- if kp.mode == 'pick' -%}
+      <a class="kpp__chip" href="javascript:;" data-kp="{{ p.name }}" title="{{ p.description or _('Click to add or remove this knowledge point') }}">{{ p.name }}{% if p.count %}<span class="kpp__n">{{ p.count }}</span>{% endif %}</a>
+      {%- else -%}
+      <a class="kpp__chip{% if p.active %} kpp__chip--on{% endif %}" href="{{ p.href }}" title="{% if p.active %}{{ _('Remove this knowledge point from the filter') }}{% else %}{{ _('Show the tasks with this knowledge point') }}{% endif %}">{{ p.name }}{% if p.count %}<span class="kpp__n">{{ p.count }}</span>{% endif %}</a>
+      {%- endif -%}
+    {%- endfor -%}
+    </div>
   {%- endfor -%}
-</ul>
+  <div class="kpp__foot">
+    {% if kp.mode != 'pick' and activeTags and activeTags.length %}<a href="{{ kp.clearHref }}">&times; {{ _('Clear filter') }}</a>{% endif %}
+    {% if kp.mode == 'pick' %}<span class="kpp__hint">{{ _('Type a new name in the field to create a knowledge point.') }}</span>{% endif %}
+    {% if kp.canManage %}<a href="{{ url('knowledge_points') }}" target="_blank" rel="noopener">{{ _('Manage') }} &nearr;</a>{% endif %}
+  </div>
+</div>
+{% else %}
+<p class="kpp__empty">{{ _('No knowledge points yet.') }}{% if kp and kp.canManage %} <a href="{{ url('knowledge_points') }}">{{ _('Manage') }} &nearr;</a>{% endif %}</p>
+{% endif %}

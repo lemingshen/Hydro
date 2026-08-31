@@ -28,6 +28,7 @@ import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
 import domain from '../model/domain';
 import * as oplog from '../model/oplog';
+import KnowledgeModel from '../model/knowledge';
 import problem from '../model/problem';
 import record from '../model/record';
 import * as setting from '../model/setting';
@@ -97,7 +98,7 @@ export interface QueryContext {
  * into an object at read time), hence the regex matching here.
  */
 const KIND_OBJECTIVE_RE = /^\s*type:\s*['"]?objective/im;
-const PROBLEM_KIND_FILTERS: Record<string, any> = {
+export const PROBLEM_KIND_FILTERS: Record<string, any> = {
     subjective: { pid: /^s/i },
     objective: {
         $or: [
@@ -325,7 +326,78 @@ export class ProblemMainHandler extends Handler {
                 sort: sortStrategy,
                 kind,
                 kindCounts,
+                // The tags= filter as typed, so the search form and the panel
+                // links can carry it along; the panel marks these as active.
+                tags: tagList.join(','),
+                activeTags: tagList,
+                knowledgePanel: await this.buildKnowledgePanel(domainId, { q, sort: sortStrategy, kind, tagList }),
             };
+        }
+    }
+
+    /**
+     * PTA UI: the sidebar's "Knowledge points" panel — the domain's whole
+     * catalog (see model/knowledge.ts) instead of Hydro's site-wide
+     * category setting. Entries are grouped by their catalog category when
+     * they have one; usage counts only include the tasks THIS viewer may
+     * see, on the CURRENT tab (a quiz's knowledge points count on the
+     * Objective tab). Each chip is a plain link on the tags= filter, which
+     * is comma-separated and therefore safe for multi-word names — the
+     * category: search grammar is not.
+     */
+    async buildKnowledgePanel(domainId: string, cur: { q: string, sort: string, kind?: string, tagList: string[] }) {
+        // Toggle links: clicking a chip adds it to (or removes it from) the
+        // tags= filter while keeping the text search, sort and tab.
+        const href = (tags: string[]) => this.url('problem_main', {
+            query: {
+                ...(cur.kind ? { kind: cur.kind } : {}),
+                ...(cur.q ? { q: cur.q } : {}),
+                ...(cur.sort && cur.sort !== 'default' ? { sort: cur.sort } : {}),
+                ...(tags.length ? { tags: tags.join(',') } : {}),
+            },
+        });
+        const activeLower = new Set(cur.tagList.map((t) => t.toLowerCase()));
+        try {
+            const kindFilter = cur.kind ? PROBLEM_KIND_FILTERS[cur.kind] : null;
+            const [docs, usage] = await Promise.all([
+                KnowledgeModel.list(domainId, '', 500),
+                KnowledgeModel.tagUsage(domainId, kindFilter ? { $and: [buildQuery(this.user), kindFilter] } : buildQuery(this.user)),
+            ]);
+            const count = (name: string) => {
+                let n = 0;
+                for (const [tag, c] of usage) if (tag.toLowerCase() === name.toLowerCase()) n += c;
+                return n;
+            };
+            const groups = new Map<string, { name: string, count: number, active: boolean, href: string }[]>();
+            for (const d of docs) {
+                const key = d.category || '';
+                if (!groups.has(key)) groups.set(key, []);
+                const active = activeLower.has(d.nameLower);
+                groups.get(key)!.push({
+                    name: d.name,
+                    count: count(d.name),
+                    active,
+                    href: href(active
+                        ? cur.tagList.filter((t) => t.toLowerCase() !== d.nameLower)
+                        : [...cur.tagList, d.name]),
+                });
+            }
+            const named = [...groups.entries()].filter(([k]) => k).sort(([a], [b]) => a.localeCompare(b));
+            const other = groups.get('') || [];
+            return {
+                mode: 'filter',
+                total: docs.length,
+                groups: [
+                    ...named.map(([name, points]) => ({ name, points })),
+                    // Uncategorized points: a plain list when nothing is
+                    // grouped, an "Other" group otherwise.
+                    ...other.length ? [{ name: named.length ? 'Other' : '', points: other }] : [],
+                ],
+                clearHref: href([]),
+                canManage: this.user.hasPerm(PERM.PERM_CREATE_PROBLEM),
+            };
+        } catch (e) {
+            return { mode: 'filter', total: 0, groups: [], clearHref: href([]), canManage: this.user.hasPerm(PERM.PERM_CREATE_PROBLEM) };
         }
     }
 
@@ -525,6 +597,8 @@ export class ProblemDetailHandler extends ContestDetailBaseHandler {
     @query('tid', Types.ObjectId, true)
     @query('pjax', Types.Boolean)
     async get(...args: any[]) {
+        // PTA fork: students cannot select / copy the statement (staff can).
+        this.UiContext.noCopy = !(this.user.hasPerm(PERM.PERM_EDIT_PROBLEM) || this.user.hasPerm(PERM.PERM_CREATE_PROBLEM));
         /*
          * Objective tasks inside a Test or Homework are answered on the
          * COMBINED PAPER: its sidebar lists the container's own tasks and
@@ -803,11 +877,63 @@ async function applyAllowLangs(pdoc: ProblemDoc, owner: number, raw: string) {
     await problem.addTestdata(pdoc.domainId, pdoc.docId, 'config.yaml', Buffer.from(yamlDump(cfg)), owner);
 }
 
+/**
+ * PTA UI: the edit page's sidebar lists the domain catalog for click-to-add
+ * (mode 'pick' of partials/category.html); the JS toggles chips into the
+ * tag input. Counts cover the tasks this viewer may see, all kinds.
+ */
+async function buildKnowledgePickPanel(h: Handler, domainId: string) {
+    try {
+        const [docs, usage] = await Promise.all([
+            KnowledgeModel.list(domainId, '', 500),
+            KnowledgeModel.tagUsage(domainId, buildQuery(h.user)),
+        ]);
+        const usageLower = new Map<string, number>();
+        for (const [tag, n] of usage) usageLower.set(tag.toLowerCase(), (usageLower.get(tag.toLowerCase()) || 0) + n);
+        const groups = new Map<string, { name: string, count: number, description: string }[]>();
+        for (const d of docs) {
+            const key = d.category || '';
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key)!.push({ name: d.name, count: usageLower.get(d.nameLower) || 0, description: d.description || '' });
+        }
+        const named = [...groups.entries()].filter(([k]) => k).sort(([a], [b]) => a.localeCompare(b));
+        const other = groups.get('') || [];
+        return {
+            mode: 'pick',
+            total: docs.length,
+            groups: [
+                ...named.map(([name, points]) => ({ name, points })),
+                ...other.length ? [{ name: named.length ? 'Other' : '', points: other }] : [],
+            ],
+            canManage: h.user.hasPerm(PERM.PERM_CREATE_PROBLEM),
+        };
+    } catch (e) {
+        return { mode: 'pick', total: 0, groups: [], canManage: h.user.hasPerm(PERM.PERM_CREATE_PROBLEM) };
+    }
+}
+
+/**
+ * Tags ARE knowledge points: whatever a teacher types on the edit page is
+ * registered in the domain catalog (new names created as teacher entries,
+ * known names and aliases mapped to their canonical spelling), so the
+ * catalog and the tasks never drift apart.
+ */
+async function registerTags(domainId: string, tags: string[], owner: number): Promise<string[]> {
+    const names = (tags || []).map((t) => String(t).trim()).filter((t) => t);
+    if (!names.length) return [];
+    try {
+        return await KnowledgeModel.ensure(domainId, names.map((name) => ({ name })), { source: 'teacher', owner });
+    } catch (e) {
+        return names; // the catalog is a convenience; never block saving the problem
+    }
+}
+
 export class ProblemEditHandler extends ProblemManageHandler {
     async get() {
         this.response.body.additional_file = sortFiles(this.pdoc.additional_file || []);
         this.response.body.statementLangs = this.ctx.i18n.langs(false);
         this.response.body.allowLangs = (await readRawProblemConfig(this.pdoc)).langs || [];
+        this.response.body.knowledgePanel = await buildKnowledgePickPanel(this, this.args.domainId);
         this.response.template = 'problem_edit.html';
     }
 
@@ -825,6 +951,7 @@ export class ProblemEditHandler extends ProblemManageHandler {
     ) {
         if (typeof newPid !== 'string') newPid = `P${newPid}`;
         if (newPid !== this.pdoc.pid && await problem.get(domainId, newPid)) throw new ProblemAlreadyExistError(newPid);
+        tag = await registerTags(domainId, tag ?? [], this.user._id);
         const $update: Partial<ProblemDoc> = {
             title, content, pid: newPid, hidden, tag: tag ?? [], difficulty, html: false,
         };
@@ -1295,6 +1422,7 @@ export class ProblemCreateHandler extends Handler {
         this.response.body = {
             page_name: 'problem_create',
             additional_file: [],
+            knowledgePanel: await buildKnowledgePickPanel(this, this.args.domainId),
         };
     }
 
@@ -1311,6 +1439,7 @@ export class ProblemCreateHandler extends Handler {
     ) {
         if (typeof pid !== 'string') pid = `P${pid}`;
         if (pid && await problem.get(domainId, pid)) throw new ProblemAlreadyExistError(pid);
+        tag = await registerTags(domainId, tag ?? [], this.user._id);
         const docId = await problem.add(domainId, pid, title, content, this.user._id, tag ?? [], { hidden, difficulty });
         const cleanLangs = [...new Set(allowLangs.split(',').map((i) => i.trim()).filter((i) => i && setting.langs[i]))].slice(0, 64);
         if (cleanLangs.length) await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ langs: cleanLangs })), this.user._id);

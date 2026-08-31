@@ -147,6 +147,37 @@ const RAIL_STYLE = [
   '.sl-rail__chip.tried { border-style: solid; border-color: #ffc9c9; color: #e03131; background: #fff5f5; }',
   '.sl-rail__chip.ac { border-style: solid; border-color: transparent; color: #fff; background: linear-gradient(135deg, #40c057, #2f9e44); box-shadow: 0 4px 10px -4px rgba(47,158,68,.55); }',
   '.sl-rail__chip.current { border-color: #339af0; box-shadow: 0 0 0 2px rgba(51,154,240,.28), 0 4px 12px -4px rgba(51,154,240,.5); }',
+  '.sl-rail__chip.locked { border-style: dashed; color: #adb5bd; background: #f8f9fa; cursor: not-allowed; }',
+  '.sl-rail__chip.locked:hover { transform: none; box-shadow: none; border-color: #dfe5ef; color: #adb5bd; }',
+  '.sl-rail__chip.skipped { border-style: dashed; border-color: #ffd8a8; color: #e8590c; background: #fff4e6; }',
+  '.sl-rail__chip.gate-now:not(.ac) { border-color: #7048e8; color: #5f3dc4; box-shadow: 0 0 0 2px rgba(112,72,232,.25); }',
+  '.sl-rail__gate { flex: 0 0 auto; margin: 0 12px 6px; padding: 9px 10px; border-radius: 10px; background: #f3f0ff; border: 1px solid #d9cdff; font-size: 12px; color: #33415c; }',
+  '.sl-rail__gate b { display: block; margin-bottom: 4px; color: #5f3dc4; }',
+  '.sl-rail__gate .sl-gate__btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }',
+  '.sl-rail__gate button { border-radius: 999px; border: 1px solid #d9cdff; background: #fff; color: #5f3dc4; font-size: 12px; padding: 4px 10px; cursor: pointer; }',
+  '.sl-rail__gate button:disabled { opacity: .5; cursor: not-allowed; }',
+  '.sl-rail__gate button.sl-gate__next { background: #7048e8; border-color: #7048e8; color: #fff; }',
+  '.sl-rail__gate a.sl-gate__next { display: inline-block; border-radius: 999px; background: #7048e8; color: #fff; padding: 4px 10px; font-size: 12px; text-decoration: none; }',
+  '.sl-rail__gate a.sl-gate__next:hover { background: #5f3dc4; color: #fff; }',
+  '.sl-rail__gate .sl-gate__hint { margin-top: 5px; color: #7d8aa3; font-size: 11.5px; line-height: 1.4; }',
+  '.sl-rail__chip.bonus { border-style: dashed; border-color: #d9cdff; color: #7048e8; background: #f3f0ff; font-size: 11.5px; }',
+  '.sl-rail__chip.bonus:hover { border-color: #7048e8; }',
+  '.sl-rail__chip.bonus.current { border-style: solid; border-color: #7048e8; box-shadow: 0 0 0 2px rgba(112,72,232,.28); }',
+  '.sl-rail__chip.bonus-drafting { background: linear-gradient(90deg, #f3f0ff 0%, #e5dbff 50%, #f3f0ff 100%); background-size: 200% 100%; animation: slBonusShimmer 1.4s linear infinite; cursor: progress; }',
+  '.sl-rail__chip.bonus-building { background: #f3f0ff; box-shadow: 0 0 0 0 rgba(112,72,232,.4); animation: slBonusPulse 1.8s ease-out infinite; }',
+  '.sl-rail__chip.bonus-failed { border-color: #ffc9c9; color: #e03131; background: #fff5f5; cursor: not-allowed; }',
+  '.sl-rail__chip.bonus-new { animation: slBonusPop .5s cubic-bezier(.2,.9,.3,1.3) backwards; }',
+  '@keyframes slBonusShimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }',
+  '@keyframes slBonusPulse { 0% { box-shadow: 0 0 0 0 rgba(112,72,232,.35); } 70% { box-shadow: 0 0 0 7px rgba(112,72,232,0); } 100% { box-shadow: 0 0 0 0 rgba(112,72,232,0); } }',
+  '@keyframes slBonusPop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }',
+  '.sl-rail__bonus { flex: 0 0 auto; margin: 0 12px 8px; }',
+  '.sl-rail__bonus .sl-bonus__btn { width: 100%; border: none; border-radius: 12px; padding: 9px 10px; font-size: 12.5px; font-weight: 600; color: #fff; background: linear-gradient(135deg, #7048e8, #ae3ec9); cursor: pointer; box-shadow: 0 6px 16px -8px #7048e8; transition: transform .15s ease, box-shadow .15s ease; }',
+  '.sl-rail__bonus .sl-bonus__btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -10px #7048e8; }',
+  '.sl-rail__bonus .sl-bonus__btn:disabled { opacity: .55; cursor: default; transform: none; }',
+  '.sl-rail__bonus .sl-bonus__note { margin-top: 5px; font-size: 11.5px; line-height: 1.4; color: #7d8aa3; }',
+  '.sl-rail__bonus .sl-bonus__wait { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: #f3f0ff; border: 1px dashed #d9cdff; font-size: 12px; color: #5f3dc4; }',
+  '.sl-rail__bonus .sl-bonus__wait i { width: 12px; height: 12px; border: 2px solid #d9cdff; border-top-color: #7048e8; border-radius: 50%; animation: slBonusSpin .8s linear infinite; flex: 0 0 auto; }',
+  '@keyframes slBonusSpin { to { transform: rotate(360deg); } }',
   '.sl-rail__chip.subj.current { border-style: solid; border-color: #845ef7; box-shadow: 0 0 0 2px rgba(132,94,247,.28), 0 4px 12px -4px rgba(132,94,247,.5); color: #5f3dc4; background: #f3edff; }',
   '.sl-rail__expander { position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 260; width: 26px; height: 62px; border: 1px solid #dfe5ef; border-left: none; border-radius: 0 10px 10px 0; background: linear-gradient(180deg, #ffffff, #f6f8fc); cursor: pointer; color: #7d8aa3; font-size: 15px; box-shadow: 3px 0 12px -4px rgba(15,23,42,.18); transition: color .15s ease, box-shadow .15s ease; }',
   '.sl-rail__expander:hover { color: #1c7ed6; box-shadow: 3px 0 16px -4px rgba(28,126,214,.4); }',
@@ -171,6 +202,17 @@ const RAIL_STYLE = [
   '.pta-dark .sl-rail__chip.tried { background: #2c1e21; border-color: #6e3038; color: #ff8787; }',
   '.pta-dark .sl-rail__chip.ac { background: linear-gradient(135deg, #2f9e44, #237032); color: #eafbea; }',
   '.pta-dark .sl-rail__chip.current { border-color: #4dabf7; box-shadow: 0 0 0 2px rgba(77,171,247,.35); }',
+  '.pta-dark .sl-rail__chip.locked { background: #1f2327; border-color: #3a424b; color: #5c6670; }',
+  '.pta-dark .sl-rail__chip.skipped { background: #2c2418; border-color: #6e4a1e; color: #ffa94d; }',
+  '.pta-dark .sl-rail__chip.gate-now:not(.ac) { border-color: #b197fc; color: #d0bdfb; }',
+  '.pta-dark .sl-rail__gate { background: #2c2440; border-color: #4d3f7d; color: #cfd6dd; }',
+  '.pta-dark .sl-rail__gate b { color: #d0bdfb; }',
+  '.pta-dark .sl-rail__gate button { background: #262b31; border-color: #4d3f7d; color: #d0bdfb; }',
+  '.pta-dark .sl-rail__gate button.sl-gate__next { background: #7048e8; border-color: #7048e8; color: #fff; }',
+  '.pta-dark .sl-rail__chip.bonus { background: #2c2440; border-color: #4d3f7d; color: #d0bdfb; }',
+  '.pta-dark .sl-rail__chip.bonus-drafting { background: linear-gradient(90deg, #2c2440 0%, #3d3260 50%, #2c2440 100%); background-size: 200% 100%; }',
+  '.pta-dark .sl-rail__chip.bonus-failed { background: #2c1e21; border-color: #6e3038; color: #ff8787; }',
+  '.pta-dark .sl-rail__bonus .sl-bonus__wait { background: #2c2440; border-color: #4d3f7d; color: #d0bdfb; }',
   '.pta-dark .sl-rail__chip.subj.current { border-color: #b197fc; background: #2c2440; color: #d0bdfb; box-shadow: 0 0 0 2px rgba(177,151,252,.35); }',
   '.pta-dark .sl-rail__foot { background: linear-gradient(180deg, #22262c, #1e2227); border-top-color: #2e3338; }',
   '.pta-dark .sl-rail__expander { background: linear-gradient(180deg, #23272c, #1e2227); border-color: #2e3338; color: #9aa4ad; }',
@@ -314,13 +356,18 @@ async function getRailGroups() {
     const programming = [];
     for (const p of uc.slProblems) {
       const kindCls = p.kind === 'objective' ? ' quiz' : (p.kind === 'subjective' ? ' subj' : '');
+      // One task at a time (students): locked chips are inert, skipped and
+      // finished ones stay open for retries, the current one is highlighted.
+      const gate = p.gate || '';
       const item = {
         pid: String(p.pid),
         accepted: p.status === 1,
+        gate,
         cls: `${p.status === 1 ? ' ac' : (p.status ? ' tried' : '')}${kindCls}`
-          + (String(p.pid) === String(uc.slPid) ? ' current' : ''),
+          + (String(p.pid) === String(uc.slPid) ? ' current' : '')
+          + (gate === 'locked' ? ' locked' : gate === 'skipped' ? ' skipped' : gate === 'current' ? ' gate-now' : ''),
         name: p.title || String(p.pid),
-        href: `${prefix}/self-learning/${uc.slSsid}/p/${p.pid}`,
+        href: gate === 'locked' ? 'javascript:;' : `${prefix}/self-learning/${uc.slSsid}/p/${p.pid}`,
       };
       (p.kind === 'programming' ? programming : (p.kind === 'subjective' ? subj : quizzes)).push(item);
     }
@@ -330,8 +377,32 @@ async function getRailGroups() {
     if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
     for (const g of groups) {
       g.items.forEach((it, i) => {
-        it.label = it.accepted ? '✓' : String(i + 1);
-        it.title = `${i + 1}. ${it.name}`;
+        it.label = it.gate === 'locked' ? '🔒' : it.gate === 'skipped' && !it.accepted ? '⏭' : it.accepted ? '✓' : String(i + 1);
+        it.title = it.gate === 'locked' ? `${i + 1}. ${it.name} — ${i18n('Unlocks after you finish or skip the previous task')}`
+          : it.gate === 'skipped' ? `${i + 1}. ${it.name} — ${i18n('Skipped — come back any time')}`
+            : `${i + 1}. ${it.name}`;
+      });
+    }
+    // Bonus tasks (students): chips after the session's tasks; a task that
+    // is still being drafted shows as an animated placeholder.
+    if (Array.isArray(uc.slBonuses) && uc.slBonuses.length) {
+      groups.push({
+        header: i18n('Bonus'),
+        bonus: true,
+        items: uc.slBonuses.map((b, i) => ({
+          pid: b.docId ? String(b.docId) : '',
+          bonusId: b.id,
+          bonusStatus: b.status,
+          cls: ` bonus${b.status === 'drafting' ? ' bonus-drafting' : b.status === 'building' ? ' bonus-building' : b.status === 'failed' ? ' bonus-failed' : ''}`
+            + (b.docId && String(b.docId) === String(uc.slPid) ? ' current' : ''),
+          name: b.title || i18n('Bonus task'),
+          href: b.docId && b.status !== 'failed' ? `${prefix}/self-learning/${uc.slSsid}/p/${b.docId}` : 'javascript:;',
+          label: b.status === 'drafting' ? '…' : b.status === 'failed' ? '⚠' : `🎁${i + 1}`,
+          title: b.status === 'drafting' ? i18n('Designing your bonus task…')
+            : b.status === 'building' ? `${b.title || i18n('Bonus task')} — ${i18n('read and code now; the judge is being prepared')}`
+              : b.status === 'failed' ? `${i18n('Bonus task failed')}: ${b.message || ''}`
+                : `${b.title || i18n('Bonus task')} — ${(b.weakPoints || []).join(', ')}`,
+        })),
       });
     }
     return groups;
@@ -486,14 +557,16 @@ async function injectRail(mode) {
       + `<div class="sl-rail__ptext" data-total="${tracked}">${solved} / ${tracked} ${esc(i18n('solved'))}</div></div>`
     : '';
   const body = groups.map((g) => {
-    const chips = g.items.map((it) => `<a class="sl-rail__chip${it.cls}"${it.pid ? ` data-pid="${esc(it.pid)}"` : ''} href="${it.href}" title="${esc(it.title)}">${esc(it.label)}</a>`).join('');
+    const chips = g.items.map((it) => `<a class="sl-rail__chip${it.cls}"${it.pid ? ` data-pid="${esc(it.pid)}"` : ''}${it.bonusId ? ` data-bonus="${esc(it.bonusId)}" data-bonus-status="${esc(it.bonusStatus || '')}"` : ''} href="${it.href}" title="${esc(it.title)}">${esc(it.label)}</a>`).join('');
     return `${g.header ? `<div class="sl-rail__cat">${esc(g.header)}</div>` : ''}<div class="sl-rail__grid">${chips}</div>`;
   }).join('');
   $(`<div id="sl-rail" class="sl-rail" style="top:${navTop()}px">`
     + `<div class="sl-rail__head"><span>${esc(i18n('Problems'))}</span>`
     + `<button id="sl-rail-toggle" type="button" title="${esc(i18n('Collapse'))}">⟨</button></div>`
     + progressHtml
+    + ((window.UiContext && UiContext.slGate) ? '<div id="sl-gate" class="sl-rail__gate"></div>' : '')
     + `<div class="sl-rail__body">${body}</div>`
+    + ((window.UiContext && UiContext.slBonus) ? '<div id="sl-bonus" class="sl-rail__bonus"></div>' : '')
     + ((window.UiContext && UiContext.pdoc && UiContext.pdoc.docId)
       ? `<div class="sl-rail__foot"><button type="button" id="sl-rail-lastsub" class="sl-rail__lastsub">🕘 ${esc(i18n('View Last Submission'))}</button></div>`
       : '')

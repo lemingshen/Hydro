@@ -1,4 +1,5 @@
 import $ from 'jquery';
+import KnowledgePointSelectAutoComplete from 'vj/components/autocomplete/KnowledgePointSelectAutoComplete';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { i18n, request } from 'vj/utils';
@@ -34,6 +35,19 @@ const DETAIL_STYLE = [
   '.aisd__tab { border: 1px solid var(--pta-violet-line); border-bottom: none; border-radius: 10px 10px 0 0; background: var(--pta-card-2); color: var(--pta-violet-text); padding: 7px 16px; font-size: 12.5px; cursor: pointer; transition: background .15s ease, color .15s ease, box-shadow .15s ease; }',
   '.aisd__tab:hover { background: var(--pta-violet-soft); }',
   '.aisd__tab--on { background: var(--pta-card); color: var(--pta-violet-text); font-weight: bold; box-shadow: inset 0 -2px 0 var(--pta-violet); }',
+  '.aisd__tab--locked { color: var(--pta-ink-faint); border-style: dashed; background: transparent; }',
+  '.aisd__tab--locked:hover { color: var(--pta-ink-soft); }',
+  '.aisd__locked { padding: 26px 18px; text-align: center; color: var(--pta-ink-soft); }',
+  '.aisd__locked b { font-size: 14px; color: var(--pta-ink); }',
+  '.aisd__locked p { max-width: 560px; margin: 8px auto 14px; line-height: 1.6; }',
+  '.aisd__steps { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 10px 14px 0; }',
+  '.aisd__step { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--pta-ink-faint); white-space: nowrap; }',
+  '.aisd__step-n { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: bold; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-faint); }',
+  '.aisd__step.is-done .aisd__step-n { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }',
+  '.aisd__step.is-done { color: var(--pta-ink-soft); }',
+  '.aisd__step.is-now { color: var(--pta-violet-text); font-weight: 600; }',
+  '.aisd__step.is-now .aisd__step-n { background: var(--pta-violet); border-color: var(--pta-violet); color: #fff; box-shadow: 0 0 0 3px var(--pta-violet-soft); }',
+  '.aisd__step-line { flex: 0 0 18px; height: 1px; background: var(--pta-line); margin: 0 2px; }',
   '.aisd__pane { display: none; }',
   '.aisd__pane--on { display: block; animation: ptaFadeIn .18s ease; }',
   '.aisd__bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }',
@@ -53,6 +67,39 @@ const DETAIL_STYLE = [
   '.aisd__case:hover { background: var(--pta-violet-soft); }',
   '.aisd__case pre { margin: 4px 0 0; background: var(--pta-card-2); border-radius: 6px; padding: 6px 8px; font-size: 11.5px; white-space: pre-wrap; }',
   '.pta-dark .aisd__case pre { background: #1e2227; }',
+  /* ---- programming: knowledge-point labels ---- */
+  '.aisk__chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 12px; min-height: 30px; }',
+  '.aisk__chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 1px solid var(--pta-violet-line); border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 12.5px; background: var(--pta-violet-soft); color: var(--pta-violet-text); animation: ptaScaleIn .18s var(--pta-ease) backwards; }',
+  '.aisk__chip b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }',
+  '.aisk__chip-x { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; border-radius: 50%; opacity: .7; }',
+  '.aisk__chip-x:hover { opacity: 1; background: rgba(0, 0, 0, .08); }',
+  '.aisk__chip--new { border-style: dashed; }',
+  '.aisk__addrow { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }',
+  '.aisk__add { flex: 1 1 260px; max-width: 460px; }',
+  '.aisk__src { font-size: 11px; color: var(--pta-ink-faint); }',
+  '.pta-dark .aisk__chip { background: #322a48; color: #cdbdfb; border-color: #4a3d6b; }',
+  '.aisk__targets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--pta-ink-soft); margin: 0 0 8px; }',
+  '.aisk__target { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; border: 1px dashed var(--pta-line); color: var(--pta-ink-soft); }',
+  '.aisk__target--ok { border-style: solid; border-color: var(--pta-ok-line); background: var(--pta-ok-soft); color: var(--pta-ok-text); }',
+  '.aisk__target--miss { border-style: solid; border-color: var(--pta-warn-line); background: var(--pta-warn-soft); color: var(--pta-warn-text); }',
+  '.aisd__diff { display: flex; flex-direction: column; gap: 4px; }',
+  '.aisd__diff-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }',
+  '.aisd__diff-score { font-size: 22px; font-weight: 700; color: var(--pta-violet-text); line-height: 1; }',
+  '.aisd__diff-score small { font-size: 12px; font-weight: 500; color: var(--pta-ink-faint); }',
+  '.aisd__diff-score--none { color: var(--pta-ink-faint); }',
+  '.aisd__diff-band { font-size: 12px; color: var(--pta-ink-soft); }',
+  '.aisd__diff-input { width: 64px !important; text-align: center; }',
+  '.aisd__diff-why { font-style: italic; }',
+  '.aisk__side { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }',
+  '.aisk__tag { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; background: var(--pta-violet-soft); color: var(--pta-violet-text); border: 1px solid var(--pta-violet-line); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+  '.pta-dark .aisk__tag { background: #322a48; color: #cdbdfb; border-color: #4a3d6b; }',
+  '.aisk__busy { display: inline-flex; align-items: center; gap: 8px; color: var(--pta-violet-text); font-size: 12.5px; }',
+  '.aisk__busy i { width: 12px; height: 12px; border: 2px solid var(--pta-violet-line); border-top-color: var(--pta-violet); border-radius: 50%; animation: aisk-spin .8s linear infinite; }',
+  '@keyframes aisk-spin { to { transform: rotate(360deg); } }',
+  '.aisk__err { color: var(--pta-fail); font-size: 12px; margin: 0 0 10px; }',
+  '.ais__mismatch { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--pta-warn-line); border-left-width: 4px; border-left-color: var(--pta-warn); background: var(--pta-warn-soft); color: var(--pta-ink); font-size: 12.5px; line-height: 1.6; }',
+  '.ais__mismatch code { font-family: var(--code-font-family); }',
+  '.aisk__tabspin { display: inline-block; vertical-align: -2px; width: 11px; height: 11px; border: 2px solid var(--pta-violet-line); border-top-color: var(--pta-violet); border-radius: 50%; animation: aisk-spin .8s linear infinite; }',
   /* ---- objective: the quiz setup panel ---- */
   '.aisq__setup { border: 1px solid rgba(12, 166, 120, .35); border-radius: var(--pta-radius-lg); padding: 14px 16px 16px; margin-bottom: 18px; background: var(--pta-card); }',
   '.aisq__setup-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-weight: bold; font-size: 13.5px; color: var(--pta-ink); margin-bottom: 12px; }',
@@ -123,6 +170,8 @@ const STAGES = [
   ['judge', 'Judge verify'],
   ['calibrate', 'Calibrate limits'],
   ['report', 'Teacher report'],
+  ['label', 'Knowledge points'],
+  ['rate', 'Difficulty'],
 ];
 
 /** Objective drafts skip the sandbox entirely: validate -> assemble -> report. */
@@ -221,6 +270,7 @@ const artifactFp = (d) => JSON.stringify([
   (d?.artifacts?.tests || []).length,
   !!d?.artifacts?.report,
   d?.artifacts?.answers?.yaml?.length || 0,
+  (d?.artifacts?.knowledge?.points || []).map((x) => x.name).join('\u0001'),
   d?.brief?.kind || 'programming',
   phaseOf(d),
   (d?.chat || []).length,
@@ -233,8 +283,37 @@ let lastSideFp = ''; // sidebar re-renders only when this changes
 const sideFp = () => {
   const p = state?.pipeline || {};
   return JSON.stringify([p.status, p.stage, p.message, (p.evidence || '').length,
-    (state?.log || []).length, state?.measured?.time, state?.published]);
+    (state?.log || []).length, state?.measured?.time, state?.published,
+    (state?.artifacts?.knowledge?.points || []).map((x) => x.name).join('\u0001'), knowledgeBusy,
+    state?.artifacts?.difficulty?.score, state?.artifacts?.difficulty?.source, difficultyBusy]);
 };
+/** Difficulty rating state + the bands (intro 1-3, medium 4-7, challenge 8-10) — module scope. */
+let difficultyBusy = false;
+const DIFF_BANDS = { intro: [1, 3], medium: [4, 7], challenge: [8, 10] };
+/*
+ * Knowledge-point labeling state. `knowledgeBusy` is set while a model
+ * call is in flight (auto or manual); `knowledgeAutoTried` makes the
+ * automatic backfill run at most once per page load, so a failing provider
+ * cannot loop.
+ */
+let knowledgeBusy = false;
+let knowledgeAutoTried = false;
+let knowledgeAutoError = '';
+
+/*
+ * Frontend/backend pairing. This page is written against one backend build
+ * (AI_STUDIO_BUILD in handler/ai_author.ts); the stamps are date-prefixed,
+ * so a plain string comparison orders them. When the running process is
+ * older than this page, its handlers reject the newer operations and
+ * targets with "Unknown target" — say so up front, with the fix, instead of
+ * surfacing that message on every click.
+ */
+const UI_BUILD = '2026-08-30a-difficulty';
+const backendOlderThanUi = () => (backendBuild || '') < UI_BUILD;
+function buildMismatchHtml() {
+  if (!backendOlderThanUi()) return ''; // an empty stamp means a backend from before stamping — older too
+  return `<div class="ais__mismatch">⚠ <b>${esc(i18n('The backend is running an older build than this page.'))}</b> ${esc(i18n('Backend build'))}: <code>${esc(backendBuild || i18n('unknown'))}</code> · ${esc(i18n('this page needs'))} <code>${esc(UI_BUILD)}</code>. ${esc(i18n('Restart hydrooj (in dev mode, its watcher only re-applies the handler file that changed, so a full restart is the reliable way). Until then, new actions such as knowledge-point labeling fail with "Unknown target".'))}</div>`;
+}
 let statementEditor = null;
 
 function j(v) {
@@ -290,6 +369,11 @@ function sideHtml(d) {
         ${p.status === 'failed' && p.stage === 'crosscheck' ? `<div class="aisd__meta" style="margin-top:6px;">💡 ${esc(i18n('If the statement is ambiguous for this input (e.g. negative values), clarify it in the Statement tab and verify again — or edit either solution directly.'))}</div>
         <button class="ais__btn ais__btn--sm aisd__skipcc" style="margin-top:8px;">✋ ${esc(i18n('Trust the reference — re-verify without cross-check'))}</button>` : ''}
         ${measured}
+        ${kindOf(d) === 'programming' && d.artifacts.statement ? difficultySideHtml(d) : ''}
+        ${kindOf(d) === 'programming' && ((d.artifacts.knowledge || {}).points || []).length ? `
+        <div class="ais__label">🏷️ ${esc(i18n('Knowledge points'))}</div>
+        <div class="aisk__side">${d.artifacts.knowledge.points.map((x) => `<span class="aisk__tag" title="${esc(x.evidence || '')}">${esc(x.name)}</span>`).join('')}
+          <a href="javascript:;" class="aisk__side-edit aisd__meta">${esc(i18n('edit'))}</a></div>` : ''}
         ${(d.docIds || []).length ? `<div class="aisd__meta" style="margin-top:10px;">${esc(i18n((d.docIds || []).length > 1 ? 'Draft problems (one per question)' : 'Draft problem'))}: ${(d.docIds || []).map((x, k) => `<a href="${domainPrefix()}/p/${x}" target="_blank" rel="noopener">${esc((d.pids || [])[k] || `#${x}`)}</a>`).join(' · ')}${d.published ? ` · <b>${esc(i18n('Published'))}</b>` : ` (${esc(i18n('hidden'))})`}</div>` : ''}
         ${logs ? `<div class="ais__label">📜 ${esc(i18n('Recent activity'))}</div>${logs}` : ''}
         ${backendBuild ? `<div class="aisd__meta" style="margin-top:10px;opacity:.65;">${esc(i18n('Backend build'))}: <code>${esc(backendBuild)}</code></div>` : ''}
@@ -498,7 +582,7 @@ function bannerHtml(d) {
   return `<div class="ais__banner">← <a href="${domainPrefix()}/ai-studio">${esc(i18n('All drafts'))}</a>
     <span style="margin-left:6px;">${esc(d.brief.topic)}</span>
     ${d.pid ? `<span class="ais__chip aisd__pidchip" title="${esc(i18n('Problem ID — its prefix marks the task kind'))}">${esc(d.pid)}${(d.pids || []).length > 1 ? ` ×${d.pids.length}` : ''}</span>` : ''}
-    <span class="ais__chip" style="margin-left:auto;">${t.icon} ${esc(i18n(t.name))} · ${esc(langsMap[d.brief.language] || d.brief.language)} · ${esc(i18n(d.brief.difficulty))} · 📚 ${(d.brief.files || []).length}</span></div>`;
+    <span class="ais__chip" style="margin-left:auto;">${t.icon} ${esc(i18n(t.name))} · ${esc(langsMap[d.brief.language] || d.brief.language)} · ${esc(i18n(d.brief.difficulty))}${d.artifacts.difficulty?.score ? ` ${d.artifacts.difficulty.score}/10` : ''} · 📚 ${(d.brief.files || []).length}</span></div>`;
 }
 
 /**
@@ -648,9 +732,244 @@ function ctxPaneHtml(d) {
     : '<div style="min-width:230px;"><div class="ais__label" style="margin-top:0;">' + esc(i18n('Allowed languages for students')) + '</div>' + renderAllowLangsDd(langEntries(langsMap), d.brief.allowLangs || [], false) + '<div class="aisd__meta">' + esc(i18n('Empty = every judge language. Saved instantly.')) + '</div></div>'}
               <button class="ais__btn ais__btn--sm aisd__brief-save" style="align-self:flex-end;">💾 ${esc(i18n('Save requirement'))}</button>
             </div>
+            ${kind === 'programming' ? `
+            <div class="ais__label">🎯 ${esc(i18n('Target knowledge points (optional)'))}</div>
+            <div class="aisd__meta" style="margin-bottom:6px;">${esc(i18n('Pick from the domain catalog (or type new ones). The AI designs the task so that a correct solution needs every one of them, probes them in the tests, and labels the task with them.'))}</div>
+            <input type="text" class="aisd__knowledge" value="${esc((d.brief.knowledge || []).map((k) => k.name).join(','))}">
+            <div class="aisd__meta" style="margin:4px 0 0;">${esc(i18n('Saved with the requirement (Save requirement); regenerate the statement afterwards.'))}</div>` : ''}
             <div class="aisd__meta" style="margin:6px 0 14px;">${esc(i18n('After changing the requirement, regenerate the statement to synthesize the task against it.'))}</div>
             ${materialHtml(d)}
           </div>`;
+}
+
+/**
+ * Knowledge points (programming tasks): the DETAILED skills and pitfalls the
+ * task exercises, drafted by the pipeline after verification and written
+ * into the problem's tags. Chips are edited in place — Save sends the
+ * current chip set; Regenerate / AI refine ask the model.
+ *
+ * The pane is self-contained (own button classes, own wiring, own refresh)
+ * so a background labeling call can update it WITHOUT re-rendering the
+ * whole page — a full render would wipe whatever the teacher is typing in
+ * another tab meanwhile.
+ */
+function knowledgeTabLabel(d) {
+  const n = ((d.artifacts.knowledge || {}).points || []).length;
+  return `🏷️ ${esc(i18n('Knowledge points'))} ${knowledgeBusy ? '<i class="aisk__tabspin"></i>' : `(${n})`}`;
+}
+
+function knowledgePaneHtml(d) {
+  const busy = d.pipeline.status === 'running' || knowledgeBusy;
+  const k = d.artifacts.knowledge;
+  const points = (k && k.points) || [];
+  const hasStmt = !!d.artifacts.statement;
+  const chip = (p) => `<span class="aisk__chip" data-name="${esc(p.name)}" data-evidence="${esc(p.evidence || '')}" title="${esc(p.evidence || '')}"><b>${esc(p.name)}</b><button type="button" class="aisk__chip-x" title="${esc(i18n('Remove'))}">×</button></span>`;
+  const src = k
+    ? `<div class="aisk__src">${esc(k.source === 'teacher' ? i18n('Last edited by you') : i18n('Labeled by the AI'))} · ${esc(fmtTs(k.at))}${(d.knowledgeTags || []).length ? ` · ${esc(i18n('applied to the problem\u2019s tags'))}` : ''}</div>`
+    : '';
+  // Targets the teacher pre-selected: show which ones the current labels
+  // cover, so a task that drifted away from its goal is visible at a glance.
+  const targets = (d.brief.knowledge || []).map((t) => t.name);
+  const haveLower = new Set(points.map((p) => p.name.toLowerCase()));
+  const targetsHtml = targets.length ? `<div class="aisk__targets">🎯 ${esc(i18n('Targets'))}: ${targets.map((t) => `<span class="aisk__target${haveLower.has(t.toLowerCase()) ? ' aisk__target--ok' : (points.length ? ' aisk__target--miss' : '')}" title="${esc(haveLower.has(t.toLowerCase()) ? i18n('Covered by the labels') : (points.length ? i18n('Not among the labels — the task may not exercise it; check the statement or regenerate') : ''))}">${esc(t)}</span>`).join('')}</div>` : '';
+  // Knowledge-local disabling must survive setLocked(false), which
+  // re-enables every .ais__btn: data-hard-disabled is its opt-out.
+  const dis = (cond) => (cond ? 'disabled data-hard-disabled' : '');
+  const body = knowledgeBusy
+    ? `<div class="aisk__busy" style="margin:6px 0 14px;"><i></i>${esc(i18n('Labeling knowledge points from the statement, the reference solution and the tests…'))}</div>`
+    : `${points.length ? points.map(chip).join('') : `<span class="aisd__meta">${esc(i18n('No knowledge points yet — they are labeled automatically after verification passes, or press Generate now.'))}</span>`}`;
+  return `
+          <div class="aisd__pane" data-pane="knowledge">
+            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('Detailed skills, techniques and pitfalls this task exercises — its attributes. They become the problem\u2019s tags when it is published: filterable in the problem set and the activity pickers, and reused by the class report. Specific beats broad: \u201cOff-by-one in loop bounds\u201d, not \u201cloops\u201d.'))}
+              ${esc(i18n('Labels are drawn from the domain\u2019s shared catalog; new ones are added to it.'))} <a href="${domainPrefix()}/knowledge-points" target="_blank" rel="noopener">${esc(i18n('Manage the catalog'))} ↗</a></div>
+            ${hasStmt ? `
+            ${knowledgeAutoError ? `<div class="aisk__err">⚠ ${esc(i18n('Automatic labeling did not succeed'))}: ${esc(knowledgeAutoError)}</div>` : ''}
+            ${targetsHtml}
+            ${src}
+            <div class="aisk__chips">${body}</div>
+            <div class="aisk__addrow">
+              <input type="text" class="textbox aisk__add" maxlength="40" list="aisk-catalog" placeholder="${esc(i18n('Add a knowledge point (2\u20136 words)…'))}" ${busy ? 'disabled' : ''}>
+              <datalist id="aisk-catalog"></datalist>
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisk__add-btn" type="button" ${dis(busy)}>➕ ${esc(i18n('Add'))}</button>
+            </div>
+            <div class="aisd__bar">
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisk__regen" ${dis(busy)}>✨ ${esc(points.length ? i18n('Regenerate') : i18n('Generate now'))}</button>
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisk__refine" ${dis(busy || !points.length)}>💬 ${esc(i18n('AI refine…'))}</button>
+              <button class="ais__btn ais__btn--sm aisk__save" ${dis(busy)}>💾 ${esc(i18n('Save'))}</button>
+              <span class="aisd__meta">${esc(i18n('Saving updates the problem\u2019s tags right away; it never invalidates verification.'))}</span>
+            </div>`
+    : `<div class="ais__empty">${esc(i18n('No statement yet — press Generate statement above.'))}</div>`}
+          </div>`;
+}
+
+/**
+ * Difficulty (programming tasks): the 1-10 score the problem set shows,
+ * rated by the AI inside the teacher's band (intro 1-3, medium 4-7,
+ * challenge 8-10) once verification passes. The teacher can move it within
+ * the band or ask for a new rating; both write straight to the problem.
+ */
+function difficultySideHtml(d) {
+  const band = d.brief.difficulty || 'intro';
+  const [lo, hi] = DIFF_BANDS[band] || DIFF_BANDS.intro;
+  const df = d.artifacts.difficulty;
+  const busy = difficultyBusy || d.pipeline.status === 'running';
+  const dis = busy ? 'disabled data-hard-disabled' : '';
+  return `
+        <div class="ais__label">🎚 ${esc(i18n('Difficulty'))}</div>
+        <div class="aisd__diff">
+          ${difficultyBusy ? `<span class="aisk__busy"><i></i>${esc(i18n('Rating the difficulty\u2026'))}</span>` : `
+          <div class="aisd__diff-row">
+            <span class="aisd__diff-score${df ? '' : ' aisd__diff-score--none'}">${df ? `${df.score}<small>/10</small>` : '–'}</span>
+            <span class="aisd__diff-band">${esc(i18n(band))} · ${lo}–${hi}</span>
+            <input type="number" class="textbox aisd__diff-input" min="${lo}" max="${hi}" step="1" value="${df ? df.score : ''}" title="${esc(i18n('Score inside the band'))}" ${dis}>
+            <button class="ais__btn ais__btn--sm aisd__diff-save" ${dis}>💾</button>
+            <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__diff-regen" title="${esc(i18n('Ask the AI to rate it again'))}" ${dis}>✨</button>
+          </div>
+          ${df?.rationale ? `<div class="aisd__meta aisd__diff-why">${esc(df.rationale)}</div>` : ''}
+          <div class="aisd__meta">${df
+    ? `${esc(df.source === 'teacher' ? i18n('Set by you') : i18n('Rated by the AI'))} · ${esc(fmtTs(df.at))}${d.docId ? ` · ${esc(i18n('shown in the problem set'))}` : ''}`
+    : esc(i18n('Rated automatically after verification passes, or press ✨ now.'))}</div>`}
+        </div>`;
+}
+
+/** Repaint only the knowledge tab, its pane and the side panel. */
+function refreshKnowledge($root) {
+  if (!state) return;
+  $root.find('.aisd__tab[data-pane="knowledge"]').html(knowledgeTabLabel(state));
+  const $pane = $root.find('.aisd__pane[data-pane="knowledge"]');
+  if ($pane.length) {
+    const on = $pane.hasClass('aisd__pane--on');
+    const $next = $(knowledgePaneHtml(state).trim()); // jQuery needs the markup to start with '<'
+    if (on) $next.addClass('aisd__pane--on');
+    $pane.replaceWith($next);
+    wireKnowledge($root);
+  }
+  renderSide($root);
+}
+
+/** One model call for the labels; `auto` = the silent backfill on view. */
+async function runKnowledgeGenerate($root, auto) {
+  if (knowledgeBusy) return;
+  if (backendOlderThanUi()) {
+    if (!auto) Notification.error(i18n('The backend is running an older build than this page.') + ' ' + i18n('Restart hydrooj (in dev mode, its watcher only re-applies the handler file that changed, so a full restart is the reliable way). Until then, new actions such as knowledge-point labeling fail with "Unknown target".'));
+    return;
+  }
+  knowledgeBusy = true;
+  refreshKnowledge($root);
+  try {
+    const res = await request.post(base(), { operation: 'generate', target: 'knowledge' });
+    state = res.draft;
+    knowledgeAutoError = '';
+    if (!auto) {
+      Notification.success((state.knowledgeTags || []).length
+        ? i18n('Knowledge points labeled — the problem\u2019s tags were updated.')
+        : i18n('Knowledge points labeled — the problem\u2019s tags follow once the task is verified.'));
+    }
+  } catch (e) {
+    if (auto) knowledgeAutoError = e.message;
+    else Notification.error(e.message);
+  } finally {
+    knowledgeBusy = false;
+    refreshKnowledge($root);
+  }
+}
+
+/**
+ * Backfill on view: a verified (or published) programming task that has no
+ * labels yet — verified before labeling existed, or whose labeling stage
+ * failed — gets labeled the first time the teacher opens it. Once per page
+ * load, never while a run is in progress.
+ */
+function autoLabelKnowledge($root) {
+  if (knowledgeAutoTried || !state) return;
+  if (kindOf(state) !== 'programming') return;
+  if (backendOlderThanUi()) {
+    // Calling would only produce "Unknown target"; the banner explains.
+    knowledgeAutoTried = true;
+    knowledgeAutoError = i18n('the backend is running an older build — restart hydrooj (see the notice at the top of the page)');
+    refreshKnowledge($root);
+    return;
+  }
+  if (!state.artifacts?.statement || state.artifacts?.knowledge) return;
+  if (state.pipeline?.status === 'running') return;
+  if (state.pipeline?.status !== 'passed' && !state.published) return;
+  knowledgeAutoTried = true;
+  runKnowledgeGenerate($root, true);
+}
+
+/** The domain catalog's names, fetched once per page load for the add-box suggestions. */
+let catalogNamesPromise = null;
+function catalogNames() {
+  catalogNamesPromise ||= request.get(`${domainPrefix()}/knowledge-points?_fmt=json&limit=500`)
+    .then((r) => (r.points || []).map((p) => p.name))
+    .catch(() => []);
+  return catalogNamesPromise;
+}
+
+function wireKnowledge($root) {
+  const $pane = $root.find('.aisd__pane[data-pane="knowledge"]');
+  if (!$pane.length) return;
+  catalogNames().then((names) => {
+    const $dl = $pane.find('#aisk-catalog');
+    if ($dl.length) $dl.html(names.map((n) => `<option value="${esc(n)}"></option>`).join(''));
+  });
+  const addChip = () => {
+    const $in = $pane.find('.aisk__add');
+    const name = String($in.val() || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!name) return;
+    const exists = $pane.find('.aisk__chip').get().some((el) => String($(el).data('name') || '').toLowerCase() === name.toLowerCase());
+    if (exists) {
+      Notification.warn(i18n('That knowledge point is already listed.'));
+      return;
+    }
+    const $chips = $pane.find('.aisk__chips');
+    $chips.find('.aisd__meta').remove(); // the "none yet" placeholder
+    $chips.append(`<span class="aisk__chip aisk__chip--new" data-name="${esc(name)}" data-evidence="" title="${esc(i18n('Added by you — press Save to keep it'))}"><b>${esc(name)}</b><button type="button" class="aisk__chip-x" title="${esc(i18n('Remove'))}">×</button></span>`);
+    $in.val('').trigger('focus');
+  };
+  $pane.find('.aisk__add-btn').on('click', addChip);
+  $pane.find('.aisk__add').on('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      addChip();
+    }
+  });
+  $pane.find('.aisk__chips').on('click', '.aisk__chip-x', function onChipRemove() {
+    $(this).closest('.aisk__chip').remove();
+  });
+  $pane.find('.aisk__regen').on('click', () => runKnowledgeGenerate($root, false));
+  $pane.find('.aisk__refine').on('click', async function onRefine() {
+    const instruction = window.prompt(i18n('Tell the AI how to revise this artifact:'));
+    if (!instruction?.trim()) return;
+    if (knowledgeBusy) return;
+    knowledgeBusy = true;
+    refreshKnowledge($root);
+    try {
+      const res = await request.post(base(), { operation: 'refine', target: 'knowledge', instruction });
+      state = res.draft;
+    } catch (e) {
+      Notification.error(e.message);
+    } finally {
+      knowledgeBusy = false;
+      refreshKnowledge($root);
+    }
+  });
+  $pane.find('.aisk__save').on('click', async function onSave() {
+    const $b = $(this).prop('disabled', true);
+    try {
+      const payload = collectPayload($root, 'knowledge');
+      const res = await request.post(base(), { operation: 'save', target: 'knowledge', payload: JSON.stringify(payload) });
+      state = res.draft;
+      knowledgeAutoError = '';
+      refreshKnowledge($root);
+      Notification.success(Array.isArray(res.tags)
+        ? i18n('Knowledge points saved — the problem\u2019s tags were updated.')
+        : i18n('Knowledge points saved — they are applied to the problem\u2019s tags once it has been verified.'));
+    } catch (e) {
+      Notification.error(e.message);
+      $b.prop('disabled', false);
+    }
+  });
 }
 
 function reportPaneHtml(d) {
@@ -683,11 +1002,45 @@ function renderProgramming(d) {
   const hasStmt = !!d.artifacts.statement;
   const langSel = (cls, cur) => `<select class="${cls}" style="max-width:240px;">${langOptionsHtml(langsMap, cur)}</select>`;
   const showDownstream = phase === 'approved';
+  /*
+   * The two-phase flow: the statement is drafted first and reviewed; only
+   * Continue (approval) creates the solution, cross-check and tests and
+   * runs verification; labels, difficulty and the report follow that. The
+   * tabs list every artifact in that order — the ones not reached yet are
+   * shown locked with what unlocks them, instead of being absent.
+   */
+  const verified = d.pipeline.status === 'passed' || !!d.published;
+  const lockedTab = (pane, label, why) => `<button class="aisd__tab aisd__tab--locked" data-pane="${pane}" data-why="${esc(why)}" title="${esc(why)}">🔒 ${label}</button>`;
+  const whyApprove = hasStmt
+    ? i18n('Unlocks when you approve the statement with Continue — the AI then writes the solution, cross-check and tests.')
+    : i18n('Unlocks after the statement exists and you approve it with Continue.');
+  const whyVerify = i18n('Filled in automatically once verification passes (after Continue), or generate it by hand from this tab afterwards.');
   const progTabs = showDownstream ? [
     '<button class="aisd__tab" data-pane="sol">✅ ' + esc(i18n('Reference solution')) + '</button>',
     '<button class="aisd__tab" data-pane="alt">🔁 ' + esc(i18n('Cross-check solution')) + '</button>',
     '<button class="aisd__tab" data-pane="tests">🧾 ' + esc(i18n('Tests')) + ' (' + (d.artifacts.tests || []).length + ')</button>',
-  ].join('\n          ') : '';
+  ].join('\n          ') : [
+    lockedTab('sol', '✅ ' + esc(i18n('Reference solution')), whyApprove),
+    lockedTab('alt', '🔁 ' + esc(i18n('Cross-check solution')), whyApprove),
+    lockedTab('tests', '🧾 ' + esc(i18n('Tests')), whyApprove),
+  ].join('\n          ');
+  const hasKnowledge = !!(d.artifacts.knowledge?.points?.length);
+  const knowledgeTab = (hasStmt && (showDownstream || hasKnowledge))
+    ? `<button class="aisd__tab" data-pane="knowledge">${knowledgeTabLabel(d)}</button>`
+    : lockedTab('knowledge', knowledgeTabLabel(d), hasStmt ? whyVerify : i18n('Unlocks after the statement exists.'));
+  const reportTab = (showDownstream || d.artifacts.report)
+    ? `<button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Teacher report'))}</button>`
+    : lockedTab('report', '📊 ' + esc(i18n('Teacher report')), whyVerify);
+  // Workflow stepper: which step this draft is at.
+  const step = !hasStmt ? 1 : phase === 'review' ? 2 : !verified ? 3 : !d.published ? 4 : 5;
+  const STEPS = [
+    ['1', i18n('Statement'), i18n('The AI drafts the statement from your brief.')],
+    ['2', i18n('Review'), i18n('Edit it, chat to refine it, then press Continue.')],
+    ['3', i18n('Solution, tests & verification'), i18n('Reference solution, cross-check, tests; the judge verifies everything.')],
+    ['4', i18n('Labels & difficulty'), i18n('Knowledge points, difficulty and the teacher report are filled in.')],
+    ['5', i18n('Publish'), i18n('Reveal the task to students, now or later.')],
+  ];
+  const stepper = `<div class="aisd__steps">${STEPS.map(([n, lb, tip], i) => `<div class="aisd__step${i + 1 < step ? ' is-done' : i + 1 === step ? ' is-now' : ''}" title="${esc(tip)}"><span class="aisd__step-n">${i + 1 < step ? '✓' : n}</span><span class="aisd__step-l">${esc(lb)}</span></div>`).join('<div class="aisd__step-line"></div>')}</div>`;
   return `
   ${bannerHtml(d)}
   <div class="aisd aisd--prog">
@@ -697,10 +1050,12 @@ function renderProgramming(d) {
           <span class="ais__hint">${esc(phase === 'review'
     ? i18n('Review step — edit the text directly, or ask the AI below. Nothing else runs until you press Continue.')
     : i18n('Every artifact is editable — your edits go through the same verification.'))}</span></div>
+        ${stepper}
         <div class="aisd__tabs">
           <button class="aisd__tab" data-pane="stmt">📝 ${esc(i18n('Statement'))}</button>
           ${progTabs}
-          <button class="aisd__tab" data-pane="report">📊 ${esc(i18n('Teacher report'))}</button>
+          ${knowledgeTab}
+          ${reportTab}
           <button class="aisd__tab" data-pane="ctx">📚 ${esc(i18n('Context'))} (${(d.brief.files || []).length})</button>
         </div>
         <div class="ais__body">
@@ -759,6 +1114,7 @@ function renderProgramming(d) {
             <div class="ais__label">👁 ${esc(i18n('Preview'))}</div>
             ${casesPreview(d.artifacts.tests)}
           </div>
+          ${knowledgePaneHtml(d)}
           ${reportPaneHtml(d)}
         </div>
       </div>
@@ -885,12 +1241,12 @@ function render($root) {
   lastFp = artifactFp(d);
   lastSideFp = sideFp();
   const kind = kindOf(d);
-  const html = kind === 'objective' ? renderObjective(d)
+  const html = buildMismatchHtml() + (kind === 'objective' ? renderObjective(d)
     : kind === 'subjective' ? renderSubjective(d)
-      : renderProgramming(d);
+      : renderProgramming(d));
   $root.html(html);
   wire($root);
-  const pane = activePane || (d.artifacts.statement ? 'stmt' : 'ctx');
+  const pane = (activePane && activePane !== 'locked') ? activePane : (d.artifacts.statement ? 'stmt' : 'ctx');
   const $tab = $root.find(`.aisd__tab[data-pane="${pane}"]`);
   const shown = $tab.length ? pane : 'ctx'; // the tab may not exist in this phase
   $root.find('.aisd__tab').removeClass('aisd__tab--on').filter(`[data-pane="${shown}"]`).addClass('aisd__tab--on');
@@ -972,6 +1328,15 @@ function collectPayload($root, target) {
   if (target === 'alt') {
     return { language: $root.find('.aisd__alt-lang').val(), code: String($root.find('.aisd__alt-code').val() || '') };
   }
+  if (target === 'knowledge') {
+    // Whatever the chips show, including a point typed but not yet added.
+    const points = $root.find('.aisk__chip').map(function chipVal() {
+      return { name: String($(this).data('name') || ''), evidence: String($(this).data('evidence') || '') };
+    }).get().filter((p) => p.name.trim());
+    const pending = String($root.find('.aisk__add').val() || '').trim();
+    if (pending) points.push({ name: pending });
+    return { points };
+  }
   const raw = String($root.find('.aisd__tests').val() || '[]');
   const cases = JSON.parse(raw); // throws -> caught by caller with a friendly message
   return { cases };
@@ -1001,6 +1366,7 @@ function startPolling($root) {
         }
         render($root); // full refresh: repaired artifacts / samples / limits
         setLocked($root, false); // the run is over — hand the page back
+        autoLabelKnowledge($root); // a verified task without labels gets them now
       }
     } catch (e) { /* transient poll error; keep polling */ }
   }, 2000);
@@ -1008,12 +1374,35 @@ function startPolling($root) {
 
 function wire($root) {
   $root.find('.aisd__tab').on('click', function onTab() {
+    if ($(this).hasClass('aisd__tab--locked')) {
+      // Not reachable yet: show what unlocks it, and the button that does.
+      const why = $(this).attr('data-why') || '';
+      const hasStmt = !!state?.artifacts?.statement;
+      const phase = phaseOf(state);
+      let $lock = $root.find('.aisd__pane[data-pane="locked"]');
+      if (!$lock.length) $lock = $('<div class="aisd__pane" data-pane="locked"></div>').appendTo($root.find('.ais__body').first());
+      $lock.html(`<div class="aisd__locked">🔒 <b>${esc($(this).text().replace(/^🔒\s*/, ''))}</b><p>${esc(why)}</p>
+        ${!hasStmt ? `<button type="button" class="ais__btn aisd__lock-go" data-go="generate">✨ ${esc(i18n('Generate statement'))}</button>`
+    : phase === 'review' ? `<button type="button" class="ais__btn aisd__lock-go" data-go="continue">▶ ${esc(i18n('Continue'))}</button>` : ''}</div>`);
+      $root.find('.aisd__tab').removeClass('aisd__tab--on');
+      $(this).addClass('aisd__tab--on');
+      activePane = 'locked';
+      $root.find('.aisd__pane').removeClass('aisd__pane--on');
+      $lock.addClass('aisd__pane--on');
+      return;
+    }
     $root.find('.aisd__tab').removeClass('aisd__tab--on');
     $(this).addClass('aisd__tab--on');
     const pane = $(this).data('pane');
     activePane = pane;
     $root.find('.aisd__pane').removeClass('aisd__pane--on');
     $root.find(`.aisd__pane[data-pane="${pane}"]`).addClass('aisd__pane--on');
+  });
+  // The unlock buttons forward to the real toolbar actions.
+  $root.on('click', '.aisd__lock-go', function onLockGo() {
+    const go = $(this).attr('data-go');
+    if (go === 'generate') $root.find('.aisd__gen').first().trigger('click');
+    else if (go === 'continue') $root.find('.aisd__continue').first().trigger('click');
   });
 
   // ---- Context files: sequential upload; the server extracts the text ----
@@ -1077,9 +1466,56 @@ function wire($root) {
     });
   });
 
+  wireKnowledge($root);
+  // The side panel's label list links back to the tab.
+  $root.find('.aisd__side').on('click', '.aisk__side-edit', () => {
+    $root.find('.aisd__tab[data-pane="knowledge"]').trigger('click');
+  });
+  // Difficulty: save the teacher's number, or ask for a new AI rating.
+  const withDifficulty = async (fn) => {
+    if (difficultyBusy) return;
+    difficultyBusy = true;
+    renderSide($root);
+    try {
+      await fn();
+    } catch (e) {
+      Notification.error(e.message);
+    } finally {
+      difficultyBusy = false;
+      renderSide($root);
+    }
+  };
+  $root.find('.aisd__side').on('click', '.aisd__diff-save', () => {
+    const band = state.brief.difficulty || 'intro';
+    const [lo, hi] = DIFF_BANDS[band] || DIFF_BANDS.intro;
+    const raw = Number($root.find('.aisd__diff-input').val());
+    if (!Number.isFinite(raw) || raw < lo || raw > hi) {
+      Notification.warn(i18n('Pick a score between {0} and {1} — the band you chose for this task.').replace('{0}', lo).replace('{1}', hi));
+      return;
+    }
+    withDifficulty(async () => {
+      const res = await request.post(base(), { operation: 'save', target: 'difficulty', payload: JSON.stringify({ score: raw }) });
+      state = res.draft;
+      Notification.success(state.docId ? i18n('Difficulty saved and written to the problem.') : i18n('Difficulty saved — written to the problem once it is verified.'));
+    });
+  });
+  $root.find('.aisd__side').on('click', '.aisd__diff-regen', () => {
+    withDifficulty(async () => {
+      const res = await request.post(base(), { operation: 'generate', target: 'difficulty' });
+      state = res.draft;
+    });
+  });
+
   $root.find('.aisd__qtype').on('change', function onQType() {
     $(this).closest('.aisq__type-chip').toggleClass('aisq__type-chip--on', $(this).prop('checked'));
   });
+
+  // Target knowledge points picker (programming drafts), attached to the
+  // requirement pane's input; its names ride along with "Save requirement".
+  const $kpTarget = $root.find('.aisd__knowledge');
+  const kpTargetPicker = $kpTarget.length
+    ? KnowledgePointSelectAutoComplete.getOrConstruct($kpTarget, { multi: true, freeSolo: true, clearDefaultValue: false })
+    : null;
 
   $root.find('.aisd__brief-save').on('click', function onBrief() {
     act($(this), async () => {
@@ -1089,6 +1525,7 @@ function wire($root) {
         payload: JSON.stringify({
           topic: String($root.find('.aisd__topic').val() || ''),
           difficulty: $root.find('.aisd__difficulty').val(),
+          ...(kpTargetPicker ? { knowledge: kpTargetPicker.names() } : {}),
           // Objective-only controls; absent on the other pages, and the
           // server ignores them unless the draft is a quiz.
           ...($root.find('.aisd__qcount').length ? { qcount: $root.find('.aisd__qcount').val() } : {}),
@@ -1287,7 +1724,7 @@ function wire($root) {
         // publishedHidden record cannot be updated on that path; it resyncs
         // the first time postVisibility succeeds on a current backend.
         if (!/MethodNotAllowed|Visibility/i.test(e.message || '')) throw e;
-        if (!state.docId) throw new Error(i18n('The running backend does not have this feature yet. Restart hydrooj, then confirm the Studio header shows build 2026-08-23c-sentinel or later. Until then, toggle visibility from the problem\'s own edit page.'));
+        if (!state.docId) throw new Error(i18n('The running backend does not have this feature yet. Restart hydrooj, then confirm the Studio header shows build 2026-08-30a-difficulty or later. Until then, toggle visibility from the problem\'s own edit page.'));
         await request.post(`${domainPrefix()}/p`, { operation: visible ? 'unhide' : 'hide', pids: [state.docId] });
         state.publishedHidden = !visible;
         render($root);
@@ -1339,5 +1776,6 @@ export default new NamedPage(['ai_studio_detail'], () => {
     backendBuild = (data.provider && data.provider.build) || '';
     render($root);
     if (state.pipeline.status === 'running') startPolling($root);
+    else autoLabelKnowledge($root);
   }).catch((e) => $root.html(`<div class="ais"><div class="ais__body"><div class="ais__empty">⚠ ${esc(e.message)}</div></div></div>`));
 });

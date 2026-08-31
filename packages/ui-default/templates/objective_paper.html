@@ -27,7 +27,7 @@
       <div class="section__body paper-top__note paper-note--warn">⚠️ {{ _('Late window') }} — {{ _('submissions until') }} {{ datetimeSpan(schedule.hardEndAt)|safe }} {{ _('count at') }} −{{ schedule.penalty }}%</div>
       {% endif %}
       {% if scheduleClosed %}
-      <div class="section__body paper-top__note paper-note--closed">🔒 {{ _('This session has ended — review and tutoring stay open; submissions are closed.') }}</div>
+      <div class="section__body paper-top__note paper-note--closed">🔒 {{ _('This session has ended — you can still review the paper; submissions are closed.') }}</div>
       {% endif %}
     </div>
     {%- if not tasks.length -%}

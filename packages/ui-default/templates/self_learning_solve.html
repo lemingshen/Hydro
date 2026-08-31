@@ -41,18 +41,13 @@
   .sl-verdict pre { background: var(--pta-card-3); border-radius: 8px; padding: 8px; margin-top: 4px; }
   .pta-dark .sl-verdict pre { background: #1b1f24; }
 
-  /* --------------------- objective question result outlines -------------------- */
-  .sl-q-pass, .sl-q-fail, .sl-q-partial { border-radius: 8px; outline: none; transition: box-shadow .2s ease, background .2s ease; }
-  .sl-q-pass { box-shadow: 0 0 0 2px #7fce7f, 0 0 0 6px rgba(47, 158, 68, .12); background: rgba(47, 158, 68, .05); }
-  .sl-q-fail { box-shadow: 0 0 0 2px #f5a09a, 0 0 0 6px rgba(224, 49, 49, .12); background: rgba(224, 49, 49, .05); }
-  .sl-q-partial { box-shadow: 0 0 0 2px #f6c344, 0 0 0 6px rgba(232, 183, 58, .14); background: rgba(232, 183, 58, .06); }
 </style>
 <div class="row">
   <div class="medium-7 columns">
     <div class="section">
       <div class="problem-content-container"><div class="problem-content" data-marker-enabled>
         <div class="section__header non-scratchpad--hide">
-          <h1 class="section__title">{{ pdoc.pid|default(pdoc.docId) }}. {{ pdoc.title }}{% if problemKind == 'objective' %} <small class="text-gray">({{ _('Quiz') }})</small>{% endif %}</h1>
+          <h1 class="section__title">{{ pdoc.pid|default(pdoc.docId) }}. {{ pdoc.title }}</h1>
           <div class="section__tools">
             <a href="{{ url('self_learning_detail', ssid=sdoc.docId) }}" class="typo-a">&laquo; {{ _('Back to session') }}</a>
           </div>
@@ -64,19 +59,16 @@
   <div class="medium-5 columns">
     <div class="section">
       <div class="section__header">
-        <h1 class="section__title">{% if problemKind == 'objective' %}{{ _('Submit your answers') }}{% else %}{{ _('Submit your solution') }}{% endif %}</h1>
+        <h1 class="section__title">{{ _('Submit your solution') }}</h1>
       </div>
       <div class="section__body">
-        {% if problemKind == 'objective' %}
-        <blockquote class="note typo">
-          <p>{{ _('This is a quiz problem. Answer the questions directly inside the problem statement on the left, then press Submit.') }}</p>
-        </blockquote>
-        <div class="row"><div class="columns">
-          <button type="button" id="sl-submit" class="rounded primary button">{{ _('Submit') }}</button>
-          <button type="button" id="sl-clear-answers" class="rounded button">{{ _('Clear answers') }}</button>
-          <span id="sl-submit-hint" class="text-gray" style="margin-left:8px"></span>
-        </div></div>
-        {% elif problemKind == 'programming' %}
+        {#-
+          Objective tasks never render here (the solve route sends them to
+          the session paper); subjective tasks are forwarded to their own
+          problem page. What remains: programming (IDE + tutor) and
+          answer-submission tasks (plain form, no tutor).
+        -#}
+        {% if problemKind == 'programming' %}
         <blockquote class="note typo">
           <p>{{ _('Programming problems open directly in the Scratchpad IDE. Solve and submit there — the AI tutor will guide you at your code lines.') }}</p>
         </blockquote>
@@ -103,7 +95,7 @@
       </div>
     </div>
 
-    {% if isStudent and tutorConfigured and (problemKind == 'objective' or problemKind == 'programming') %}
+    {% if isStudent and tutorConfigured and tutorEligible %}
     <button id="sl-fab" class="sl-fab" type="button" title="{{ _('AI Socratic Tutor') }}">
       <span>🤖</span><span class="sl-fab__dot" id="sl-fab-dot" style="display:none"></span>
     </button>
@@ -111,32 +103,30 @@
       <div id="sl-tutor-resize" class="sl-float__resize" title="{{ _('Drag to resize') }}"></div>
       <div class="sl-float__header">
         <span class="sl-float__title">🤖 {{ _('AI Socratic Tutor') }}</span>
-        <button id="sl-spark-chip" class="sl-spark-chip" type="button" title="{{ _('My progress') }}" style="display:none"></button>
         <span class="sl-float__actions">
           <button id="sl-tutor-expand" type="button" class="sl-hbtn" title="{{ _('Expand') }}">⤢</button>
-          <button id="sl-tutor-reset" type="button" class="sl-hbtn" title="{{ _('Reset conversation') }}">↺</button>
           <button id="sl-tutor-close" type="button" class="sl-hbtn" title="{{ _('Minimize') }}">–</button>
         </span>
       </div>
       <div class="sl-chat" id="sl-chat"></div>
-      {% if problemKind == 'objective' %}
-      <div class="sl-typing" id="sl-typing">{{ _('The tutor is thinking...') }}</div>
+      {#-
+        The panel continues the tutor's OPEN question: close a card by
+        mistake and you can still answer it here (self_learning_solve.page.js
+        routes the reply through the same endpoint as the card).
+      -#}
       <div class="sl-input-row">
-        <textarea id="sl-input" class="textbox" placeholder="{{ _('Explain your thinking, answer the tutor, or ask for guidance... (Enter to send)') }}"></textarea>
-        <button id="sl-send" class="rounded primary button" type="button">{{ _('Send') }}</button>
+        <textarea id="sl-panel-input" class="textbox" placeholder="{{ _('Answer the tutor\u2019s open question here… (Enter to send)') }}"></textarea>
+        <button id="sl-panel-send" class="rounded primary button" type="button">{{ _('Send') }}</button>
       </div>
-      <p class="sl-float__hint">{{ _('The tutor guides you with questions and will never hand you the final answer. Take your time to think!') }}</p>
-      {% else %}
-      <p class="sl-float__hint">{{ _('Read-only history of your line-anchored tutoring. Answer the tutor inside the pop-up cards at your code.') }}</p>
-      {% endif %}
+      <p class="sl-float__hint" id="sl-panel-hint">{{ _('Your line-anchored tutoring, in one place. The tutor\u2019s open question can be answered here or in its pop-up card.') }}</p>
     </div>
-    {% elif isStudent and not tutorConfigured %}
+    {% elif isStudent and tutorEligible and not tutorConfigured %}
     <div class="section side">
       <div class="section__body typo">
         <blockquote class="note"><p>{{ _('The AI tutor is not configured on this site yet, so failed submissions will not open the tutoring chat.') }}</p></blockquote>
       </div>
     </div>
-    {% elif not isStudent %}
+    {% elif tutorEligible and not isStudent %}
     <div class="section side">
       <div class="section__body typo">
         <blockquote class="note">

@@ -27,6 +27,13 @@ export interface SelfLearningDoc {
     beginAt?: Date;
     endAt?: Date;
     extensionDays?: number;
+    /**
+     * PTA fork: the session's RESULTS — every student's summed score,
+     * computed automatically once the deadline (endAt + extension) has
+     * passed (`final`), or on demand by the teacher before that
+     * (provisional). See handler/self_learning.ts computeSessionResults.
+     */
+    results?: SessionResults;
     /** Legacy: flat percent deducted while late. Superseded by penaltyRules. */
     penalty?: number;
     penaltyRules?: PenaltyRules;
@@ -68,17 +75,8 @@ export interface TutorThreadDoc {
     rid?: ObjectId;
     attemptCount: number;
     messages: TutorMessage[];
-    /** Set once, when this student first gets this problem Accepted (spark counters key off it). */
+    /** Set once, when this student first gets this problem Accepted. */
     firstAcceptedAt?: Date;
-    /** Boss Challenge state for this student on this problem. */
-    challenge?: {
-        state: 'active' | 'cleared' | 'declined';
-        title?: string;
-        question?: string;
-        hook?: string;
-        rid?: ObjectId;
-        clearedAt?: Date;
-    };
     createdAt: Date;
     updateAt: Date;
 }
@@ -91,65 +89,108 @@ declare module '../service/db' {
 
 export const collTutor = db.collection('selflearning.tutor');
 
-/* --------------------- Tutor Spark: momentum & badges ---------------------- */
+/* ------------------- per-student task progression --------------------- */
 /*
- * Lightweight motivation layer for the AI tutor: a per-student momentum doc
- * (daily streak + achievement counters) and a fixed badge catalog. Counters
- * are only ever bumped from the tutor handlers, so everything derives from
- * activity the tutor actually witnessed. Deliberately per-student and
- * non-competitive: the class-report anonymization ethos extends here — spark
- * celebrates the student's OWN momentum, never ranks them against others.
+ * PTA fork: a session presents ONE task at a time, in order. A student's
+ * record of which tasks are finished ("done": accepted and the tutor's
+ * post-acceptance question answered) or set aside ("skipped": after
+ * engaging the tutor and still being stuck). The gate is derived from
+ * these sets and the session's pid order — the first pid in neither set
+ * is the current task; everything up to it is open, everything after it
+ * is locked. Done and skipped tasks stay open for retries.
  */
+/**
+ * A BONUS TASK generated for this student once every session task has been
+ * attempted: an AI Studio draft (id) targeting the student's weak points,
+ * materialized as a hidden problem (docId) reachable only through the
+ * session. `status` mirrors the draft's pipeline: drafting → building →
+ * ready | failed.
+ */
+export interface SelfLearningBonusEntry {
+    id: ObjectId;
+    docId?: number;
+    pid?: string;
+    title?: string;
+    status: 'drafting' | 'building' | 'ready' | 'failed';
+    message?: string;
+    weakPoints: string[];
+    createdAt: Date;
+    readyAt?: Date;
+}
 
-export interface SparkDoc {
+export interface SelfLearningProgressDoc {
+    _id: ObjectId;
     domainId: string;
+    ssid: ObjectId;
     uid: number;
-    /** Consecutive calendar days (server-local) with tutor-visible activity. */
-    streak: number;
-    lastDay: string;
-    /** Problems brought to Accepted (first accept per problem thread). */
-    accepted: number;
-    /** Accepted on attempt #1. */
-    cleanSolves: number;
-    /** Accepted after three or more failed attempts. */
-    comebacks: number;
-    /** Answers typed into tutor question cards (incl. Boss Challenge turns). */
-    cardAnswers: number;
-    challengesCleared: number;
-    badges: string[];
+    done: number[];
+    skipped: number[];
+    bonuses?: SelfLearningBonusEntry[];
     updateAt: Date;
 }
 
 declare module '../service/db' {
     interface Collections {
-        'selflearning.spark': SparkDoc;
+        'selflearning.progress': SelfLearningProgressDoc;
     }
 }
 
-export const collSpark = db.collection('selflearning.spark');
+export const collProgress = db.collection('selflearning.progress');
 
-export interface SparkBadge {
-    id: string;
-    icon: string;
-    title: string;
-    desc: string;
-    test: (s: SparkDoc) => boolean;
+export interface SessionResultRow {
+    uid: number;
+    uname: string;
+    /** Roster real name when known ("firstName lastName"), else ''. */
+    name: string;
+    /** Per task: the best EFFECTIVE score (late tier applied), its raw score, whether it was late, and the attempt count. */
+    scores: Record<string, { score: number, effective: number, late: boolean, attempts: number }>;
+    total: number;
+    attempts: number;
+    done: number;
+    skipped: number;
+    /** Bonus task: 'none' | 'building' | 'ready' | 'failed' | 'accepted' */
+    bonus: string;
 }
 
-export const SPARK_BADGES: SparkBadge[] = [
-    { id: 'first-light', icon: '🌱', title: 'First Light', desc: 'Get your first problem Accepted.', test: (s) => s.accepted >= 1 },
-    { id: 'hat-trick', icon: '🎩', title: 'Hat Trick', desc: 'Bring three problems to Accepted.', test: (s) => s.accepted >= 3 },
-    { id: 'rising-star', icon: '🌟', title: 'Rising Star', desc: 'Bring ten problems to Accepted.', test: (s) => s.accepted >= 10 },
-    { id: 'problem-crusher', icon: '🚀', title: 'Problem Crusher', desc: 'Bring twenty-five problems to Accepted.', test: (s) => s.accepted >= 25 },
-    { id: 'clean-strike', icon: '🎯', title: 'Clean Strike', desc: 'Solve a problem on your very first attempt.', test: (s) => s.cleanSolves >= 1 },
-    { id: 'comeback-kid', icon: '💪', title: 'Comeback Kid', desc: 'Get Accepted after three or more failed attempts. Persistence wins.', test: (s) => s.comebacks >= 1 },
-    { id: 'bug-whisperer', icon: '🐛', title: 'Bug Whisperer', desc: 'Answer ten tutor questions at your code.', test: (s) => s.cardAnswers >= 10 },
-    { id: 'deep-thinker', icon: '🧠', title: 'Deep Thinker', desc: 'Answer thirty tutor questions. Thinking out loud works.', test: (s) => s.cardAnswers >= 30 },
-    { id: 'on-fire', icon: '🔥', title: 'On Fire', desc: 'Practice three days in a row.', test: (s) => s.streak >= 3 },
-    { id: 'unstoppable', icon: '🌋', title: 'Unstoppable', desc: 'Practice seven days in a row.', test: (s) => s.streak >= 7 },
-    { id: 'challenger', icon: '⚔️', title: 'Challenger', desc: 'Clear your first Boss Challenge.', test: (s) => s.challengesCleared >= 1 },
-    { id: 'boss-slayer', icon: '👑', title: 'Boss Slayer', desc: 'Clear five Boss Challenges.', test: (s) => s.challengesCleared >= 5 },
-];
+export interface SessionResults {
+    computedAt: Date;
+    /** True once computed after the deadline; provisional otherwise. */
+    final: boolean;
+    maxTotal: number;
+    rows: SessionResultRow[];
+}
+
+export interface SessionGate {
+    /** The task the student should work on now; null when every task is finished or skipped. */
+    current: number | null;
+    /** The pid after `current` in session order (null at the end). */
+    next: number | null;
+    /** 1-based position of `current` (total when finished). */
+    index: number;
+    total: number;
+    done: number[];
+    skipped: number[];
+    /** Pids the student may open: everything up to and including `current`. */
+    unlocked: number[];
+}
+
+export function computeGate(pids: number[], progress: { done?: number[], skipped?: number[] } | null): SessionGate {
+    const done = (progress?.done || []).filter((p) => pids.includes(p));
+    const skipped = (progress?.skipped || []).filter((p) => pids.includes(p) && !done.includes(p));
+    const finished = new Set([...done, ...skipped]);
+    const cur = pids.findIndex((p) => !finished.has(p));
+    const current = cur >= 0 ? pids[cur] : null;
+    const unlocked = cur >= 0 ? pids.slice(0, cur + 1) : [...pids];
+    return {
+        current,
+        next: cur >= 0 && cur + 1 < pids.length ? pids[cur + 1] : null,
+        index: cur >= 0 ? cur + 1 : pids.length,
+        total: pids.length,
+        done,
+        skipped,
+        unlocked,
+    };
+}
 
 export class SelfLearningModel {
     static add(
@@ -212,51 +253,6 @@ export class SelfLearningModel {
         return collTutor.updateOne({ _id: tid }, { $set: { ...$set, updateAt: new Date() } });
     }
 
-    /* ------------------------------ Tutor Spark ------------------------------ */
-
-    static sparkDay(d = new Date()): string {
-        const p = (n: number) => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-    }
-
-    static async getSpark(domainId: string, uid: number): Promise<SparkDoc> {
-        const s = await collSpark.findOne({ domainId, uid });
-        return s || {
-            domainId, uid, streak: 0, lastDay: '', accepted: 0, cleanSolves: 0, comebacks: 0, cardAnswers: 0, challengesCleared: 0, badges: [], updateAt: new Date(),
-        };
-    }
-
-    /**
-     * Register tutor-visible activity: advance the daily streak, apply the
-     * counter increments, and award any badge whose condition just became
-     * true. Returns the fresh doc plus the badges earned by THIS call so the
-     * client can celebrate exactly once.
-     */
-    static async touchSpark(domainId: string, uid: number, inc: Partial<Record<'accepted' | 'cleanSolves' | 'comebacks' | 'cardAnswers' | 'challengesCleared', number>> = {}) {
-        const now = new Date();
-        const today = SelfLearningModel.sparkDay(now);
-        const s = await SelfLearningModel.getSpark(domainId, uid);
-        if (s.lastDay !== today) {
-            const yesterday = SelfLearningModel.sparkDay(new Date(now.getTime() - 86400000));
-            s.streak = s.lastDay === yesterday ? (s.streak || 0) + 1 : 1;
-            s.lastDay = today;
-        }
-        for (const [k, v] of Object.entries(inc)) if (v) (s as any)[k] = ((s as any)[k] || 0) + v;
-        const owned = new Set(s.badges || []);
-        const newBadges = SPARK_BADGES.filter((b) => !owned.has(b.id) && b.test(s));
-        if (newBadges.length) s.badges = [...(s.badges || []), ...newBadges.map((b) => b.id)];
-        s.updateAt = now;
-        const { domainId: d, uid: u, ...rest } = s as any;
-        delete rest._id;
-        await collSpark.updateOne({ domainId, uid }, { $set: rest }, { upsert: true });
-        return { spark: s, newBadges };
-    }
-
-    /** The public badge catalog (no test functions) for client rendering. */
-    static badgeCatalog() {
-        return SPARK_BADGES.map(({ id, icon, title, desc }) => ({ id, icon, title, desc }));
-    }
-
     static async resetThread(domainId: string, ssid: ObjectId, pid: number, uid: number) {
         await collTutor.updateOne(
             { domainId, ssid, pid, uid },
@@ -264,10 +260,54 @@ export class SelfLearningModel {
         );
     }
 
+    /* ------------------- task progression (see collProgress) ------------------- */
+
+    static async getProgress(domainId: string, ssid: ObjectId, uid: number): Promise<SelfLearningProgressDoc | null> {
+        return await collProgress.findOne({ domainId, ssid, uid });
+    }
+
+    /** Accepted + the tutor's reflection answered (or no tutor): the task is finished. */
+    static async markDone(domainId: string, ssid: ObjectId, uid: number, pid: number) {
+        await collProgress.updateOne(
+            { domainId, ssid, uid },
+            { $addToSet: { done: pid }, $pull: { skipped: pid }, $set: { updateAt: new Date() }, $setOnInsert: { _id: new ObjectId() } },
+            { upsert: true },
+        );
+    }
+
+    /** Set aside after engaging the tutor; never overrides a finished task. */
+    static async markSkipped(domainId: string, ssid: ObjectId, uid: number, pid: number) {
+        const cur = await collProgress.findOne({ domainId, ssid, uid });
+        if (cur?.done?.includes(pid)) return;
+        await collProgress.updateOne(
+            { domainId, ssid, uid },
+            { $addToSet: { skipped: pid }, $set: { updateAt: new Date() }, $setOnInsert: { _id: new ObjectId(), done: [] } },
+            { upsert: true },
+        );
+    }
+
+    static async addBonus(domainId: string, ssid: ObjectId, uid: number, entry: SelfLearningBonusEntry) {
+        await collProgress.updateOne(
+            { domainId, ssid, uid },
+            { $push: { bonuses: entry }, $set: { updateAt: new Date() }, $setOnInsert: { _id: new ObjectId(), done: [], skipped: [] } },
+            { upsert: true },
+        );
+    }
+
+    static async updateBonus(domainId: string, ssid: ObjectId, uid: number, id: ObjectId, patch: Partial<SelfLearningBonusEntry>) {
+        const $set: any = { updateAt: new Date() };
+        for (const [k, v] of Object.entries(patch)) $set[`bonuses.$.${k}`] = v;
+        await collProgress.updateOne({ domainId, ssid, uid, 'bonuses.id': id }, { $set });
+    }
+
     static async apply() {
         await db.ensureIndexes(
             collTutor,
             { name: 'thread', key: { domainId: 1, ssid: 1, pid: 1, uid: 1 }, unique: true },
+        );
+        await db.ensureIndexes(
+            collProgress,
+            { name: 'progress', key: { domainId: 1, ssid: 1, uid: 1 }, unique: true },
         );
     }
 }

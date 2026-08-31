@@ -1,8 +1,7 @@
 import $ from 'jquery';
-import _ from 'lodash';
 import ReactDOM from 'react-dom/client';
+import KnowledgePointSelectAutoComplete from 'vj/components/autocomplete/KnowledgePointSelectAutoComplete';
 import { confirm } from 'vj/components/dialog';
-import Dropdown from 'vj/components/dropdown/Dropdown';
 import Editor from 'vj/components/editor/index';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
@@ -11,132 +10,37 @@ import {
   ensureAisStyle, langEntries, renderAllowLangsDd, wireAllowLangsDd,
 } from 'vj/pages/ai_studio.page';
 
-const categories = {};
-const dirtyCategories = [];
-const selections = [];
-const tags = [];
-
-function setDomSelected($dom, selected) {
-  if (selected) $dom.addClass('selected');
-  else $dom.removeClass('selected');
-}
-
-async function updateSelection() {
-  for (const { type, category, subcategory } of dirtyCategories) {
-    let item = categories[category];
-    const isSelected = item.select || _.some(item.children, (c) => c.select);
-    setDomSelected(item.$tag, isSelected);
-    if (isSelected) selections.push(category);
-    else _.pull(selections, category);
-    if (type === 'subcategory') {
-      item = categories[category].children[subcategory];
-      setDomSelected(item.$tag, item.select);
-      const selectionName = subcategory;
-      if (item.select) selections.push(selectionName);
-      else _.pull(selections, selectionName);
-    }
-  }
-  const requestCategoryTags = _.uniq(selections
-    .filter((s) => s.includes(','))
-    .map((s) => s.split(',')[0]));
-  // drop the category if its subcategory is selected
-  const requestTags = _.uniq(_.pullAll(selections, requestCategoryTags));
-  dirtyCategories.length = 0;
+/*
+ * PTA fork: tags ARE knowledge points. The tag input is a multi-select
+ * picker over the domain catalog (new names may be typed and are registered
+ * when the problem is saved), and the sidebar lists the catalog for
+ * click-to-add. Hydro's site-wide category widget is gone from this page.
+ */
+function initKnowledgePoints() {
   const $txt = $('[name="tag"]');
-  $txt.val([...requestTags, ...tags].join(', '));
-}
-
-function findCategory(name) {
-  const keys = Object.keys(categories);
-  if (keys.includes(name)) return [name, null];
-  for (const category of keys) {
-    const subkeys = Object.keys(categories[category].children);
-    if (subkeys.includes(name)) return [category, name];
-  }
-  return [null, null];
-}
-
-function parseCategorySelection() {
-  const $txt = $('[name="tag"]');
-  tags.length = 0;
-  for (const name of $txt.val().split(',').map((i) => i.trim())) {
-    if (!name) return;
-    const [category, subcategory] = findCategory(name);
-    if (!category) tags.push(name);
-    else if (!subcategory) {
-      categories[category].select = true;
-      dirtyCategories.push({ type: 'category', category });
-    } else {
-      categories[category].children[subcategory].select = true;
-      dirtyCategories.push({ type: 'subcategory', subcategory, category });
-    }
-  }
-  updateSelection();
-}
-
-function buildCategoryFilter() {
-  const $container = $('[data-widget-cf-container]');
-  if (!$container) return;
-  $container.attr('class', 'widget--category-filter row small-up-3 medium-up-2');
-  for (const category of $container.children('li').get()) {
-    const $category = $(category)
-      .attr('class', 'widget--category-filter__category column');
-    const $categoryTag = $category
-      .find('.section__title a')
-      .remove()
-      .attr('class', 'widget--category-filter__tag');
-    const categoryText = $categoryTag.text();
-    const $drop = $category
-      .children('.chip-list')
-      .remove()
-      .attr('class', 'widget--category-filter__drop');
-    const treeItem = {
-      select: false,
-      $tag: $categoryTag,
-      children: {},
-    };
-    categories[categoryText] = treeItem;
-    $category.empty().append($categoryTag);
-    if ($drop.length > 0) {
-      const $subCategoryTags = $drop
-        .children('li')
-        .attr('class', 'widget--category-filter__subcategory')
-        .find('a')
-        .attr('class', 'widget--category-filter__tag')
-        .attr('data-category', categoryText);
-      for (const subCategoryTag of $subCategoryTags.get()) {
-        const $tag = $(subCategoryTag);
-        treeItem.children[$tag.text()] = { select: false, $tag };
-      }
-      Dropdown.getOrConstruct($categoryTag, {
-        target: $drop[0],
-        position: 'left center',
-      });
-    }
-  }
-  $(document).on('click', '.widget--category-filter__tag', (ev) => {
-    if (ev.shiftKey || ev.metaKey || ev.ctrlKey) return;
-    const tag = $(ev.currentTarget).text();
-    const category = $(ev.currentTarget).attr('data-category');
-    const treeItem = category ? categories[category].children[tag] : categories[tag];
-    // the effect should be cancelSelect if it is shown as selected when clicking
-    const shouldSelect = treeItem.$tag.hasClass('selected') ? false : !treeItem.select;
-    treeItem.select = shouldSelect;
-    dirtyCategories.push(category
-      ? { type: 'subcategory', subcategory: tag, category }
-      : { type: 'category', category: tag });
-    if (!category && !shouldSelect) {
-      // de-select children
-      _.forEach(treeItem.children, (treeSubItem, subcategory) => {
-        if (treeSubItem.select) {
-          treeSubItem.select = false;
-          dirtyCategories.push({ type: 'subcategory', subcategory, category: tag });
-        }
-      });
-    }
-    updateSelection();
+  if (!$txt.length) return;
+  const picker = KnowledgePointSelectAutoComplete.getOrConstruct($txt, { multi: true, freeSolo: true, clearDefaultValue: false });
+  const $chips = $('.kpp__chip[data-kp]');
+  const syncChips = () => {
+    const have = new Set(picker.names().map((n) => n.toLowerCase()));
+    $chips.each(function markChip() {
+      const on = have.has(String($(this).attr('data-kp') || '').toLowerCase());
+      $(this).toggleClass('kpp__chip--on', on);
+    });
+  };
+  picker.onChange(syncChips);
+  $chips.on('click', function onChipClick(ev) {
     ev.preventDefault();
+    const name = String($(this).attr('data-kp') || '');
+    if (!name) return;
+    const cur = picker.names();
+    const idx = cur.findIndex((n) => n.toLowerCase() === name.toLowerCase());
+    if (idx >= 0) cur.splice(idx, 1);
+    else cur.push(name);
+    picker.setNames(cur);
+    syncChips();
   });
+  syncChips();
 }
 
 export default new NamedPage(['problem_create', 'problem_edit'], () => {
@@ -167,9 +71,7 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
       ev.target.click();
     });
   });
-  $(document).on('change', '[name="tag"]', parseCategorySelection);
-  buildCategoryFilter();
-  parseCategorySelection();
+  initKnowledgePoints();
 
   const $main = $('textarea[data-editor]');
   const $field = $('textarea[data-markdown-upload]');

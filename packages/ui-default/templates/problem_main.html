@@ -18,6 +18,8 @@
           <form method="get" id="searchForm" action="{{ url('problem_main') }}">
             <div class="search">
               {% if kind %}<input type="hidden" name="kind" value="{{ kind }}">{% endif %}
+              {# Keep an active knowledge-point filter while the text search changes. #}
+              {% if tags %}<input type="hidden" name="tags" value="{{ tags }}">{% endif %}
               <input name="q" type="text" value="{{ qs }}" placeholder="{{ _('Search') }}">
               {% include "partials/problem_stat.html" %}
               <select name="sort" class="search-sort">
@@ -93,6 +95,11 @@
               <span class="icon icon-lab"></span>
               {{ _('AI Studio') }}
             </a>
+            {# The domain's knowledge-point catalog (same permission as the Studio). #}
+            <a href="{{ url('knowledge_points') }}" class="menu__link">
+              <span class="icon icon-tag"></span>
+              {{ _('Knowledge points') }}
+            </a>
             {#
               Upstream renders these nodes WITHOUT calling item.checker().
               Keep it that way: this loop runs while the whole problem-set
@@ -118,7 +125,7 @@
       {% endif %}
       <div class="section side">
         <div class="section__header edit-mode-hide">
-          <h1 class="section__title">{{ _('Categories') }}</h1>
+          <h1 class="section__title">{{ _('Knowledge points') }}</h1>
         </div>
         <div class="section__body">
           {% include "partials/category.html" %}

@@ -34,7 +34,7 @@
           {{ form.form_text({
                row:false,
                columns:9,
-               label:'Tags',
+               label:'Knowledge points',
                help_text:'Split by \', \'.',
                name:'tag',
                value:pdoc['tag']|default([])|join(', ')
@@ -90,7 +90,7 @@
   <div class="medium-3 columns">
     <div class="section side visiable nojs--hide section--problem-sidebar-tags">
       <div class="section__header">
-        <h1 class="section__title">{{ _('Categories') }} ({{ _('click to add') }})</h1>
+        <h1 class="section__title">{{ _('Knowledge points') }} ({{ _('click to add') }})</h1>
       </div>
       <div class="section__body problem-sidebar-tags__detail">
         {% include "partials/category.html" %}

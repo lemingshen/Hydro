@@ -1,4 +1,5 @@
 import $ from 'jquery';
+import KnowledgePointSelectAutoComplete from 'vj/components/autocomplete/KnowledgePointSelectAutoComplete';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { getAvailableLangs, getTheme, i18n, request } from 'vj/utils';
@@ -142,6 +143,10 @@ export const AIS_STYLE = [
   '.ais__row { display: flex; gap: 14px; flex-wrap: wrap; }',
   '.ais__row > div { flex: 1 1 180px; }',
   '.ais__chip { display: inline-block; border-radius: 10px; padding: 2px 10px; font-size: 11.5px; background: #f1ecff; color: #7048e8; }',
+  '.ais__kp { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 4px; font-size: 11px; color: var(--pta-ink-faint); }',
+  '.ais__kp-tag { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; background: #f1ecff; color: #7048e8; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+  '.ais__kp-more { font-size: 11px; color: var(--pta-ink-faint); }',
+  '.pta-dark .ais__kp-tag { background: #322a48; color: #cdbdfb; }',
   '.ais__badge { display: inline-block; border-radius: 10px; padding: 2px 10px; font-size: 11.5px; font-weight: bold; }',
   '.ais__badge--idle { background: #f1f3f5; color: #666; }',
   '.ais__badge--running { background: #e7f5ff; color: #1c7ed6; animation: ais-breathe 2.4s ease-in-out infinite; }',
@@ -152,6 +157,41 @@ export const AIS_STYLE = [
   '.ais__table th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: #8a80b3; padding: 8px 10px; border-bottom: 1px solid #ece7f8; background: #faf9ff; }',
   '.ais__table td { padding: 9px 10px; border-bottom: 1px solid #f1eefb; font-size: 12.5px; }',
   '.ais__table tr:hover td { background: #faf8ff; }',
+  '.ais__th { cursor: pointer; user-select: none; white-space: nowrap; }',
+  '.ais__th:hover { color: #5f3dc4; }',
+  '.ais__th--on { color: #5f3dc4; }',
+  '.ais__th-dir { font-size: 10px; opacity: .6; margin-left: 2px; }',
+  '.ais__th--on .ais__th-dir { opacity: 1; }',
+  '.ais__lf-head { display: flex; align-items: baseline; gap: 8px; }',
+  '.ais__lf-count { font-size: 11.5px; font-weight: normal; color: #8a80b3; }',
+  '.ais__lf { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; padding: 10px 12px; border-radius: 12px; background: #faf9ff; border: 1px solid #ece7f8; }',
+  '.ais__lf-row { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: flex-end; }',
+  '.ais__lf-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }',
+  '.ais__lf-label { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8a80b3; }',
+  '.ais__lf-qwrap { display: inline-flex; align-items: center; gap: 6px; height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 999px; border: 1px solid #ddd6f3; background: #fff; color: #8a80b3; font-size: 12px; }',
+  '.ais__lf-qwrap:focus-within { border-color: #7048e8; box-shadow: 0 0 0 3px #efe9ff; }',
+  '.ais__lf-q { width: 220px !important; height: 26px !important; border: none !important; background: transparent !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; font-size: 12.5px; color: #2c2a3a; outline: none; }',
+  '.ais__lf-seg { display: inline-flex; flex-wrap: wrap; gap: 4px; }',
+  '.ais__lf-pill { display: inline-flex; align-items: center; gap: 5px; height: 28px; box-sizing: border-box; padding: 0 11px; border-radius: 999px; border: 1px solid #ddd6f3; background: #fff; color: #2c2a3a; font-size: 12px; line-height: 1; cursor: pointer; white-space: nowrap; transition: background .12s ease, border-color .12s ease, color .12s ease, transform .12s ease; }',
+  '.ais__lf-pill i { font-style: normal; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #f1ecff; color: #7048e8; }',
+  '.ais__lf-pill:hover { border-color: #7048e8; color: #5f3dc4; transform: translateY(-1px); }',
+  '.ais__lf-pill.is-on { background: #7048e8; border-color: #7048e8; color: #fff; }',
+  '.ais__lf-pill.is-on i { background: rgba(255, 255, 255, .22); color: #fff; }',
+  '.ais__lf-pill.is-empty:not(.is-on) { opacity: .5; }',
+  '.ais__lf-kp { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 30px; box-sizing: border-box; padding: 2px 8px; border-radius: 16px; border: 1px solid #ddd6f3; background: #fff; }',
+  '.ais__lf-kp:focus-within { border-color: #7048e8; box-shadow: 0 0 0 3px #efe9ff; }',
+  '.ais__lf-kpin { width: 190px !important; height: 24px !important; border: none !important; background: transparent !important; box-shadow: none !important; padding: 0 4px !important; margin: 0 !important; font-size: 12.5px; color: #2c2a3a; outline: none; }',
+  '.ais__lf-kptag { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 2px 6px 2px 10px; font-size: 11.5px; background: #f1ecff; color: #7048e8; border: 1px solid #d9cdff; }',
+  '.ais__lf-kptag button { border: none; background: transparent; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }',
+  '.ais__lf-clear { align-self: flex-end; height: 28px; padding: 0 12px; border-radius: 999px; border: 1px dashed #c8bff0; background: transparent; color: #7048e8; font-size: 12px; cursor: pointer; }',
+  '.ais__lf-clear:hover { background: #f1ecff; }',
+  '.ais__pager { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 10px; }',
+  '.ais__pg { min-width: 30px; height: 28px; border-radius: 8px; border: 1px solid #ddd6f3; background: #fff; color: #2c2a3a; font-size: 12.5px; cursor: pointer; padding: 0 8px; }',
+  '.ais__pg:hover:not(:disabled) { border-color: #7048e8; color: #5f3dc4; }',
+  '.ais__pg--on { background: #7048e8; border-color: #7048e8; color: #fff; }',
+  '.ais__pg:disabled { opacity: .4; cursor: default; }',
+  '.ais__pg-gap { padding: 0 4px; color: #8a80b3; }',
+  '.ais__pager .ais__lf-count { margin-left: 8px; }',
   '.ais__empty { color: #98a2ac; padding: 10px 2px; font-size: 12.5px; }',
   '.ais__banner { position: relative; display: flex; align-items: center; gap: 12px; border: 1px solid transparent; border-radius: var(--pta-radius-lg); padding: 13px 16px; margin: 0 0 16px; background: linear-gradient(var(--pta-card), var(--pta-card)) padding-box, linear-gradient(120deg, #4dabf7, #845ef7, #4dabf7) border-box; background-size: 100% 100%, 220% 100%; box-shadow: 0 10px 28px -14px rgba(132, 94, 247, .45); font-size: 13.5px; color: var(--pta-ink); overflow: hidden; animation: ptaFadeUp .3s var(--pta-ease) backwards, ptaSheen 9s ease infinite; }',
   '.ais__banner-ic { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 10px; background: var(--pta-grad-violet); color: #fff; font-size: 16px; flex: 0 0 auto; box-shadow: 0 6px 14px -6px rgba(112, 72, 232, .6); }',
@@ -244,6 +284,18 @@ export const AIS_STYLE = [
   '.pta-dark .ais__btn--danger { background: #23272c; }',
   '.pta-dark .ais__chip { background: #322a48; color: #cdbdfb; }',
   '.pta-dark .ais__table th { background: #262b31; color: #9d93c9; border-bottom-color: #37313f; }',
+  '.pta-dark .ais__th:hover, .pta-dark .ais__th--on { color: #cdbdfb; }',
+  '.pta-dark .ais__lf { background: #1f1d2b; border-color: #37313f; }',
+  '.pta-dark .ais__lf-qwrap, .pta-dark .ais__lf-kp, .pta-dark .ais__lf-pill, .pta-dark .ais__pg { background: #232032; border-color: #3d3750; color: #e7e3f5; }',
+  '.pta-dark .ais__lf-q, .pta-dark .ais__lf-kpin { color: #e7e3f5; }',
+  '.pta-dark .ais__lf-qwrap:focus-within, .pta-dark .ais__lf-kp:focus-within { box-shadow: 0 0 0 3px #322a48; }',
+  '.pta-dark .ais__lf-pill i { background: #322a48; color: #cdbdfb; }',
+  '.pta-dark .ais__lf-pill.is-on { background: #7048e8; border-color: #7048e8; color: #fff; }',
+  '.pta-dark .ais__lf-pill.is-on i { background: rgba(255, 255, 255, .22); color: #fff; }',
+  '.pta-dark .ais__lf-clear { border-color: #4a3d6b; color: #cdbdfb; }',
+  '.pta-dark .ais__lf-clear:hover { background: #322a48; }',
+  '.pta-dark .ais__lf-kptag { background: #322a48; color: #cdbdfb; border-color: #4a3d6b; }',
+  '.pta-dark .ais__pg--on { background: #7048e8; border-color: #7048e8; color: #fff; }',
   '.pta-dark .ais__table td { border-bottom-color: #2c3238; }',
   '.pta-dark .ais__table tr:hover td { background: #2a2536; }',
   '.pta-dark .ais__empty { color: #7f8b97; }',
@@ -378,27 +430,210 @@ function badge(d) {
   return `<span class="ais__badge ${cls}">${esc(i18n(STATUS_LABEL[d.status] || d.status))}</span>`;
 }
 
-function renderList($root, data) {
-  const provider = data.provider || {};
-  const KIND_CHIP = {
-    programming: ['p', 'P', 'Programming task'],
-    objective: ['o', 'O', 'Objective task'],
-    subjective: ['s', 'S', 'Subjective task'],
-  };
-  const rows = (data.drafts || []).map((d) => {
-    const [cls, letter, label] = KIND_CHIP[d.kind] || KIND_CHIP.programming;
-    return '<tr>'
-    + `<td><span class="ais__kindchip ais__kindchip--${cls}" title="${esc(i18n(label))}">${letter}</span><b>${esc(d.title || d.topic)}</b></td>`
+/* ------------------------------------------------------------------ */
+/*  Drafts list: sortable columns, filters, 10 per page                 */
+/* ------------------------------------------------------------------ */
+const PAGE_SIZE = 10;
+const KIND_CHIP = {
+  programming: ['p', 'P', 'Programming task'],
+  objective: ['o', 'O', 'Objective task'],
+  subjective: ['s', 'S', 'Subjective task'],
+};
+const BAND_ORDER = { intro: 0, medium: 1, challenge: 2 };
+/** One status key per draft, in the order sorting uses. */
+const STATUS_ORDER = ['idle', 'running', 'failed', 'passed', 'published_hidden', 'published'];
+const STATUS_FILTER_LABEL = {
+  idle: 'Draft', running: 'Verifying…', failed: 'Failed', passed: 'Verified', published_hidden: 'Published · hidden', published: 'Published',
+};
+const statusKey = (d) => (d.published ? (d.publishedHidden ? 'published_hidden' : 'published') : (d.status || 'idle'));
+
+/** Sort/filter/page state — remembered per domain across visits. */
+const LIST_STATE_KEY = () => `hydro:ai-studio-list:${UiContext.domainId || ''}`;
+const DEFAULT_LIST_STATE = { sort: 'updateAt', dir: 'desc', page: 1, q: '', kind: '', difficulty: '', status: '', knowledge: [] };
+let listState = { ...DEFAULT_LIST_STATE };
+try {
+  const saved = JSON.parse(localStorage.getItem(LIST_STATE_KEY()) || 'null');
+  if (saved && typeof saved === 'object') listState = { ...DEFAULT_LIST_STATE, ...saved, knowledge: Array.isArray(saved.knowledge) ? saved.knowledge : [] };
+} catch (e) { /* defaults */ }
+const saveListState = () => {
+  try { localStorage.setItem(LIST_STATE_KEY(), JSON.stringify(listState)); } catch (e) { /* ignore */ }
+};
+
+const SORT_KEYS = {
+  title: (d) => String(d.title || d.topic || '').toLowerCase(),
+  language: (d) => (d.kind === 'subjective' ? '\uffff' : String(d.language || '').toLowerCase()),
+  difficulty: (d) => (BAND_ORDER[d.difficulty] ?? 0) * 10 + (d.difficultyScore || 0),
+  status: (d) => STATUS_ORDER.indexOf(statusKey(d)),
+  updateAt: (d) => new Date(d.updateAt || 0).getTime(),
+};
+
+function applyListState(drafts, state = listState) {
+  const st = state;
+  const q = st.q.trim().toLowerCase();
+  const kp = st.knowledge.map((x) => x.toLowerCase());
+  let list = drafts.filter((d) => {
+    if (st.kind && d.kind !== st.kind) return false;
+    if (st.difficulty && d.difficulty !== st.difficulty) return false;
+    if (st.status && statusKey(d) !== st.status) return false;
+    if (q && !`${d.title || ''} ${d.topic || ''} ${(d.pids || []).join(' ')}`.toLowerCase().includes(q)) return false;
+    if (kp.length) {
+      const have = (d.knowledge || []).map((x) => String(x).toLowerCase());
+      if (!kp.every((k) => have.includes(k))) return false;
+    }
+    return true;
+  });
+  const key = SORT_KEYS[st.sort] || SORT_KEYS.updateAt;
+  const dir = st.dir === 'asc' ? 1 : -1;
+  list = [...list].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    const c = typeof ka === 'string' ? ka.localeCompare(kb) : ka - kb;
+    // Stable tie-break: newest first.
+    return c ? c * dir : new Date(b.updateAt || 0) - new Date(a.updateAt || 0);
+  });
+  return list;
+}
+
+function draftRowHtml(d) {
+  const [cls, letter, label] = KIND_CHIP[d.kind] || KIND_CHIP.programming;
+  return '<tr>'
+    + `<td><span class="ais__kindchip ais__kindchip--${cls}" title="${esc(i18n(label))}">${letter}</span><b>${esc(d.title || d.topic)}</b>${d.bonus ? ` <span class="ais__chip" title="${esc(i18n('Generated for one student of a self-learning session (hidden; reachable only through that session)'))}">🎁 ${esc(i18n('bonus for user {0}').replace('{0}', d.bonus.uid))}</span>` : ''}${knowledgeRow(d)}</td>`
     + `<td>${d.kind === 'subjective' ? '—' : `<span class="ais__chip">${esc(d.language)}</span>`}</td>`
-    + `<td>${esc(i18n(d.difficulty))}</td>`
+    + `<td>${esc(i18n(d.difficulty))}${d.difficultyScore ? ` <span class="aisd__meta">${d.difficultyScore}/10</span>` : ''}</td>`
     + `<td>${badge(d)}</td>`
     + `<td>${esc(fmtTs(d.updateAt))}</td>`
     + `<td><a class="ais__btn ais__btn--ghost ais__btn--sm" href="${domainPrefix()}/ai-studio/${d._id}">${esc(i18n('Open'))}</a></td>`
     + '</tr>';
-  }).join('');
+}
+
+/**
+ * The "My drafts" section. Owns its state and re-renders alone, so sorting,
+ * filtering or paging never disturbs the "New draft" form above it.
+ */
+function renderDrafts($sec, drafts) {
+  const st = listState;
+  const all = drafts || [];
+  const list = applyListState(all);
+  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (st.page > pages) st.page = pages;
+  if (st.page < 1) st.page = 1;
+  const from = (st.page - 1) * PAGE_SIZE;
+  const pageItems = list.slice(from, from + PAGE_SIZE);
+  const kpNames = [...new Set(all.flatMap((d) => d.knowledge || []).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const filtering = !!(st.q || st.kind || st.difficulty || st.status || st.knowledge.length);
+  const th = (key, label) => `<th class="ais__th${st.sort === key ? ' ais__th--on' : ''}" data-sort="${key}" title="${esc(i18n('Sort by {0}').replace('{0}', i18n(label)))}">${esc(i18n(label))} <span class="ais__th-dir">${st.sort === key ? (st.dir === 'asc' ? '▲' : '▼') : '⇅'}</span></th>`;
+  // A segment's count = drafts matching every OTHER active filter plus this
+  // value, so the teacher sees what each choice would leave.
+  const countWith = (patch) => applyListState(all, { ...st, ...patch, page: 1 }).length;
+  const seg = (field, current, options, allLabel) => `<div class="ais__lf-seg" data-field="${field}">
+      <button type="button" class="ais__lf-pill${current === '' ? ' is-on' : ''}" data-value="">${esc(i18n(allLabel))}</button>
+      ${options.map(([v, lb]) => {
+    const n = countWith({ [field]: v });
+    return `<button type="button" class="ais__lf-pill${current === v ? ' is-on' : ''}${n ? '' : ' is-empty'}" data-value="${esc(v)}">${esc(i18n(lb))}<i>${n}</i></button>`;
+  }).join('')}
+    </div>`;
+  const group = (label, inner) => `<div class="ais__lf-group"><span class="ais__lf-label">${esc(i18n(label))}</span>${inner}</div>`;
+  const pageBtn = (p, label, disabled, on) => `<button type="button" class="ais__pg${on ? ' ais__pg--on' : ''}" data-page="${p}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+  // Page numbers: first, last, and a window around the current page.
+  const nums = [];
+  for (let p = 1; p <= pages; p++) {
+    if (p === 1 || p === pages || Math.abs(p - st.page) <= 2) nums.push(p);
+    else if (nums[nums.length - 1] !== '…') nums.push('…');
+  }
+  $sec.html(`
+        <div class="ais__label ais__lf-head" style="margin-top:22px;">🗂 ${esc(i18n('My drafts'))} <span class="ais__lf-count">${list.length === all.length ? all.length : `${list.length} / ${all.length}`}</span></div>
+        <div class="ais__lf">
+          <div class="ais__lf-row">
+            ${group('Search', `<span class="ais__lf-qwrap">🔍<input type="text" class="ais__lf-q" value="${esc(st.q)}" placeholder="${esc(i18n('Title, topic or pid'))}"></span>`)}
+            ${group('Type', seg('kind', st.kind, [['programming', 'Programming'], ['objective', 'Objective'], ['subjective', 'Subjective']], 'All'))}
+            ${group('Difficulty', seg('difficulty', st.difficulty, [['intro', 'intro'], ['medium', 'medium'], ['challenge', 'challenge']], 'All'))}
+          </div>
+          <div class="ais__lf-row">
+            ${group('Status', seg('status', st.status, STATUS_ORDER.map((k) => [k, STATUS_FILTER_LABEL[k]]), 'All'))}
+            ${group('Knowledge points', `<span class="ais__lf-kp">
+              ${st.knowledge.map((n) => `<span class="ais__lf-kptag" data-name="${esc(n)}">${esc(n)}<button type="button" title="${esc(i18n('Remove'))}">×</button></span>`).join('')}
+              <input type="text" class="ais__lf-kpin" list="ais-lf-kplist" placeholder="${esc(st.knowledge.length ? i18n('Add another…') : i18n('Type to filter by a label…'))}">
+              <datalist id="ais-lf-kplist">${kpNames.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+            </span>`)}
+            ${filtering ? `<button type="button" class="ais__lf-clear">✕ ${esc(i18n('Clear filters'))}</button>` : ''}
+          </div>
+        </div>
+        ${pageItems.length ? `<table class="ais__table"><tr>${th('title', 'Title / Topic')}${th('language', 'Language')}${th('difficulty', 'Difficulty')}${th('status', 'Status')}${th('updateAt', 'Updated')}<th></th></tr>${pageItems.map(draftRowHtml).join('')}</table>`
+    : `<div class="ais__empty">${esc(all.length ? i18n('No draft matches these filters.') : i18n('No drafts yet.'))}</div>`}
+        ${list.length > PAGE_SIZE ? `<div class="ais__pager">
+          ${pageBtn(1, '«', st.page === 1)}${pageBtn(st.page - 1, '‹', st.page === 1)}
+          ${nums.map((n) => (n === '…' ? '<span class="ais__pg-gap">…</span>' : pageBtn(n, n, false, n === st.page))).join('')}
+          ${pageBtn(st.page + 1, '›', st.page === pages)}${pageBtn(pages, '»', st.page === pages)}
+          <span class="ais__lf-count">${esc(i18n('{0}–{1} of {2}').replace('{0}', from + 1).replace('{1}', Math.min(from + PAGE_SIZE, list.length)).replace('{2}', list.length))}</span>
+        </div>` : ''}`);
+
+  const update = (patch, keepPage = false) => {
+    Object.assign(listState, patch);
+    if (!keepPage) listState.page = 1;
+    saveListState();
+    renderDrafts($sec, all);
+  };
+  $sec.find('.ais__th').on('click', function onSort() {
+    const key = $(this).attr('data-sort');
+    update(listState.sort === key
+      ? { dir: listState.dir === 'asc' ? 'desc' : 'asc' }
+      : { sort: key, dir: key === 'updateAt' ? 'desc' : 'asc' }, true);
+  });
+  let qTimer = null;
+  $sec.find('.ais__lf-q').on('input', function onQ() {
+    const v = String($(this).val() || '');
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => {
+      const focused = document.activeElement === this;
+      update({ q: v });
+      if (focused) {
+        const el = $sec.find('.ais__lf-q').trigger('focus').get(0);
+        if (el && el.setSelectionRange) el.setSelectionRange(el.value.length, el.value.length);
+      }
+    }, 250);
+  });
+  $sec.find('.ais__lf-pill').on('click', function onPill() {
+    const field = $(this).closest('.ais__lf-seg').attr('data-field');
+    update({ [field]: String($(this).attr('data-value') || '') });
+  });
+  const addKp = () => {
+    const v = String($sec.find('.ais__lf-kpin').val() || '').trim();
+    if (!v) return;
+    if (!listState.knowledge.some((x) => x.toLowerCase() === v.toLowerCase())) update({ knowledge: [...listState.knowledge, v] });
+    else $sec.find('.ais__lf-kpin').val('');
+  };
+  $sec.find('.ais__lf-kpin').on('change', addKp).on('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      addKp();
+    }
+  });
+  $sec.find('.ais__lf-kptag button').on('click', function onRmKp() {
+    const name = $(this).closest('.ais__lf-kptag').attr('data-name');
+    update({ knowledge: listState.knowledge.filter((x) => x !== name) });
+  });
+  $sec.find('.ais__lf-clear').on('click', () => update({ q: '', kind: '', difficulty: '', status: '', knowledge: [] }));
+  $sec.find('.ais__pg').on('click', function onPage() {
+    const p = Number($(this).attr('data-page'));
+    if (Number.isFinite(p)) update({ page: p }, true);
+  });
+}
+
+/** Knowledge-point labels under a programming draft's title (first six, then a +n). */
+function knowledgeRow(d) {
+  const names = Array.isArray(d.knowledge) ? d.knowledge.filter(Boolean) : [];
+  if (!names.length) return '';
+  const shown = names.slice(0, 6);
+  const more = names.length - shown.length;
+  return `<div class="ais__kp" title="${esc(names.join(' · '))}">🏷️ ${shown.map((n) => `<span class="ais__kp-tag">${esc(n)}</span>`).join('')}${more > 0 ? `<span class="ais__kp-more">+${more}</span>` : ''}</div>`;
+}
+
+function renderList($root, data) {
+  const provider = data.provider || {};
   $root.html(`
     <div class="ais">
       <div class="ais__head">✨ <span class="ais__title">${esc(i18n('AI Studio'))}</span>
+        <a class="ais__btn ais__btn--ghost ais__btn--sm" href="${domainPrefix()}/knowledge-points" style="margin-left:12px;">🏷️ ${esc(i18n('Knowledge points'))}</a>
         <span class="ais__hint">${esc(i18n('Model'))}: ${esc(provider.provider || '?')} / ${esc(provider.model || '?')}${provider.build ? ` · ${esc(i18n('build'))} ${esc(provider.build)}` : ''}</span></div>
       <div class="ais__body">
         <div class="ais__label">🧠 ${esc(i18n('New draft'))}</div>
@@ -427,6 +662,11 @@ function renderList($root, data) {
             ${renderAllowLangsDd(langEntries(data.langs), [], false)}
             <div class="aisd__meta">${esc(i18n('Empty = every judge language.'))}</div></div>
         </div>
+        <div class="ais__prog-only">
+          <div class="ais__label">🎯 ${esc(i18n('Target knowledge points (optional)'))}</div>
+          <div class="aisd__meta" style="margin-bottom:6px;">${esc(i18n('Pick from the domain catalog (or type new ones). The AI designs the task so that a correct solution needs every one of them, probes them in the tests, and labels the task with them.'))}</div>
+          <input type="text" class="ais__knowledge" placeholder="${esc(i18n('Search knowledge points…'))}">
+        </div>
         <div class="ais__obj-only" hidden>
           <div class="ais__label">${esc(i18n('How many questions?'))}</div>
           <select class="ais__qcount" style="max-width:200px;">
@@ -449,11 +689,10 @@ function renderList($root, data) {
         <div class="ais__label">🧷 ${esc(i18n('Extra requirements (optional)'))}</div>
         <textarea class="ais__notes" rows="3" placeholder="${esc(i18n('e.g. must use a loop and no arrays; write the statement in English'))}"></textarea>
         <div style="margin-top:12px;"><button type="button" class="ais__btn ais__create">✨ ${esc(i18n('Create draft'))}</button></div>
-        <div class="ais__label" style="margin-top:22px;">🗂 ${esc(i18n('My drafts'))}</div>
-        ${rows ? `<table class="ais__table"><tr><th>${esc(i18n('Title / Topic'))}</th><th>${esc(i18n('Language'))}</th><th>${esc(i18n('Difficulty'))}</th><th>${esc(i18n('Status'))}</th><th>${esc(i18n('Updated'))}</th><th></th></tr>${rows}</table>`
-    : `<div class="ais__empty">${esc(i18n('No drafts yet.'))}</div>`}
+        <div class="ais__drafts"></div>
       </div>
     </div>`);
+  renderDrafts($root.find('.ais__drafts'), data.drafts || []);
   let allowSel = [];
   wireAllowLangsDd($root, (langs) => { allowSel = langs; });
   const LANG_LABEL = {
@@ -467,6 +706,9 @@ function renderList($root, data) {
     subjective: i18n('e.g. A mini-project: build a command-line address book in C and report on your data-structure choices'),
   };
   const currentKind = () => String($root.find('input[name="ais-kind"]:checked').val() || 'programming');
+  // Target knowledge points: a catalog-backed multi-select; its value is a
+  // comma-joined list of names, sent with the create request.
+  const kpPicker = KnowledgePointSelectAutoComplete.getOrConstruct($root.find('.ais__knowledge'), { multi: true, freeSolo: true, clearDefaultValue: false });
   $root.find('input[name="ais-kind"]').on('change', function onKind() {
     const kind = currentKind();
     // Programming needs the full judge configuration; an objective quiz is
@@ -534,7 +776,7 @@ function renderList($root, data) {
         crosscheck: $root.find('.ais__cross').val() === '1',
         notes: String($root.find('.ais__notes').val() || ''),
         ...(kind === 'programming'
-          ? { allowLangs: allowSel.join(',') }
+          ? { allowLangs: allowSel.join(','), knowledge: kpPicker.names().join(',') }
           : kind === 'objective'
             ? { qtypes: qtypes.join(','), qcount: String($root.find('.ais__qcount').val() || '0') }
             : {}),

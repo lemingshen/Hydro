@@ -380,7 +380,7 @@ const page = new NamedPage(['problem_detail', 'contest_detail_problem', 'homewor
   });
   $(document).on('click', '[name="show_tags"]', (ev) => {
     $(ev.currentTarget).hide();
-    $('span.tags').css('display', 'inline-block');
+    $('.problem__tag-item.tags').css('display', 'inline-block');
   });
   $('[name="problem-sidebar__download"]').on('click', handleClickDownloadProblem);
   if (UiContext.pdoc.config?.type === 'objective') {

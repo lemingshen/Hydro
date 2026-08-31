@@ -35,7 +35,8 @@ import { Logger } from '../logger';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../error';
 import * as aiTutor from '../lib/ai_tutor';
 import { AdmZip } from '../libs';
-import { PERM } from '../model/builtin';
+import { PERM, PRIV } from '../model/builtin';
+import KnowledgeModel from '../model/knowledge';
 import problem from '../model/problem';
 import record from '../model/record';
 import * as setting from '../model/setting';
@@ -80,6 +81,24 @@ export interface AuthorCase {
     sample: boolean;
     purpose?: string;
 }
+/**
+ * One knowledge point = one attribute of a programming task: a DETAILED
+ * skill, technique or pitfall the task exercises ("Off-by-one in loop
+ * bounds", "Prefix-sum array for range sums"), never a coarse topic
+ * ("arrays"). Each point's name becomes a tag on the published problem.
+ */
+export interface KnowledgePoint {
+    /**
+     * 2-6 words, at most 40 characters; the canonical spelling from the
+     * domain's knowledge-point catalog (model/knowledge.ts) once synced, and
+     * written to the problem's tags verbatim.
+     */
+    name: string;
+    /** One sentence naming what in the statement / solution / tests requires it. */
+    evidence?: string;
+    /** General one-sentence definition — used when the point is NEW to the catalog. */
+    description?: string;
+}
 /** One turn of the statement-review conversation between teacher and AI. */
 export interface AuthorChatTurn {
     role: 'user' | 'assistant';
@@ -110,6 +129,14 @@ export interface AuthorDraftDoc {
         qtypes?: string[];
         /** Objective only: how many questions to write. 0/absent = the AI decides. */
         qcount?: number;
+        /**
+         * Programming only: TARGET knowledge points the task must exercise,
+         * pre-selected by the teacher from the domain catalog (unknown
+         * names are allowed and become catalog entries when the task is
+         * labeled). Snapshotted with their catalog descriptions so the
+         * prompt builders stay synchronous.
+         */
+        knowledge?: { name: string, description?: string }[];
     };
     /**
      * Two-phase authoring gate. Every kind first drafts ONLY the statement
@@ -147,7 +174,36 @@ export interface AuthorDraftDoc {
         report?: { summary: string, knowledgePoints: string[], caseDesign: string, pitfalls: string[] };
         /** Objective only: the answer key, canonical YAML `id: [answer, score]`. */
         answers?: { yaml: string };
+        /**
+         * Programming only: the task's knowledge-point labels. Drafted by
+         * the pipeline once verification passes (from the statement, the
+         * reference solution and the test design), regenerable and
+         * editable by the teacher, and mirrored into the problem's tags by
+         * syncKnowledgeTags. `source` records who last wrote them: the
+         * pipeline never overwrites a teacher-edited set.
+         */
+        knowledge?: { points: KnowledgePoint[], source: 'ai' | 'teacher', at: Date };
+        /**
+         * Programming only: the numeric difficulty (1-10) of the finished
+         * task, rated by the AI within the brief's band once verification
+         * passes (see P_DIFFICULTY), adjustable by the teacher, and written
+         * to the problem's `difficulty` (the number the problem set shows).
+         */
+        difficulty?: { score: number, band: string, rationale: string, source: 'ai' | 'teacher', at: Date };
     };
+    /**
+     * The knowledge-point names last written into the scratch/published
+     * problem's tags. A re-sync replaces exactly these and keeps every
+     * other tag (the teacher may add tags on the problem page too).
+     */
+    knowledgeTags?: string[];
+    /**
+     * Set when the draft is a BONUS TASK generated for one student of a
+     * self-learning session (see handler/self_learning.ts): the problem stays
+     * hidden, is reachable only through that session, and the pipeline
+     * skips the teacher briefing.
+     */
+    bonus?: { ssid: ObjectId, uid: number };
     docId?: number; // the hidden scratch/final problem
     pipeline: {
         status: 'idle' | 'running' | 'passed' | 'failed';
@@ -174,7 +230,7 @@ export interface AuthorDraftDoc {
  * with the stamp on screen, "which code is actually running" is answerable
  * from a screenshot instead of a guess.
  */
-export const AI_STUDIO_BUILD = '2026-08-23c-sentinel';
+export const AI_STUDIO_BUILD = '2026-08-30a-difficulty';
 
 const coll: Collection<AuthorDraftDoc> = db.collection('ai.author.draft' as any);
 
@@ -337,7 +393,7 @@ const BODY_CLOSE = 'BODY>>>';
 
 const SYS_TEXT = 'You are an assistant that helps a university teacher author exercises for an online judge used in teaching. '
     + 'You reply in EXACTLY the plain-text format requested — never JSON, and never wrap the whole reply in markdown fences. '
-    + 'Write the statement in the same natural language the teacher used in the brief (Chinese brief -> Chinese statement; English brief -> English statement).';
+    + 'Write EVERYTHING you produce in English only — statements, titles, questions, options, comments in code, reports, labels — regardless of the language of the brief, the course materials or the teacher\'s messages (read them in any language; answer in English).';
 
 const FORMAT_TITLE_BODY = `Reply in EXACTLY this plain-text format and nothing else — no JSON, no commentary before or after:
 TITLE: <the title, on a single line>
@@ -429,7 +485,7 @@ async function aiJSON(systemPrompt: string, userPrompt: string, model?: string):
 
 /* ------------------------------------------------------------------ */
 /*  Prompts (small, single-purpose, language of statement follows the  */
-/*  language the teacher wrote the topic in)                           */
+/*  the AI writes in English whatever language the topic is in)        */
 /* ------------------------------------------------------------------ */
 /**
  * The OJ's configured languages, filtered EXACTLY like the scratchpad does
@@ -495,6 +551,28 @@ function langPromptHint(id: string): string {
     if (id.startsWith('pas')) return 'Pascal: read from input, write to output';
     return 'read from standard input, write only the answer to standard output';
 }
+/**
+ * The numeric difficulty (1-10, the value Hydro shows in the problem set
+ * and filters on) for each band the teacher can pick. The AI rates the
+ * finished task INSIDE its band: intro 1-3, medium 4-7, challenge 8-10.
+ */
+export const DIFF_BANDS: Record<string, { min: number, max: number }> = {
+    intro: { min: 1, max: 3 },
+    medium: { min: 4, max: 7 },
+    challenge: { min: 8, max: 10 },
+};
+export function bandOfScore(score: number): 'intro' | 'medium' | 'challenge' {
+    if (score <= 3) return 'intro';
+    if (score <= 7) return 'medium';
+    return 'challenge';
+}
+function clampToBand(score: any, band: string): number {
+    const b = DIFF_BANDS[band] || DIFF_BANDS.intro;
+    const n = Math.round(Number(score));
+    if (!Number.isFinite(n)) return Math.round((b.min + b.max) / 2);
+    return Math.max(b.min, Math.min(b.max, n));
+}
+
 const DIFF_HINT: Record<string, string> = {
     intro: 'first-year introductory level: single loop / simple condition / basic array, input size at most a few thousand',
     medium: 'standard coursework level: nested loops, sorting, simple data structures, input size at most ~10^5',
@@ -558,6 +636,12 @@ function briefBlock(d: AuthorDraftDoc): string {
         isObj ? qcountLine : '',
         isObj ? qtypeLine : '',
         d.brief.notes ? `Extra requirements from the teacher:\n${d.brief.notes.slice(0, 4000)}` : '',
+        // The teacher's pre-selected knowledge points: the task exists to
+        // exercise THESE. Listed with their catalog definitions so the model
+        // designs for the skill, not for the label.
+        kind === 'programming' && d.brief.knowledge?.length
+            ? `TARGET KNOWLEDGE POINTS (the task MUST exercise every one of these — see the rules of each stage):\n${d.brief.knowledge.map((k, i) => `${i + 1}. ${k.name}${k.description ? ` — ${k.description}` : ''}`).join('\n')}`
+            : '',
     ];
     // Fair share across every uploaded file: each gets budget/n, and whatever
     // short files leave unused flows to the longer ones — so a slide deck can
@@ -593,7 +677,7 @@ ${FENCE}` : body;
 
 const SYS_COMMON = 'You are an assistant that helps a university teacher author programming exercises for an online judge used in teaching. '
     + 'You always reply with ONLY a single JSON value matching the requested schema — no prose, no markdown fences. '
-    + 'Write the problem statement in the same natural language the teacher used in the brief (Chinese brief -> Chinese statement; English brief -> English statement).';
+    + 'Write EVERYTHING you produce in English only — statements, titles, questions, options, comments in code, reports, labels — regardless of the language of the brief, the course materials or the teacher\'s messages (read them in any language; answer in English).';
 
 const P_SPEC = `Draft the problem STATEMENT for a programming exercise based on the brief.
 Schema: {"title": string, "body": string}
@@ -602,7 +686,8 @@ Rules for "body" (markdown):
 - Standard input/output only. Deterministic single correct output per input.
 - Do NOT include any sample section — samples are generated by running the reference solution later.
 - SIZE BUDGET: any single test INPUT must fit in under 90,000 characters (the judge pipe truncates beyond ~100KB). Choose maximum constraints that FIT this budget for your input format: n up to 1e5 only for compact formats (e.g. one line of space-separated small numbers); for line-per-record or multi-token formats, cap n so n x bytes-per-record stays under the budget (typically n <= 5,000-8,000). Large graded inputs are produced by generator programs, not typed literally. Keep every OUTPUT small (aggregate answers such as one number or a short line; never echo the whole input), well under 50KB.
-- Title: short, descriptive, no numbering.`;
+- Title: short, descriptive, no numbering.
+- If the brief lists TARGET KNOWLEDGE POINTS, design the task around them: a correct solution must genuinely require EVERY listed point (choose the scenario, the input format and the constraints so that none of them can be sidestepped), and do not center the task on techniques outside the list. Never name the knowledge points in the statement — the student must recognise them.`;
 
 const P_SOLUTION = `Write the REFERENCE SOLUTION for the problem below.
 Schema: {"language": string, "code": string}
@@ -628,16 +713,38 @@ Rules:
 - Small cases: give the LITERAL stdin text in "input" (match the input format exactly, end with a newline, at most 4000 characters) and leave "gen" as "".
 - Large cases (near max constraints): leave "input" as "" and put a SELF-CONTAINED Python 3 program in "gen" that PRINTS the test input to stdout. Use a FIXED random seed, no command-line arguments. The PRINTED input must stay under 90,000 characters — if the statement's stated maximum cannot fit that budget for this input format, use the LARGEST size that fits instead of the stated maximum.
 - Every case's OUTPUT must stay small (the reference solution prints an aggregate answer, not the input back).
-- "purpose": one short line on what this case checks. "name": short slug like "min-n" or "max-random".`;
+- "purpose": one short line on what this case checks. "name": short slug like "min-n" or "max-random".
+- If the brief lists TARGET KNOWLEDGE POINTS, make sure the cases probe each of them (the edge case, the pitfall or the scale that makes each point matter) and say so in "purpose".`;
 
 const P_REPORT = `Write a short TEACHER BRIEFING for the finished programming task below. The teacher will read it to decide how to use the task in class.
 Schema: {"summary": string, "knowledgePoints": [string], "caseDesign": string, "pitfalls": [string]}
 Rules:
-- Write in the same natural language as the problem statement.
+- Write in English only.
 - "summary": 2-3 sentences — what the task asks and the key idea a correct solution needs.
 - "knowledgePoints": 3-6 short items naming the concepts the task tests; when lecture material is provided, tie them to it explicitly.
 - "caseDesign": one short paragraph on how the test cases probe understanding (edge cases, the large case, what breaks naive attempts).
 - "pitfalls": 2-4 likely student mistakes or misconceptions this task will surface.`;
+
+const P_KNOWLEDGE = `Label the programming task below with its KNOWLEDGE POINTS — the concrete skills, techniques, constructs and pitfalls a student must handle to solve it. The labels become the problem's tags: teachers filter tasks by them and the class analytics name what students struggle with in the same vocabulary.
+Schema: {"points": [{"name": string, "evidence": string, "isNew": boolean, "description": string}]}
+Rules:
+- The DOMAIN CATALOG below lists the knowledge points this course already uses. Whenever an existing entry fits, output its name EXACTLY as listed (never a paraphrase or a synonym — that would split the vocabulary) and set "isNew": false. Add a new point only when nothing in the catalog captures what the task exercises; then set "isNew": true and give a "description": ONE general sentence defining the skill for the catalog (about the skill in general, not about this task).
+- 4 to 8 points, most central first. No duplicates or near-duplicates.
+- DETAILED, never high-level. Each point must name the SPECIFIC technique, construct, property or pitfall this task actually exercises. GOOD: "Off-by-one in loop bounds", "Prefix-sum array for range sums", "Integer overflow beyond 32-bit", "Two-pointer sweep on a sorted array", "Reading input until EOF", "Modulo of negative numbers", "Memoization keyed on two indices", "Sorting with a custom comparator", "Fixed-precision decimal output". BAD — too coarse, never output these on their own: "Arrays", "Loops", "Strings", "Math", "Dynamic programming", "Basic programming", "Problem solving".
+- Every point must be grounded in the statement, the reference solution or the test design; "evidence" says where, in one short sentence. Do not invent points the task does not require.
+- "name": 2-6 words, at most 40 characters, capitalize only the first word (and proper nouns), no trailing punctuation, no verdict names ("Wrong Answer"), no difficulty words ("easy").
+- Reuse the terminology of the course material when it is provided (lecture slides, notes). Keep language-specific points (e.g. "std::vector growth", "Python list comprehension") only when the task's allowed languages make them relevant.
+- If the brief lists TARGET KNOWLEDGE POINTS, list first — under their exact listed names — those the finished task actually exercises; leave out any target the task does not really require (never label a point the task does not need).
+- Write the names in English only.`;
+
+const P_DIFFICULTY = `Rate the DIFFICULTY of the finished programming task below on Hydro's 1-10 scale, inside the band the teacher chose: intro = 1-3, medium = 4-7, challenge = 8-10 (the band is given; place the task within it).
+Schema: {"score": number, "rationale": string}
+Rubric (judge the task as a student of that course meets it):
+- Low end of the band: one idea, direct translation of the statement into code, a single loop or condition, small input, no pitfalls beyond reading input correctly.
+- Middle: two ideas combined, one non-obvious edge case or invariant, moderate input handling, or a small data structure.
+- High end: an insight the statement does not spell out, several interacting edge cases, tight constraints that rule out the naive approach, or tricky implementation (state, indices, overflow, precision).
+Consider: the number and difficulty of the knowledge points required, the length and subtlety of the reference solution, what the test cases probe (edge cases, maximum constraints), and the measured limits.
+"score": an integer in the band. "rationale": one or two sentences naming what drives the score, in English.`;
 
 const P_ARBITER = `Two independently written solutions printed DIFFERENT outputs for the same test input of the problem below. Decide which one is wrong.
 Schema: {"correctOutput": string, "faulty": "reference" | "crosscheck" | "ambiguous", "reason": string, "clarification": string}
@@ -653,7 +760,7 @@ Reply with the SAME schema as the artifact ({"language","code"} for solutions, {
 Use the judge evidence to find the actual bug; do not change the problem's meaning.`;
 
 const P_REFINE = `Revise ONLY the requested artifact according to the teacher's instruction.
-Reply with the SAME schema as the artifact ({"title","body"} / {"language","code"} / {"cases":[...]}). Keep everything not covered by the instruction unchanged.`;
+Reply with the SAME schema as the artifact ({"title","body"} / {"language","code"} / {"cases":[...]} / {"points":[{"name","evidence"}]}). Keep everything not covered by the instruction unchanged.`;
 
 /* ------------------------------------------------------------------ */
 /*  Subjective (project-level) tasks                                   */
@@ -678,7 +785,7 @@ Rules for "body" (markdown):
  * explains and applies the change. When the teacher only asks a question,
  * the statement comes back byte-identical and "changed" is false.
  */
-const P_CHAT = `You are revising a problem statement together with the teacher who will assign it. The teacher's latest message is at the end of the conversation.
+const P_CHAT = `You are revising a problem statement together with the teacher who will assign it. The teacher's latest message is at the end of the conversation. If the brief lists TARGET KNOWLEDGE POINTS, every revision must keep the task genuinely requiring all of them unless the teacher explicitly drops one.
 Reply in EXACTLY this plain-text format and nothing else:
 REPLY: <1-3 short sentences to the teacher, in the teacher's own language, on one line>
 TITLE: <the statement title, on one line>
@@ -734,7 +841,7 @@ const P_OBJ_QUESTIONS = [
     OBJ_FORMAT_RULES,
     'Do NOT reveal, mark, or hint at which option is correct — the answer key is written separately in a later step. Order the options naturally, not with the correct one always first.',
     'Every question must have exactly one defensible correct answer (or, for multiple choice, one defensible correct SET) derivable from the teacher\'s materials.',
-    "Ground every question in the teacher's materials; write in the same language as the brief.",
+    "Ground every question in the teacher's materials; write in English only.",
 ].join('\n');
 
 /** PHASE 2 for objective drafts: the answer key for questions already fixed. */
@@ -760,7 +867,7 @@ const P_OBJECTIVE = [
     '- True/False = a select with exactly two options: True / False (or 对 / 错 when the brief is Chinese).',
     '- Never put markers inside code fences. 4-8 questions unless the teacher asked otherwise. Mix the requested question types sensibly.',
     '"answers": select → the single correct option LETTER ("A", "B", …); multiselect → array of correct letters, alphabetically sorted; dropdown → the exact option text; input/textarea → the exact expected string (short and unambiguous — a number or one word). Every score is a positive integer and all scores sum to 100.',
-    "Ground every question in the teacher's materials; write in the same language as the brief.",
+    "Ground every question in the teacher's materials; write in English only.",
 ].join('\n');
 
 const P_OBJ_REPAIR = 'The quiz below failed validation. Fix the problems and reply with the SAME full schema {"title","body","answers"}. Keep questions that had no problem unchanged.';
@@ -980,7 +1087,7 @@ const P_REPORT_SUBJECTIVE = 'Write a short TEACHER BRIEFING for the subjective, 
     + 'Schema: {"summary": string, "knowledgePoints": string[], "caseDesign": string, "pitfalls": string[]}. '
     + '"summary" = what the assignment asks and what a strong submission looks like. "knowledgePoints" = the skills it exercises. '
     + '"caseDesign" = how to grade it: what to look for in the deliverables and the report, and how to apply the rubric consistently. '
-    + '"pitfalls" = where students typically go wrong or under-deliver. Write in the statement\'s language.';
+    + '"pitfalls" = where students typically go wrong or under-deliver. Write in English only.';
 
 function statementContext(d: AuthorDraftDoc): string {
     const s = d.artifacts.statement;
@@ -1085,6 +1192,164 @@ const kindOf = (d: AuthorDraftDoc): AuthorKind => ((d.brief.kind || 'programming
  * do have downstream artifacts, so they resolve to 'approved' and keep their
  * old toolbar rather than being sent back through a review they never had.
  */
+/* ------------------------------------------------------------------ */
+/*  Knowledge points (programming tasks): labels -> problem tags       */
+/* ------------------------------------------------------------------ */
+const KNOWLEDGE_MAX = 12;
+const KNOWLEDGE_NAME_MAX = 40;
+
+/**
+ * Normalize model output or teacher input into a clean point list:
+ * strings or {name, evidence} objects, trimmed, capped, de-duplicated
+ * case-insensitively, order preserved (most central first).
+ */
+function sanitizeKnowledgePoints(raw: any, max = KNOWLEDGE_MAX): KnowledgePoint[] {
+    const list = Array.isArray(raw) ? raw : Array.isArray(raw?.points) ? raw.points : [];
+    const seen = new Set<string>();
+    const out: KnowledgePoint[] = [];
+    for (const item of list) {
+        const name = String((item && typeof item === 'object') ? item.name : item ?? '')
+            .replace(/\s+/g, ' ').replace(/[.;:,\s]+$/g, '').trim().slice(0, KNOWLEDGE_NAME_MAX).trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const evidence = (item && typeof item === 'object' && typeof item.evidence === 'string')
+            ? item.evidence.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+        const description = (item && typeof item === 'object' && typeof item.description === 'string')
+            ? item.description.replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+        out.push({ name, ...(evidence ? { evidence } : {}), ...(description ? { description } : {}) });
+        if (out.length >= max) break;
+    }
+    return out;
+}
+
+/**
+ * Resolve the teacher's pre-selected target knowledge points against the
+ * catalog: canonical spelling and description for known entries, the name
+ * as typed for new ones. Stored on the brief so the (synchronous) prompt
+ * builders can cite them.
+ */
+async function snapshotTargetKnowledge(domainId: string, raw: string | string[]): Promise<{ name: string, description?: string }[]> {
+    const names = (Array.isArray(raw) ? raw : String(raw || '').split(/[,\n]/))
+        .map((x) => KnowledgeModel.normalizeName(x)).filter((x) => x);
+    const out: { name: string, description?: string }[] = [];
+    const seen = new Set<string>();
+    for (const name of names.slice(0, 12)) {
+        const doc = await KnowledgeModel.getByName(domainId, name);
+        const final = doc ? doc.name : name;
+        const k = final.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(doc?.description ? { name: final, description: doc.description } : { name: final });
+    }
+    return out;
+}
+
+/**
+ * The domain catalog as prompt context: every entry's canonical name, its
+ * description and aliases, so the model can reuse the course vocabulary
+ * verbatim instead of coining a near-synonym per task. Capped in size; a
+ * very large catalog is truncated with a note.
+ */
+async function catalogBlock(domainId: string): Promise<string> {
+    const docs = await KnowledgeModel.list(domainId, '', 400);
+    if (!docs.length) return '=== DOMAIN KNOWLEDGE-POINT CATALOG ===\n(empty — every point you output becomes its first entry)\n=== END CATALOG ===';
+    const lines: string[] = [];
+    let total = 0;
+    for (const d of docs) {
+        const line = `- ${d.name}${d.description ? ` — ${d.description.slice(0, 120)}` : ''}${d.aliases?.length ? ` (aliases: ${d.aliases.join(', ')})` : ''}`;
+        if (total + line.length > 7000) {
+            lines.push(`... (${docs.length - lines.length} more entries omitted)`);
+            break;
+        }
+        lines.push(line);
+        total += line.length + 1;
+    }
+    return `=== DOMAIN KNOWLEDGE-POINT CATALOG (${docs.length} entries; reuse these names EXACTLY when they fit) ===\n${lines.join('\n')}\n=== END CATALOG ===`;
+}
+
+/**
+ * Map point names onto the catalog: a name (or alias) the catalog knows
+ * becomes its canonical spelling; an unknown one is registered as a new
+ * entry when `create` is set (with the model's general description), so
+ * every point a task carries exists in the domain vocabulary. Evidence and
+ * order are preserved; duplicates after canonicalization collapse.
+ */
+async function canonicalizePoints(
+    domainId: string, points: KnowledgePoint[],
+    create: { source: 'ai' | 'teacher', owner: number } | null,
+): Promise<KnowledgePoint[]> {
+    const out: KnowledgePoint[] = [];
+    const seen = new Set<string>();
+    for (const p of points) {
+        const name = KnowledgeModel.normalizeName(p.name);
+        if (!name) continue;
+        let canonical = await KnowledgeModel.resolve(domainId, name);
+        if (!canonical && create) {
+            canonical = (await KnowledgeModel.ensure(domainId, [{ name, description: p.description || '' }], create))[0] || name;
+        }
+        const final = canonical || name;
+        const k = final.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ ...p, name: final });
+    }
+    return out;
+}
+
+/** Write the draft's difficulty score onto its scratch/published problem (no-op without one). */
+async function syncDifficulty(domainId: string, id: ObjectId): Promise<number | null> {
+    const d = await getDraft(domainId, id);
+    const score = d.artifacts.difficulty?.score;
+    if (kindOf(d) !== 'programming' || !d.docId || !score) return null;
+    await problem.edit(domainId, d.docId, { difficulty: score });
+    return score;
+}
+
+/**
+ * Sync the draft's knowledge points outward: (1) into the DOMAIN CATALOG —
+ * canonical spellings win, unknown points are registered — and (2) into
+ * the scratch/published problem's tags. The tag sync replaces only the
+ * names written by the previous sync (d.knowledgeTags); every other tag —
+ * set by hand on the problem page, or predating the labels — survives.
+ * Idempotent; without a scratch problem yet only the catalog part runs
+ * (postPublish syncs again, so nothing is lost).
+ */
+async function syncKnowledgeTags(domainId: string, id: ObjectId): Promise<string[] | null> {
+    let d = await getDraft(domainId, id);
+    if (kindOf(d) !== 'programming') return null;
+    const raw = d.artifacts.knowledge?.points || [];
+    if (raw.length) {
+        const canonical = await canonicalizePoints(domainId, raw, {
+            source: d.artifacts.knowledge?.source === 'teacher' ? 'teacher' : 'ai', owner: d.owner,
+        });
+        // Persist the canonical spellings so the draft, the catalog and the
+        // tags never disagree on a name.
+        if (canonical.map((x) => x.name).join('\u0001') !== raw.map((x) => x.name).join('\u0001')) {
+            await patchDraft(id, { 'artifacts.knowledge.points': canonical });
+            d = await getDraft(domainId, id);
+        }
+    }
+    if (!d.docId) return null;
+    const pdoc = await problem.get(domainId, d.docId);
+    if (!pdoc) return null;
+    const points = (d.artifacts.knowledge?.points || []).map((p) => p.name).filter(Boolean);
+    const previous = new Set((d.knowledgeTags || []).map((t) => String(t).toLowerCase()));
+    const kept = (pdoc.tag || []).filter((t) => !previous.has(String(t).toLowerCase()));
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const t of [...kept, ...points]) {
+        const k = String(t).toLowerCase();
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        merged.push(String(t));
+    }
+    await problem.edit(domainId, d.docId, { tag: merged });
+    await patchDraft(id, { knowledgeTags: points });
+    return merged;
+}
+
 function phaseOf(d: AuthorDraftDoc): 'brief' | 'review' | 'approved' {
     if (!d.artifacts.statement) return 'brief';
     if (d.approved) return 'approved';
@@ -1132,6 +1397,47 @@ async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any>
             if (lit) lit.sample = true;
         }
         return { tests: cases };
+    }
+    if (target === 'knowledge') {
+        if (!d.artifacts.statement) throw new BadRequestError('Generate the statement first.');
+        // The reference solution and the test design are the best evidence
+        // of what the task really exercises; before Continue only the
+        // statement exists, and the labels are drafted from that alone.
+        const testsDigest = (d.artifacts.tests || []).map((c, i) => `${i + 1}. ${c.name}${c.sample ? ' [sample]' : ''}${c.gen ? ' [generated]' : ''}: ${c.purpose || ''}`).join('\n');
+        const allow = sanitizeAllowLangs(d.brief.allowLangs || []);
+        const catalog = await catalogBlock(d.domainId);
+        const j = await aiJSON(SYS_COMMON, [
+            P_KNOWLEDGE, catalog, brief, statementContext(d),
+            d.artifacts.solution ? `=== REFERENCE SOLUTION (${d.artifacts.solution.language}) ===\n${d.artifacts.solution.code.slice(0, 8000)}\n=== END ===` : '',
+            testsDigest ? `=== TEST CASES ===\n${testsDigest}\n=== END ===` : '',
+            `Allowed submission languages: ${allow.length ? allow.map((l) => judgeLangs()[l] || l).join(', ') : 'any'}`,
+        ].filter((x) => x).join('\n\n'));
+        const points = await canonicalizePoints(d.domainId, sanitizeKnowledgePoints(j, 8), null);
+        if (points.length < 2) throw new BadRequestError('The AI did not return usable knowledge points.');
+        return { knowledge: { points, source: 'ai', at: new Date() } };
+    }
+    if (target === 'difficulty') {
+        if (!d.artifacts.statement) throw new BadRequestError('Generate the statement first.');
+        const band = DIFF_HINT[d.brief.difficulty] ? d.brief.difficulty : 'intro';
+        const testsDigest = (d.artifacts.tests || []).map((c, i) => `${i + 1}. ${c.name}${c.sample ? ' [sample]' : ''}${c.gen ? ' [generated]' : ''}: ${c.purpose || ''}`).join('\n');
+        const j = await aiJSON(SYS_COMMON, [
+            P_DIFFICULTY,
+            `Band chosen by the teacher: ${band} (${DIFF_BANDS[band].min}-${DIFF_BANDS[band].max}). Teacher's description of the band: ${DIFF_HINT[band]}.`,
+            statementContext(d),
+            d.artifacts.solution ? `=== REFERENCE SOLUTION (${d.artifacts.solution.language}) ===\n${d.artifacts.solution.code.slice(0, 8000)}\n=== END ===` : '',
+            testsDigest ? `=== TEST CASES ===\n${testsDigest}\n=== END ===` : '',
+            d.artifacts.knowledge?.points?.length ? `Knowledge points the task exercises: ${d.artifacts.knowledge.points.map((x) => x.name).join('; ')}` : '',
+            d.measured ? `Measured limits: ${d.measured.time}, ${d.measured.memory}` : '',
+        ].filter((x) => x).join('\n\n'));
+        return {
+            difficulty: {
+                score: clampToBand(j?.score, band),
+                band,
+                rationale: String(j?.rationale || '').replace(/\s+/g, ' ').trim().slice(0, 400),
+                source: 'ai',
+                at: new Date(),
+            },
+        };
     }
     if (target === 'report') {
         if (!d.artifacts.statement || !d.artifacts.solution) throw new BadRequestError('Generate the statement and solution first.');
@@ -1840,7 +2146,7 @@ async function runSubjectivePipeline(domainId: string, id: ObjectId) {
             await patchDraft(id, { docId, pid: newPid }, { actor: 'system', action: 'scratch-problem', detail: `${newPid} (docId=${docId})` });
             d = await getDraft(domainId, id);
         } else {
-            const curTags = ((await problem.get(domainId, d.docId))?.tag || []).filter((t) => t !== 'ai-draft');
+            const curTags = ((await problem.get(domainId, d.docId))?.tag || []);
             await problem.edit(domainId, d.docId, {
                 title: `[AI Draft] ${d.artifacts.statement.title}`, content: d.artifacts.statement.body, hidden: !d.published, tag: curTags,
             });
@@ -2007,7 +2313,7 @@ async function runObjectivePipeline(domainId: string, id: ObjectId) {
             if (!pDocId) {
                 pDocId = await problem.add(domainId, '', title, parts[k].body, d.owner, [], { hidden: true });
             } else {
-                const curTags = ((await problem.get(domainId, pDocId))?.tag || []).filter((t) => t !== 'ai-draft');
+                const curTags = ((await problem.get(domainId, pDocId))?.tag || []);
                 await problem.edit(domainId, pDocId, { title, content: parts[k].body, hidden: !d.published, tag: curTags });
             }
             const pid = await ensureKindPid(domainId, pDocId, kindOf(d));
@@ -2079,9 +2385,9 @@ async function runPipeline(domainId: string, id: ObjectId) {
             await patchDraft(id, { docId, pid: newPid }, { actor: 'system', action: 'scratch-problem', detail: `${newPid} (docId=${docId})` });
             d = await getDraft(domainId, id);
         } else {
-            const curTags = ((await problem.get(domainId, d.docId))?.tag || []).filter((t) => t !== 'ai-draft');
+            const curTags = ((await problem.get(domainId, d.docId))?.tag || []);
             await problem.edit(domainId, d.docId, {
-                title: `[AI Draft] ${d.artifacts.statement.title}`, content: fullContent(d, ''), hidden: !d.published, tag: curTags,
+                title: d.bonus ? d.artifacts.statement.title : `[AI Draft] ${d.artifacts.statement.title}`, content: fullContent(d, ''), hidden: !d.published, tag: curTags,
             });
         }
         const docId = d.docId!;
@@ -2319,17 +2625,77 @@ async function runPipeline(domainId: string, id: ObjectId) {
         try {
             d = await getDraft(domainId, id);
             (d as any).measured = { cases, time, memory };
-            const rep = await generateArtifact(d, 'report');
-            await patchDraft(id, { 'artifacts.report': rep.report }, { actor: 'ai', action: 'generate:report' });
+            // Bonus tasks are student-facing and unreviewed: skip the
+            // briefing so the task is ready sooner.
+            if (!d.bonus) {
+                const rep = await generateArtifact(d, 'report');
+                await patchDraft(id, { 'artifacts.report': rep.report }, { actor: 'ai', action: 'generate:report' });
+            }
         } catch (e) {
             logger.warn('[ai-studio] teacher report generation failed for %s: %s', key, e.message);
             reportNote = ' (teacher briefing failed — regenerate it from the Report tab)';
+        }
+
+        // Stage 8: knowledge-point labels — the task's attributes, written
+        // into the problem's tags. Drafted from the verified artifacts; a
+        // set the teacher edited by hand is kept as-is (Regenerate on the
+        // Knowledge points tab redoes it on request). Like the briefing, a
+        // failure here never sinks a verified problem.
+        // The measured limits are part of what the labeling and rating
+        // stages read; persist them now (the final patch below repeats it).
+        await patchDraft(id, { measured: { cases, time, memory } });
+        await stage('label', 'Labeling knowledge points');
+        try {
+            d = await getDraft(domainId, id);
+            if (d.artifacts.knowledge?.source !== 'teacher') {
+                const kp = await generateArtifact(d, 'knowledge');
+                await patchDraft(id, { 'artifacts.knowledge': kp.knowledge }, {
+                    actor: 'ai', action: 'generate:knowledge', detail: kp.knowledge.points.map((x: KnowledgePoint) => x.name).join(', ').slice(0, 160),
+                });
+            }
+            await syncKnowledgeTags(domainId, id);
+        } catch (e) {
+            logger.warn('[ai-studio] knowledge labeling failed for %s: %s', key, e.message);
+            reportNote += ' (knowledge points failed — generate them from the Knowledge points tab)';
+        }
+
+        // Stage 9: the numeric difficulty, rated inside the teacher's band
+        // from the verified statement, solution, tests and labels, and
+        // written to the problem so the problem set shows it. A teacher-set
+        // score is kept; failure never sinks the verified problem.
+        await stage('rate', 'Rating difficulty');
+        try {
+            d = await getDraft(domainId, id);
+            if (d.artifacts.difficulty?.source !== 'teacher') {
+                const rated = await generateArtifact(d, 'difficulty');
+                await patchDraft(id, { 'artifacts.difficulty': rated.difficulty }, {
+                    actor: 'ai', action: 'generate:difficulty', detail: `${rated.difficulty.score}/10 (${rated.difficulty.band})`,
+                });
+            }
+            await syncDifficulty(domainId, id);
+        } catch (e) {
+            logger.warn('[ai-studio] difficulty rating failed for %s: %s', key, e.message);
+            reportNote += ' (difficulty rating failed — rate it from the side panel)';
         }
 
         await patchDraft(id, {
             measured: { cases, time, memory },
             pipeline: { status: 'passed', stage: 'done', message: `Verified: reference solution Accepted on ${inputs.length} cases; limits ${time} / ${memory}${reportNote}`, finishedAt: new Date() },
         }, { actor: 'judge', action: 'verified', detail: `AC on ${inputs.length} cases, ${time}/${memory}` });
+        // A verified BONUS TASK joins the domain's problem set on its own:
+        // it is a real, judge-verified programming task — labeled and rated
+        // like any Studio task — so every student and teacher can use it,
+        // and the student it was made for keeps reaching it via the session.
+        if (d.bonus) {
+            try {
+                await problem.edit(domainId, docId, { hidden: false });
+                const pubPid = d.pid || String((await problem.get(domainId, docId))?.pid || docId);
+                await patchDraft(id, { published: true, publishedHidden: false, pid: pubPid, pids: [pubPid] },
+                    { actor: 'system', action: 'publish', detail: `${pubPid} — bonus task added to the problem set` });
+            } catch (e) {
+                logger.warn('[ai-studio] bonus task %s could not be added to the problem set: %s', key, e.message);
+            }
+        }
         logger.info('[ai-studio] draft %s verified (docId=%d, %d cases)', key, docId, inputs.length);
     } catch (e) {
         logger.warn('[ai-studio] pipeline failed for %s at %s: %s', key, e.stage || '?', e.message);
@@ -2377,6 +2743,10 @@ function draftSummary(d: AuthorDraftDoc) {
         pids: draftPids(d),
         published: !!d.published,
         publishedHidden: !!d.publishedHidden,
+        // Programming tasks: the knowledge-point labels, for the list's row.
+        knowledge: (d.artifacts.knowledge?.points || []).map((x) => x.name),
+        difficultyScore: d.artifacts.difficulty?.score || 0,
+        bonus: d.bonus ? { uid: d.bonus.uid, ssid: String(d.bonus.ssid) } : null,
         updateAt: d.updateAt,
     };
 }
@@ -2403,7 +2773,9 @@ class AiStudioBaseHandler extends Handler {
 
 class AiStudioHandler extends AiStudioBaseHandler {
     async get({ domainId }) {
-        const docs = await coll.find({ domainId, owner: this.user._id }).sort({ updateAt: -1 }).limit(50).toArray();
+        // The page sorts, filters and pages client-side over the summaries
+        // (a few hundred bytes each), so hand over the whole set.
+        const docs = await coll.find({ domainId, owner: this.user._id }).sort({ updateAt: -1 }).limit(1000).toArray();
         this.response.template = 'ai_studio.html';
         this.response.body = { drafts: docs.map(draftSummary), provider: { ...aiTutor.tutorProviderInfo(), build: AI_STUDIO_BUILD }, langs: judgeLangs() };
     }
@@ -2417,7 +2789,8 @@ class AiStudioHandler extends AiStudioBaseHandler {
     @param('allowLangs', Types.String, true)
     @param('qtypes', Types.String, true)
     @param('qcount', Types.String, true)
-    async postCreate({ domainId }, topic: string, language = '', difficulty = 'intro', notes = '', crosscheck = true, kind = 'programming', allowLangs?: string, qtypes = '', qcount = '') {
+    @param('knowledge', Types.String, true)
+    async postCreate({ domainId }, topic: string, language = '', difficulty = 'intro', notes = '', crosscheck = true, kind = 'programming', allowLangs?: string, qtypes = '', qcount = '', knowledge = '') {
         topic = topic.trim().slice(0, 2000);
         if (!topic) throw new BadRequestError('Topic is required.');
         if (!judgeLangs()[language]) language = defaultLang();
@@ -2436,6 +2809,10 @@ class AiStudioHandler extends AiStudioBaseHandler {
             ? [...new Set(String(qtypes).split(',').map((x) => x.trim()).filter((x) => (QTYPES as readonly string[]).includes(x)))]
             : [];
         const qn = isObj ? sanitizeQCount(qcount) : 0;
+        // Target knowledge points (programming only): the task is designed
+        // to exercise these; resolved against the catalog now, snapshotted
+        // with descriptions for the prompts.
+        const targets = isProg ? await snapshotTargetKnowledge(domainId, knowledge) : [];
         if (!DIFF_HINT[difficulty]) difficulty = 'intro';
         const now = new Date();
         const doc: AuthorDraftDoc = {
@@ -2450,6 +2827,7 @@ class AiStudioHandler extends AiStudioBaseHandler {
                 ...(isProg ? {} : { kind: kind as AuthorKind }),
                 ...(qt.length ? { qtypes: qt } : {}),
                 ...(qn ? { qcount: qn } : {}),
+                ...(targets.length ? { knowledge: targets } : {}),
             },
             artifacts: {},
             approved: false,
@@ -2463,7 +2841,7 @@ class AiStudioHandler extends AiStudioBaseHandler {
                     ? `objective${qt.length ? ` [${qt.join(',')}]` : ''}`
                     : kind === 'subjective'
                         ? 'subjective'
-                        : `programming [langs:${allow.length ? allow.join(',') : 'all'}]`,
+                        : `programming [langs:${allow.length ? allow.join(',') : 'all'}]${targets.length ? ` targets: ${targets.map((t) => t.name).join(', ')}` : ''}`,
             }],
         };
         await coll.insertOne(doc);
@@ -2517,6 +2895,9 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         const flat: any = {};
         for (const k of Object.keys(patch)) flat[`artifacts.${k}`] = patch[k];
         await patchDraft(this.ddoc._id, flat, { actor: 'ai', action: `generate:${target}` });
+        // Labels live on the problem as tags: keep them in step at once.
+        if (target === 'knowledge') await syncKnowledgeTags(domainId, this.ddoc._id);
+        if (target === 'difficulty') await syncDifficulty(domainId, this.ddoc._id);
         this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), started: false };
     }
 
@@ -2597,16 +2978,19 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         if ((this.ddoc.brief.kind || 'programming') === 'objective') {
             throw new BadRequestError('Objective drafts: use Regenerate — the statement and its answer key must stay in sync.');
         }
-        if (!['statement', 'solution', 'alt', 'tests'].includes(target)) throw new BadRequestError('Bad target.');
+        if (!['statement', 'solution', 'alt', 'tests', 'knowledge'].includes(target)) throw new BadRequestError('Bad target.');
+        if (target === 'knowledge' && kindOf(this.ddoc) !== 'programming') throw new BadRequestError('Only programming tasks carry knowledge points.');
         const cur = (this.ddoc.artifacts as any)[target];
         if (!cur) throw new BadRequestError('Nothing to refine yet — generate it first.');
         const j = await aiJSON(SYS_COMMON, [
             P_REFINE,
             `Artifact to revise: ${target}`,
             `Teacher instruction: ${instruction.slice(0, 1500)}`,
+            // Labels are revised against the domain vocabulary, like generation.
+            target === 'knowledge' ? await catalogBlock(domainId) : '',
             statementContext(this.ddoc),
             `=== CURRENT ARTIFACT ===\n${JSON.stringify(cur).slice(0, 20000)}\n=== END ===`,
-        ].join('\n\n'));
+        ].filter((x) => x).join('\n\n'));
         let patch: any = null;
         if (target === 'statement' && j?.title && j?.body) patch = { title: String(j.title).slice(0, 120), body: String(j.body).slice(0, 30000) };
         if ((target === 'solution' || target === 'alt') && j?.code) patch = { language: judgeLangs()[j.language] ? j.language : this.ddoc.brief.language, code: String(j.code).slice(0, 60000) };
@@ -2614,8 +2998,19 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             const cases = (Array.isArray(j?.cases) ? j.cases : []).map(validCase).filter((x) => x).slice(0, 12);
             if (cases.length >= 3) patch = cases;
         }
+        if (target === 'knowledge') {
+            const points = await canonicalizePoints(domainId, sanitizeKnowledgePoints(j, 8), null);
+            if (points.length >= 2) patch = { points, source: 'ai', at: new Date() };
+        }
         if (!patch) throw new BadRequestError('The AI reply did not match the artifact schema; try rephrasing.');
-        await patchDraft(this.ddoc._id, { [`artifacts.${target}`]: patch, 'pipeline.status': this.ddoc.pipeline.status === 'passed' ? 'idle' : this.ddoc.pipeline.status }, { actor: 'ai', action: `refine:${target}`, detail: instruction.slice(0, 120) });
+        // Labels never touch the judge, so revising them keeps a verified
+        // draft verified; every other artifact invalidates the badge.
+        const invalidates = target !== 'knowledge';
+        await patchDraft(this.ddoc._id, {
+            [`artifacts.${target}`]: patch,
+            'pipeline.status': (invalidates && this.ddoc.pipeline.status === 'passed') ? 'idle' : this.ddoc.pipeline.status,
+        }, { actor: 'ai', action: `refine:${target}`, detail: instruction.slice(0, 120) });
+        if (target === 'knowledge') await syncKnowledgeTags(domainId, this.ddoc._id);
         this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
     }
 
@@ -2637,6 +3032,31 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             const cases = (Array.isArray(j?.cases) ? j.cases : Array.isArray(j) ? j : []).map(validCase).filter((x) => x).slice(0, 12);
             if (cases.length >= 3) patch = cases;
             else throw new BadRequestError('At least 3 valid cases are required.');
+        }
+        if (target === 'difficulty') {
+            if (kindOf(this.ddoc) !== 'programming') throw new BadRequestError('Only programming tasks carry a difficulty score.');
+            const band = DIFF_HINT[this.ddoc.brief.difficulty] ? this.ddoc.brief.difficulty : 'intro';
+            const score = clampToBand(j?.score, band);
+            await patchDraft(this.ddoc._id, {
+                'artifacts.difficulty': {
+                    score, band, rationale: String(j?.rationale ?? this.ddoc.artifacts.difficulty?.rationale ?? '').slice(0, 400), source: 'teacher', at: new Date(),
+                },
+            }, { actor: 'teacher', action: 'edit:difficulty', detail: `${score}/10 (${band})` });
+            await syncDifficulty(domainId, this.ddoc._id);
+            this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
+            return;
+        }
+        if (target === 'knowledge') {
+            if (kindOf(this.ddoc) !== 'programming') throw new BadRequestError('Only programming tasks carry knowledge points.');
+            // The teacher's list is authoritative: it may be empty (clear all
+            // labels) and it is never overwritten by a later pipeline run.
+            const points = sanitizeKnowledgePoints(j);
+            await patchDraft(this.ddoc._id, {
+                'artifacts.knowledge': { points, source: 'teacher', at: new Date() },
+            }, { actor: 'teacher', action: 'edit:knowledge', detail: points.map((x) => x.name).join(', ').slice(0, 160) || '(cleared)' });
+            const tags = await syncKnowledgeTags(domainId, this.ddoc._id);
+            this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), tags };
+            return;
         }
         if (target === 'answers') {
             if ((this.ddoc.brief.kind || 'programming') !== 'objective') throw new BadRequestError('Only objective drafts have an answer key.');
@@ -2667,6 +3087,11 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
                 if (j?.qcount !== undefined) extra['brief.qcount'] = sanitizeQCount(j.qcount);
             }
             if (typeof j?.language === 'string' && judgeLangs()[j.language]) extra['brief.language'] = j.language;
+            // Target knowledge points (programming): the draft page sends
+            // the picker's current list; absent = leave untouched.
+            if (kindOf(this.ddoc) === 'programming' && (Array.isArray(j?.knowledge) || typeof j?.knowledge === 'string')) {
+                extra['brief.knowledge'] = await snapshotTargetKnowledge(this.ddoc.domainId, j.knowledge);
+            }
             await patchDraft(this.ddoc._id, {
                 ...extra,
                 'brief.topic': topic,
@@ -2737,6 +3162,7 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
                 'brief.qtypes': next === 'objective' ? (this.ddoc.brief.qtypes || []) : [],
                 'brief.allowLangs': next === 'programming' ? (this.ddoc.brief.allowLangs || []) : [],
                 artifacts: {},
+                knowledgeTags: [],
                 approved: false,
                 chat: [],
                 docId: null,
@@ -2825,8 +3251,8 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
 
     /**
      * Publish the draft. `hidden` keeps the finished task invisible to
-     * students: everything else is finalized — pid, title, the ai-draft tag
-     * comes off — so a teacher can verify tasks days ahead and reveal them
+     * students: everything else is finalized — pid, title, tags — so a
+     * teacher can verify tasks days ahead and reveal them
      * at class time from the same page (postVisibility below).
      */
     @param('hidden', Types.Boolean, true)
@@ -2842,7 +3268,7 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             // Re-assert the pid so drafts from before stamping existed, or
             // whose kind was switched, still publish under the right prefix.
             const pid = await ensureKindPid(domainId, docId, kindOf(this.ddoc));
-            const pubTags = ((await problem.get(domainId, docId))?.tag || []).filter((t) => t !== 'ai-draft');
+            const pubTags = ((await problem.get(domainId, docId))?.tag || []);
             await problem.edit(domainId, docId, {
                 hidden: !!hidden,
                 pid,
@@ -2853,6 +3279,11 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         }
         await patchDraft(this.ddoc._id, { published: true, publishedHidden: !!hidden, pid: pids[0], pids },
             { actor: 'teacher', action: 'publish', detail: (hidden ? `${pids.join(' ')} (hidden from students)` : pids.join(' ')) });
+        // Knowledge points ride along as tags (programming tasks). Usually a
+        // no-op — the pipeline synced them already — but a draft labeled
+        // before its scratch problem existed lands them here.
+        await syncKnowledgeTags(domainId, this.ddoc._id).catch((e) => logger.warn('[ai-studio] publish: knowledge tags sync failed: %s', e.message));
+        await syncDifficulty(domainId, this.ddoc._id).catch((e) => logger.warn('[ai-studio] publish: difficulty sync failed: %s', e.message));
         this.response.body = {
             pid: pids[0],
             pids,
@@ -2888,13 +3319,8 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
 }
 
 /**
- * NOTE ON REGISTRATION: this module deliberately exports its handlers
- * instead of registering routes itself. The worker's loadDir discovers
- * handler files only at BOOT, and the HMR watcher cannot see files that
- * did not exist when it started — so a brand-new handler file would 404
- * until a cold restart. The routes are therefore registered from
- * self_learning.ts (always loaded, hot-reloads reliably); at boot this
- * file still loads via loadDir as a no-op plugin, which is harmless.
+ * Exported for tests / other plugins; the routes themselves are registered
+ * by apply() below — see the HMR note there.
  */
 export { AiStudioHandler, AiStudioDetailHandler };
 
@@ -2934,6 +3360,97 @@ export function registerAiStudioTemplates(ctx: Context) {
  * plugin loader, and a valid plugin needs an apply. Route registration
  * intentionally lives in self_learning.ts (see the note above).
  */
+/* ------------------------------------------------------------------ */
+/*  Bonus tasks for self-learning sessions (used by self_learning.ts)  */
+/* ------------------------------------------------------------------ */
+/*
+ * A bonus task is a Studio draft owned by the session's teacher, flagged
+ * with the student it was generated for. The session handler runs it in
+ * two phases so the student can start reading early: (1) draft the
+ * statement and materialize a hidden problem from it right away;
+ * (2) approve and hand it to runContinue, which writes the solution,
+ * cross-check and tests and verifies them in the sandbox in the
+ * background. bonusState() tells the session where the draft stands.
+ */
+export interface BonusBrief {
+    topic: string;
+    notes: string;
+    language: string;
+    difficulty: string;
+    knowledge: { name: string, description?: string }[];
+}
+
+export async function createBonusDraft(domainId: string, owner: number, brief: BonusBrief, bonus: { ssid: ObjectId, uid: number }): Promise<ObjectId> {
+    const now = new Date();
+    const difficulty = DIFF_HINT[brief.difficulty] ? brief.difficulty : 'challenge';
+    const doc: AuthorDraftDoc = {
+        _id: new ObjectId(),
+        domainId,
+        owner,
+        createdAt: now,
+        updateAt: now,
+        brief: {
+            topic: brief.topic.slice(0, 4000),
+            notes: brief.notes.slice(0, 20000),
+            language: judgeLangs()[brief.language] ? brief.language : (Object.keys(judgeLangs())[0] || 'cc.cc17'),
+            difficulty,
+            crosscheck: true,
+            ...(brief.knowledge.length ? { knowledge: brief.knowledge.slice(0, 12) } : {}),
+        },
+        artifacts: {},
+        approved: false,
+        chat: [],
+        pipeline: { status: 'idle', stage: 'draft', message: '' },
+        log: [{ at: now, actor: 'system', action: 'create', detail: `bonus task for user ${bonus.uid} (session ${bonus.ssid})` }],
+        bonus,
+    };
+    await coll.insertOne(doc);
+    return doc._id;
+}
+
+/** Phase 1: draft the statement (resolves when it exists) and materialize the hidden problem. */
+export async function materializeBonus(domainId: string, id: ObjectId): Promise<{ docId: number, pid: string, title: string }> {
+    await runGenerateStatement(domainId, id);
+    const d = await getDraft(domainId, id);
+    if (!d.artifacts.statement) throw new Error(d.pipeline.message || 'The AI did not produce a statement.');
+    if (d.docId) {
+        const pdoc = await problem.get(domainId, d.docId);
+        return { docId: d.docId, pid: String(pdoc?.pid || d.docId), title: d.artifacts.statement.title };
+    }
+    const docId = await problem.add(domainId, '', d.artifacts.statement.title, fullContent(d, ''), d.owner, [], { hidden: true });
+    const pid = await ensureKindPid(domainId, docId, 'programming');
+    await patchDraft(id, { docId, pid, approved: true }, { actor: 'system', action: 'scratch-problem', detail: `${pid} (docId=${docId}) — bonus task` });
+    // Phase 2 in the background: solution, cross-check, tests, verification.
+    runContinue(domainId, id).catch((e) => logger.warn('[ai-studio] bonus continuation failed for %s: %s', id.toHexString(), e.message));
+    return { docId, pid, title: d.artifacts.statement.title };
+}
+
+/** Where a bonus draft stands, for the session's rail. */
+export async function bonusState(domainId: string, id: ObjectId): Promise<{
+    status: 'drafting' | 'building' | 'ready' | 'failed', message: string, title: string, docId: number | null, pid: string | null, score: number,
+}> {
+    const d = await coll.findOne({ _id: id, domainId });
+    if (!d) return { status: 'failed', message: 'The bonus draft no longer exists.', title: '', docId: null, pid: null, score: 0 };
+    const title = d.artifacts.statement?.title || '';
+    const base = { title, docId: d.docId || null, pid: d.pid || null, score: d.artifacts.difficulty?.score || 0 };
+    if (d.pipeline.status === 'passed') return { status: 'ready', message: d.pipeline.message || '', ...base };
+    if (d.pipeline.status === 'failed') return { status: 'failed', message: d.pipeline.message || 'Generation failed.', ...base };
+    if (!d.artifacts.statement || !d.docId) return { status: 'drafting', message: d.pipeline.message || 'Drafting the statement…', ...base };
+    return { status: 'building', message: d.pipeline.message || 'Preparing the judge…', ...base };
+}
+
+/** Retry a failed bonus build (statement kept). */
+export async function retryBonus(domainId: string, id: ObjectId): Promise<void> {
+    const d = await getDraft(domainId, id);
+    if (d.pipeline.status === 'running') return;
+    if (!d.artifacts.statement || !d.docId) {
+        await materializeBonus(domainId, id);
+        return;
+    }
+    await patchDraft(id, { approved: true, pipeline: { status: 'idle', stage: 'draft', message: '' } });
+    runContinue(domainId, id).catch((e) => logger.warn('[ai-studio] bonus retry failed for %s: %s', id.toHexString(), e.message));
+}
+
 export async function apply(ctx: Context) {
     // Deployment heartbeat: makes it obvious in the boot log which context
     // extractor this process is actually running (see the PDF upload fix).
@@ -2947,4 +3464,21 @@ export async function apply(ctx: Context) {
     // running process is NOT this file.
     logger.info('[ai-studio] build %s — two-phase authoring, kinds: programming | objective | subjective', AI_STUDIO_BUILD);
     registerAiStudioTemplates(ctx);
+    /*
+     * NOTE ON REGISTRATION (dev-mode hot reload). The routes MUST live in
+     * this file's own apply(): Hydro's HMR (adapted from Koishi) treats
+     * every plugin file as atomic — when this file changes it is
+     * re-evaluated and re-applied, but a DIFFERENT plugin file that merely
+     * imported the handler classes is not reloaded and keeps its routes
+     * bound to the OLD classes. That was the failure mode of the previous
+     * arrangement (routes registered from self_learning.ts): every edit to
+     * this file left the live process rejecting new operations and targets
+     * with "Unknown target" until a cold restart. The original reason for
+     * that arrangement — the watcher cannot discover a file created after
+     * boot — no longer applies: this file exists at boot on every deploy.
+     * Registering here, a reload of this file disposes the old routes and
+     * binds the new classes; a cold boot behaves exactly as before.
+     */
+    ctx.Route('ai_studio', '/ai-studio', AiStudioHandler, PRIV.PRIV_USER_PROFILE);
+    ctx.Route('ai_studio_detail', '/ai-studio/:id', AiStudioDetailHandler, PRIV.PRIV_USER_PROFILE);
 }

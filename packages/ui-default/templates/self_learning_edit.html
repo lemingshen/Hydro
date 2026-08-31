@@ -4,6 +4,87 @@
   .sle-tip { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--pta-line); border-radius: 12px; background: linear-gradient(135deg, var(--pta-blue-soft), var(--pta-violet-soft)); padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: var(--pta-ink-soft); animation: ptaFadeUp .28s var(--pta-ease) backwards; }
   .sle-tip__icon { font-size: 20px; line-height: 1.2; }
   .sle-form input[name="pids"] { font-family: var(--code-font-family); }
+  .sle-legacy { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--pta-warn-line); border-left-width: 4px; border-left-color: var(--pta-warn); background: var(--pta-warn-soft); color: var(--pta-ink); font-size: 12.5px; line-height: 1.6; animation: ptaFadeUp .26s var(--pta-ease) backwards; }
+  .sle-legacy ul { margin: 4px 0 0 18px; }
+  .sle-legacy code { font-family: var(--code-font-family); }
+  /* ---- AI task advisor (chat) ---- */
+  .sla { margin: 0 0 18px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--pta-violet-line); background: var(--pta-violet-soft); animation: ptaFadeUp .26s var(--pta-ease) backwards; }
+  .sla__head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; font-size: 14px; color: var(--pta-ink); }
+  .sla__hint { font-size: 12px; color: var(--pta-ink-soft); }
+  .sla__na { margin-top: 8px; font-size: 12.5px; color: var(--pta-ink-faint); }
+  /* conversation */
+  .sla__chat { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; padding: 12px; max-height: 520px; overflow-y: auto; border-radius: 12px; background: var(--pta-card-2); border: 1px solid var(--pta-line); scroll-behavior: smooth; }
+  .sla__msg { display: flex; gap: 8px; align-items: flex-end; max-width: 92%; }
+  .sla__msg--me { align-self: flex-end; flex-direction: row-reverse; max-width: 78%; }
+  .sla__msg--in { animation: slaPop .28s var(--pta-ease) backwards; }
+  .sla__avatar { flex: 0 0 30px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 16px; background: var(--pta-violet-soft); border: 1px solid var(--pta-violet-line); }
+  .sla__bubble { border-radius: 14px; padding: 9px 12px; font-size: 13px; line-height: 1.55; min-width: 0; }
+  .sla__msg--ai .sla__bubble { background: var(--pta-card); border: 1px solid var(--pta-line); color: var(--pta-ink); border-bottom-left-radius: 4px; }
+  .sla__msg--me .sla__bubble { background: var(--pta-violet); color: #fff; white-space: pre-wrap; border-bottom-right-radius: 4px; box-shadow: 0 6px 16px -10px var(--pta-violet); }
+  .sla__quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .sla__quick-btn { border: 1px solid var(--pta-violet-line); background: var(--pta-violet-soft); color: var(--pta-violet-text); border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer; transition: transform .12s var(--pta-ease), background .12s ease; }
+  .sla__quick-btn:hover { transform: translateY(-1px); background: var(--pta-violet); color: #fff; }
+  /* typing + progress */
+  .sla__typing { display: inline-flex; gap: 4px; align-items: center; height: 14px; }
+  .sla__typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--pta-violet); opacity: .35; animation: slaDot 1.2s ease-in-out infinite; }
+  .sla__typing span:nth-child(2) { animation-delay: .2s; }
+  .sla__typing span:nth-child(3) { animation-delay: .4s; }
+  .sla__progress { position: relative; height: 4px; width: 220px; max-width: 60vw; border-radius: 999px; overflow: hidden; background: var(--pta-violet-soft); margin: 8px 0 6px; }
+  .sla__progress i { position: absolute; top: 0; bottom: 0; left: -40%; width: 40%; border-radius: 999px; background: linear-gradient(90deg, transparent, var(--pta-violet), transparent); animation: slaShimmer 1.4s ease-in-out infinite; }
+  .sla__stage { font-size: 12px; color: var(--pta-ink-soft); transition: opacity .18s ease, transform .18s ease; }
+  .sla__stage--swap { opacity: 0; transform: translateY(4px); }
+  @keyframes slaDot { 0%, 80%, 100% { transform: translateY(0); opacity: .35; } 40% { transform: translateY(-5px); opacity: 1; } }
+  @keyframes slaShimmer { 0% { left: -40%; } 100% { left: 100%; } }
+  @keyframes slaPop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+  /* reply content */
+  .sla__err { color: var(--pta-fail); }
+  .sla__muted { color: var(--pta-ink-faint); font-size: 12px; }
+  .sla__meta { margin-top: 6px; }
+  .sla__row { margin: 6px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sla__row--col { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .sla__lbl { font-weight: 600; font-size: 12.5px; }
+  .sla__pt { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11.5px; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-soft); }
+  .sla__pt--goal { border-color: var(--pta-violet-line); background: var(--pta-violet-soft); color: var(--pta-violet-text); font-weight: 600; }
+  .sla__path { margin: 6px 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--pta-violet-soft); border: 1px solid var(--pta-violet-line); font-size: 12.5px; line-height: 1.55; }
+  .sla__cards { display: flex; flex-direction: column; margin: 8px 0; }
+  .sla__step { display: flex; gap: 10px; align-items: stretch; animation: slaPop .3s var(--pta-ease) backwards; }
+  .sla__rail { display: flex; flex-direction: column; align-items: center; flex: 0 0 24px; }
+  .sla__rail i { flex: 1 1 auto; width: 2px; margin: 4px 0; background: linear-gradient(var(--pta-violet-line), var(--pta-violet)); border-radius: 1px; }
+  .sla__step:last-child .sla__rail i { display: none; }
+  .sla__card { flex: 1 1 auto; min-width: 0; border: 1px solid var(--pta-line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: var(--pta-card-2); transition: box-shadow .2s ease, border-color .2s ease; }
+  .sla__level { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .sla__level--basic { background: var(--pta-ok-soft); color: var(--pta-ok-text); border: 1px solid var(--pta-ok-line); }
+  .sla__level--intermediate { background: var(--pta-blue-soft); color: var(--pta-blue-text); border: 1px solid var(--pta-blue-line); }
+  .sla__level--advanced { background: var(--pta-warn-soft); color: var(--pta-warn-text); border: 1px solid var(--pta-warn-line); }
+  .sla__prog { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin: 6px 0 2px; font-size: 12px; color: var(--pta-ink-soft); }
+  .sla__prog code { font-family: var(--code-font-family); }
+  .sla__pt--new { border-color: var(--pta-ok-line); background: var(--pta-ok-soft); color: var(--pta-ok-text); font-weight: 600; }
+  .sla__card--flash { border-color: var(--pta-violet); box-shadow: 0 0 0 3px var(--pta-violet-soft); }
+  .sla__card-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sla__card-head a { color: var(--pta-ink); text-decoration: none; }
+  .sla__card-head a:hover { text-decoration: underline; }
+  .sla__num { flex: 0 0 24px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: bold; background: var(--pta-violet); color: #fff; box-shadow: 0 0 0 3px var(--pta-violet-soft); }
+  .sla__add { margin-left: auto; border: 1px solid var(--pta-violet-line); background: var(--pta-violet); color: #fff; border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer; transition: transform .12s var(--pta-ease), background .15s ease; }
+  .sla__add:hover { transform: translateY(-1px); }
+  .sla__add--on { background: var(--pta-ok-soft); color: var(--pta-ok-text); border-color: var(--pta-ok-line); }
+  .sla__points { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+  .sla__reason { font-size: 12.5px; color: var(--pta-ink-soft); }
+  .sla__overlap { margin: 0 0 0 14px; font-size: 12.5px; }
+  .sla__overlap code { font-family: var(--code-font-family); }
+  .sla__notes { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--pta-line); font-size: 12.5px; }
+  /* composer */
+  .sla__composer { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; padding: 6px 6px 6px 12px; border-radius: 24px; background: var(--pta-card); border: 1px solid var(--pta-line); transition: border-color .15s ease, box-shadow .15s ease; }
+  .sla__composer:focus-within { border-color: var(--pta-violet); box-shadow: 0 0 0 3px var(--pta-violet-soft); }
+  .sla__input { flex: 1 1 auto; min-height: 24px !important; max-height: 140px; height: 24px; padding: 4px 0 !important; margin: 0 !important; border: none !important; background: transparent !important; box-shadow: none !important; resize: none; font: inherit; font-size: 13px; line-height: 1.5; color: var(--pta-ink); outline: none; }
+  .sla__send { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--pta-violet); color: #fff; font-size: 15px; cursor: pointer; display: grid; place-items: center; transition: transform .12s var(--pta-ease), opacity .15s ease; }
+  .sla__send:hover { transform: scale(1.06); }
+  .sla__send:disabled { opacity: .5; cursor: default; transform: none; }
+  .sla__foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: 11.5px; color: var(--pta-ink-faint); }
+  .sla__foot a { color: var(--pta-ink-faint); }
+  .pta-dark .sla { background: #2a2540; border-color: #4a3d6b; }
+  .pta-dark .sla__chat { background: #1a1826; }
+  .pta-dark .sla__msg--ai .sla__bubble, .pta-dark .sla__card, .pta-dark .sla__composer { background: #232032; }
+  .pta-dark .sla__input { color: #e7e3f5; }
 </style>
 <div class="row">
   <div class="medium-9 columns">
@@ -12,6 +93,29 @@
         <h1 class="section__title">{% if sdoc %}{{ _('Edit Self-Learning Session') }}{% else %}{{ _('Create Self-Learning Session') }}{% endif %}</h1>
       </div>
       <div class="section__body">
+        {#-
+          Sessions are programming-only. The picker below is locked to
+          programming tasks (it cannot add anything else), and the handler
+          refuses the form while a non-programming task is still listed —
+          a session saved before the rule may carry some, so name them.
+        -#}
+        {#-
+          AI task advisor: the teacher describes the training goal; the
+          advisor proposes interlocking programming tasks with reasons.
+          Rendered by self_learning_edit.page.js; the handler tells us
+          whether an AI provider is configured.
+        -#}
+        <div id="sl-advisor" data-available="{{ 'yes' if advisorAvailable else '' }}"></div>
+        {% if legacyTasks and legacyTasks.length %}
+        <div class="sle-legacy">
+          ⚠️ {{ _('Self-learning sessions can only contain programming tasks. This session still lists the tasks below; remove them from the problem list before saving:') }}
+          <ul>
+          {%- for t in legacyTasks -%}
+            <li><code>{{ t.pid }}</code> {{ t.title }} <span class="text-gray">({{ _('Objective') if t.kind == 'objective' else _('Subjective') }})</span></li>
+          {%- endfor -%}
+          </ul>
+        </div>
+        {% endif %}
         <form method="post" class="sle-form">
           {{ form.form_text({
               columns:12,
@@ -27,7 +131,7 @@
               label:'Problems',
               name:'pids',
               value:pids,
-              help_text:_('Search and pick problems from the problem set; entries are separated with ",". Both programming problems and quiz problems (true/false, multiple choice, fill-in-the-blank) are supported.')
+              help_text:_('Search and pick programming problems from the problem set; entries are separated with ",". Only programming tasks can be added to a self-learning session — quiz and subjective tasks are not offered here. Students work through the tasks in this order, so put the simplest first; the AI advisor above can propose and apply a progression.')
           }) }}
           <div class="row">
             {{ form.form_text({ columns:2, label:'Begin Date', name:'beginAtDate', placeholder:'YYYY-mm-dd', value:dateBeginText, date:true, row:false }) }}
@@ -69,7 +173,7 @@
       <div class="section__body">
         <div class="sle-tip">
           <span class="sle-tip__icon">💡</span>
-          <span>{{ _('Students will solve the selected problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them — without giving away the answer.') }}</span>
+          <span>{{ _('Students will solve the selected programming problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them at their code — without giving away the answer.') }}</span>
         </div>
       </div>
     </div>

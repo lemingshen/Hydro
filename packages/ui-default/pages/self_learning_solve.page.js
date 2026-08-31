@@ -1,5 +1,4 @@
 import $ from 'jquery';
-import * as yaml from 'js-yaml';
 import MarkdownIt from 'markdown-it';
 import { ConfirmDialog } from 'vj/components/dialog';
 import Notification from 'vj/components/notification';
@@ -9,56 +8,8 @@ import { getTheme, i18n, loadReactRedux, request, tpl } from 'vj/utils';
 // graph, so the session rail never depends on the page-loader picking up a
 // newly added file.
 import { injectRailForPage, injectRailWhenReady } from './auto_scratchpad.page';
-import { openDB } from 'vj/utils/db';
 
-/* ------------------------- Tutor Spark (motivation) ------------------------- */
-/*
- * The tutor's motivation layer: momentum chip, badge toasts + confetti, an
- * achievements popover, and the Boss Challenge flows. Exported so the record
- * page reuses the exact same look.
- */
-
-const SPARK_STYLE = `
-  @keyframes slSparkIn { from { opacity: 0; transform: translateX(26px) scale(.96); } to { opacity: 1; transform: none; } }
-  @keyframes slSparkOut { to { opacity: 0; transform: translateX(26px) scale(.96); } }
-  @keyframes slSparkIcon { 0% { transform: scale(.4) rotate(-14deg); } 60% { transform: scale(1.18) rotate(5deg); } 100% { transform: none; } }
-  .sl-spark-toastwrap { position: fixed; top: 60px; right: 16px; z-index: 4000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
-  .sl-spark-toast { pointer-events: auto; display: flex; gap: 11px; align-items: center; width: 300px; max-width: calc(100vw - 32px); background: linear-gradient(var(--pta-card), var(--pta-card)) padding-box, linear-gradient(120deg, #ffd43b, #9775fa) border-box; border: 2px solid transparent; border-radius: 14px; padding: 10px 13px; box-shadow: 0 14px 34px -12px rgba(95, 61, 196, .45); cursor: pointer; animation: slSparkIn .3s var(--pta-ease); }
-  .sl-spark-toast--out { animation: slSparkOut .25s ease forwards; }
-  .sl-spark-toast__icon { font-size: 27px; line-height: 1; flex: 0 0 auto; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .15)); animation: slSparkIcon .5s var(--pta-ease) both; }
-  .sl-spark-toast__k { font-size: 10.5px; font-weight: bold; letter-spacing: .08em; text-transform: uppercase; color: #b08d00; }
-  .sl-spark-toast__t { font-size: 13.5px; font-weight: bold; color: var(--pta-ink); margin: 1px 0; }
-  .sl-spark-toast__d { font-size: 11.5px; color: var(--pta-ink-soft); line-height: 1.4; }
-  .pta-dark .sl-spark-toast__k { color: #e6c34c; }
-  .sl-spark-pop { position: fixed; z-index: 3990; width: 320px; max-width: calc(100vw - 24px); max-height: min(480px, calc(100vh - 100px)); overflow-y: auto; background: var(--pta-card); border: 1px solid var(--pta-line); border-radius: 14px; box-shadow: var(--pta-shadow-pop); padding: 12px 14px; scrollbar-width: thin; animation: ptaScaleIn .22s var(--pta-ease); }
-  .sl-spark-pop__head { display: flex; align-items: center; justify-content: space-between; font-weight: bold; font-size: 13.5px; color: var(--pta-ink); margin-bottom: 8px; }
-  .sl-spark-pop__stats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .sl-spark-pop__stat { font-size: 11.5px; background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 999px; padding: 2px 10px; color: var(--pta-ink-soft); }
-  .sl-spark-badge { display: flex; gap: 10px; align-items: center; padding: 7px 8px; border-radius: 10px; transition: background .15s ease, transform .15s var(--pta-ease); }
-  .sl-spark-badge:hover { background: var(--pta-card-2); transform: translateX(2px); }
-  .sl-spark-badge__icon { font-size: 22px; width: 30px; text-align: center; flex: 0 0 auto; }
-  .sl-spark-badge--locked { opacity: .55; }
-  .sl-spark-badge--locked .sl-spark-badge__icon { filter: grayscale(1); }
-  .sl-spark-badge__t { font-size: 12.5px; font-weight: bold; color: var(--pta-ink); }
-  .sl-spark-badge__d { font-size: 11px; color: var(--pta-ink-faint); line-height: 1.35; }
-  .sl-spark-badge__lock { margin-left: auto; font-size: 10px; color: var(--pta-ink-faint); border: 1px solid var(--pta-line); border-radius: 999px; padding: 0 8px; flex: 0 0 auto; }
-  .sl-choffer { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--pta-warn-line); border-left: 4px solid var(--pta-warn); border-radius: 12px; background: var(--pta-warn-soft); font-size: 13px; color: var(--pta-ink); box-shadow: 0 4px 14px -8px rgba(232, 89, 12, .5); animation: ptaFadeUp .26s var(--pta-ease) both; }
-  .sl-choffer__btns { display: flex; gap: 8px; margin-top: 8px; }
-  .sl-choffer__btns button { border: none; border-radius: 999px; padding: 5px 15px; font-size: 12.5px; cursor: pointer; transition: filter .12s ease, transform .12s var(--pta-ease); }
-  .sl-chaccept { background: var(--pta-grad-warn); color: #fff; box-shadow: 0 5px 12px -5px rgba(232, 89, 12, .7); font-weight: bold; }
-  .sl-chaccept:hover { filter: brightness(1.08); transform: translateY(-1px); }
-  .sl-chlater { background: var(--pta-card); color: var(--pta-warn-text); border: 1px solid var(--pta-warn-line) !important; }
-  .sl-chlater:hover { background: var(--pta-warn-soft); }
-  .sl-chbar { display: flex; align-items: center; gap: 8px; margin: 0; padding: 5px 12px; font-size: 12px; font-weight: bold; color: var(--pta-warn-text); background: var(--pta-warn-soft); border-top: 1px solid var(--pta-warn-line); flex: 0 0 auto; }
-  .sl-chbar a { margin-left: auto; color: var(--pta-warn-text); font-weight: normal; }
-`;
-
-export function ensureSparkStyle() {
-  if (!document.getElementById('sl-spark-style')) {
-    $('<style>').attr('id', 'sl-spark-style').text(SPARK_STYLE).appendTo(document.head);
-  }
-}
-
+/* ---------------------------- celebration helper ---------------------------- */
 /** Lightweight canvas confetti — celebration without a dependency. */
 export function confettiBurst() {
   try {
@@ -110,69 +61,6 @@ export function confettiBurst() {
   } catch (e) { /* celebration is optional */ }
 }
 
-/** Stacked achievement toasts (top right) + one confetti burst per batch. */
-export function showBadgeToasts(newBadges) {
-  if (!newBadges || !newBadges.length) return;
-  ensureSparkStyle();
-  let $wrap = $('.sl-spark-toastwrap');
-  if (!$wrap.length) $wrap = $('<div class="sl-spark-toastwrap"></div>').appendTo(document.body);
-  for (const b of newBadges) {
-    const $t = $(`<div class="sl-spark-toast" role="status">
-      <span class="sl-spark-toast__icon">${escapeHtml(b.icon || '🏅')}</span>
-      <span><div class="sl-spark-toast__k">${escapeHtml(i18n('New badge unlocked!'))}</div>
-      <div class="sl-spark-toast__t">${escapeHtml(b.title || '')}</div>
-      <div class="sl-spark-toast__d">${escapeHtml(b.desc || '')}</div></span>
-    </div>`);
-    const out = () => { $t.addClass('sl-spark-toast--out'); setTimeout(() => $t.remove(), 260); };
-    $t.on('click', out);
-    setTimeout(out, 7000);
-    $wrap.append($t);
-  }
-  confettiBurst();
-}
-
-export function sparkChipText(spark) {
-  if (!spark) return '';
-  return `🔥 ${spark.streak || 0} · ⭐ ${spark.accepted || 0} · 🏆 ${(spark.badges || []).length}`;
-}
-
-/** Achievements popover anchored to a chip element. */
-export function openSparkPopover(spark, catalog, anchorEl) {
-  ensureSparkStyle();
-  const existing = document.getElementById('sl-spark-pop');
-  if (existing) { existing.remove(); return; }
-  const owned = new Set((spark && spark.badges) || []);
-  const s = spark || {};
-  const rows = (catalog || []).map((b) => {
-    const has = owned.has(b.id);
-    return `<div class="sl-spark-badge${has ? '' : ' sl-spark-badge--locked'}">
-      <span class="sl-spark-badge__icon">${escapeHtml(b.icon)}</span>
-      <span><div class="sl-spark-badge__t">${escapeHtml(b.title)}</div>
-      <div class="sl-spark-badge__d">${escapeHtml(b.desc)}</div></span>
-      ${has ? '' : `<span class="sl-spark-badge__lock">${escapeHtml(i18n('Locked'))}</span>`}
-    </div>`;
-  }).join('');
-  const $pop = $(`<div class="sl-spark-pop" id="sl-spark-pop">
-    <div class="sl-spark-pop__head"><span>🏆 ${escapeHtml(i18n('Achievements'))}</span></div>
-    <div class="sl-spark-pop__stats">
-      <span class="sl-spark-pop__stat">🔥 ${s.streak || 0} ${escapeHtml(i18n('day streak'))}</span>
-      <span class="sl-spark-pop__stat">⭐ ${s.accepted || 0} ${escapeHtml(i18n('solved'))}</span>
-      <span class="sl-spark-pop__stat">🐛 ${s.cardAnswers || 0}</span>
-      <span class="sl-spark-pop__stat">⚔️ ${s.challengesCleared || 0}</span>
-    </div>${rows}</div>`).appendTo(document.body);
-  const r = anchorEl.getBoundingClientRect();
-  const w = $pop.outerWidth();
-  $pop.css({
-    top: `${Math.min(r.bottom + 8, window.innerHeight - $pop.outerHeight() - 12)}px`,
-    left: `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`,
-  });
-  setTimeout(() => {
-    $(document).one('pointerdown.slSparkPop', (ev) => {
-      if (!$pop[0].contains(ev.target)) $pop.remove();
-      else $(document).one('pointerdown.slSparkPop', () => $pop.remove());
-    });
-  }, 0);
-}
 
 const POLL_INTERVAL = 1500;
 const MAX_POLLS = 120; // ~3 minutes
@@ -206,166 +94,369 @@ export default new NamedPage('self_learning_solve', async () => {
   } else if (slSched && slSched.phase === 'ended') {
     Notification.info(i18n('This session has ended — review and tutoring stay open; submissions are closed.'));
   }
+  /*
+   * PTA fork: the AI tutor is a PROGRAMMING-only feature. Objective quizzes
+   * are answered on the session paper (no tutor there any more) and the
+   * server refuses tutor calls for anything but judged programs, so this
+   * page only knows two shapes: the Scratchpad IDE with its line-anchored
+   * question cards (programming), and a plain answer form with an inline
+   * verdict (answer-submission tasks) — no chat-mode tutor, no quiz form.
+   */
   const tutorUrl = `${window.location.pathname}/tutor`;
   const recordUrl = `${window.location.pathname}/record`;
-  const isObjective = UiContext.slType === 'objective';
   const $chat = $('#sl-chat');
   const $tutor = $('#sl-tutor');
-  const $typing = $('#sl-typing');
-  const $input = $('#sl-input');
   const $verdict = $('#sl-verdict');
   const $fab = $('#sl-fab');
   const $fabDot = $('#sl-fab-dot');
   let panelOpen = false;
-  let tutorStarted = false;
-  let sparkState = null;
-  let sparkCatalog = [];
-  let challengeInfo = null;
-  let chMode = false;
-  let chHistory = [];
-  let inputPlaceholder0 = null;
 
-  /** Fold any tutor response's spark payload into the UI (chip, toasts). */
-  function absorbSpark(res) {
-    if (!res) return;
-    if (res.badgeCatalog) sparkCatalog = res.badgeCatalog;
-    if (res.spark) {
-      sparkState = res.spark;
-      ensureSparkStyle();
-      $('#sl-spark-chip').text(sparkChipText(sparkState)).show();
-    }
-    if (res.newBadges && res.newBadges.length) showBadgeToasts(res.newBadges);
-    if (res.challenge) challengeInfo = res.challenge;
-  }
-  $(document).on('click', '#sl-spark-chip', function onSparkChip() {
-    openSparkPopover(sparkState, sparkCatalog, this);
-  });
-  let waiting = false;
-  let lastRid = null;
-  /** Assigned by initScratchpad so the reset handler can clear open cards. */
-  let clearScratchpadAnnotations = () => {};
+    /* ------------------ one task at a time (students) ------------------ */
+  /*
+   * UiContext.slGate (students only) is the session progression: which
+   * task is current, which are finished / skipped, what is unlocked. Every
+   * tutor / verdict response may carry a fresh `gate`; the rail's
+   * progression block and the chips follow it live.
+   */
+  let gate = (window.UiContext && UiContext.slGate) || null;
+  const sessionBase = window.location.pathname.replace(/\/p\/\d+.*$/, '');
+  /** Set by the IDE flow after an Accepted verdict: re-opens the tutor's reflection question. */
+  let reaskReflection = null;
 
-  /* --------------------- objective (quiz) answer form ---------------------- */
-
-  const ans = {};
-  const cacheKey = `sl/${UserContext._id}/${UiContext.slSsid}/${UiContext.slPid}#objective`;
-  let db = null;
-
-  function buildObjectiveForm() {
-    const $container = $('[data-fragment-id="problem-description"]');
-    if (!$container.length) return 0;
-    const reg = /\{\{ (input|select|multiselect|textarea|dropdown)\(\d+(-\d+)?\)(?:\[([^\]]*)\])? \}\}/g;
-    let cnt = 0;
-    $container.children().each((i, e) => {
-      if (e.tagName === 'PRE' && !(e.children[0]?.className || '').includes('#input')) return;
-      const questions = [];
-      let q;
-      while (q = reg.exec(e.textContent)) questions.push(q); // eslint-disable-line no-cond-assign
-      for (const [info, type, , options] of questions) {
-        cnt++;
-        const id = info.replace(/\{\{ (input|select|multiselect|textarea|dropdown)\((\d+(-\d+)?)\)(?:\[([^\]]*)\])? \}\}/, '$2');
-        if (type === 'input') {
-          $(e).html($(e).html().replace(info, tpl`
-            <div class="objective_${id} medium-3" id="p${id}" style="display: inline-block;">
-              <input type="text" name="${id}" class="textbox objective-input">
-            </div>
-          `));
-        } else if (type === 'textarea') {
-          $(e).html($(e).html().replace(info, tpl`
-            <div class="objective_${id} medium-6" id="p${id}">
-              <textarea name="${id}" class="textbox objective-input"></textarea>
-            </div>
-          `));
-        } else if (type === 'dropdown') {
-          const opts = (options || '').split(',').map((s) => s.trim()).filter(Boolean);
-          $(e).html($(e).html().replace(info, tpl`
-            <div class="objective_${id} medium-3 select-container" id="p${id}" style="display: inline-block;">
-              <select name="${id}" class="objective-input select">
-                <option value=""></option>
-                ${{ templateRaw: true, html: opts.map((o) => tpl`<option value="${o}">${o}</option>`).join('') }}
-              </select>
-            </div>
-          `));
-        } else {
-          if ($(e).next()[0]?.tagName !== 'UL') {
-            cnt--;
-            return;
-          }
-          $(e).html($(e).html().replace(info, ''));
-          $(e).next('ul').children().each((j, ele) => {
-            $(ele).after(tpl`
-              <label class="objective_${id} radiobox" id="p${id}">
-                <input type="${type === 'select' ? 'radio' : 'checkbox'}" name="${id}" class="objective-input" value="${String.fromCharCode(65 + j)}">
-                ${String.fromCharCode(65 + j)}. ${{ templateRaw: true, html: ele.innerHTML }}
-              </label>
-            `);
-            $(ele).remove();
-          });
-        }
+  function applyGateToRail(g) {
+    if (!g) return;
+    const $chips = $('#sl-rail .sl-rail__chip[data-pid]');
+    $chips.each(function markChip(i) {
+      const pid = Number($(this).attr('data-pid'));
+      if (!Number.isFinite(pid)) return;
+      const st = g.done.includes(pid) ? 'done' : g.skipped.includes(pid) ? 'skipped' : g.current === pid ? 'current' : g.unlocked.includes(pid) ? 'open' : 'locked';
+      $(this).toggleClass('locked', st === 'locked').toggleClass('skipped', st === 'skipped').toggleClass('gate-now', st === 'current');
+      if (st !== 'locked') {
+        if ($(this).attr('href') === 'javascript:;') $(this).attr('href', `${sessionBase}/p/${pid}`);
+        if ($(this).text() === '🔒') $(this).text(String(i + 1));
       }
     });
-    return cnt;
   }
 
-  async function saveAns() {
-    try {
-      await db?.put('solutions', { id: cacheKey, value: JSON.stringify(ans) });
-    } catch (e) { /* persistence is best-effort */ }
-  }
-
-  async function loadAns() {
-    let saved = null;
-    try {
-      saved = await db?.get('solutions', cacheKey);
-    } catch (e) { /* ignore */ }
-    if (typeof saved?.value !== 'string') return;
-    const isValidOption = (v) => v.length === 1 && v.charCodeAt(0) >= 65 && v.charCodeAt(0) <= 90;
-    try {
-      Object.assign(ans, JSON.parse(saved.value));
-    } catch (e) { return; }
-    for (const [id, val] of Object.entries(ans)) {
-      if (Array.isArray(val)) {
-        for (const v of val) {
-          if (isValidOption(v)) $(`.objective_${id} input[value="${v}"]`).prop('checked', true);
-        }
-      } else if (val) {
-        $(`.objective_${id} input[type=text], .objective_${id} textarea, .objective_${id} select`).val(val.toString());
-        if (isValidOption(val)) $(`.objective_${id}.radiobox [value="${val}"]`).prop('checked', true);
-      }
+  function renderGate() {
+    const $box = $('#sl-gate');
+    if (!$box.length || !gate) return;
+    const here = Number(UiContext.slPid);
+    const nextPid = gate.current && gate.current !== here ? gate.current : null;
+    const nextHref = nextPid ? `${sessionBase}/p/${nextPid}` : sessionBase;
+    const nextBtn = `<a class="sl-gate__next" href="${nextHref}">${escapeHtml(nextPid ? `${i18n('Next task')} →` : `${i18n('Back to the session')} →`)}</a>`;
+    let head;
+    let hint;
+    let btns = '';
+    if (gate.isBonus) {
+      const bt = bonuses.find((b) => String(b.docId) === String(UiContext.slPid)) || (window.UiContext && UiContext.slBonusTask) || null;
+      head = `🎁 ${i18n('Bonus task')}`;
+      hint = bt && bt.status === 'building'
+        ? i18n('Made for your weak points. Read and code now — the judge is still being prepared, submissions open in a moment. No tutor here: submit, see the verdict, retry.')
+        : bt && bt.status === 'failed'
+          ? i18n('This bonus task could not be prepared.')
+          : i18n('Made for your weak points. No tutor here — submit, see the verdict, retry as often as you like.');
+      btns = `<a class="sl-gate__next" href="${sessionBase}">${escapeHtml(`${i18n('Back to the session')} →`)}</a>`;
+      $box.html(`<b>${escapeHtml(head)}</b><div class="sl-gate__hint">${escapeHtml(hint)}${bt && bt.weakPoints?.length ? `<br>🎯 ${escapeHtml(bt.weakPoints.join(' · '))}` : ''}</div><div class="sl-gate__btns">${btns}</div>`);
+      return;
     }
+    if (gate.isDone) {
+      head = `🏁 ${i18n('Task finished')}`;
+      hint = !nextPid
+        ? i18n('You have worked through every task. Retry any of them whenever you like.')
+        : i18n('The next task is open. You can keep retrying this one any time.');
+      btns = nextBtn;
+    } else if (gate.isSkipped) {
+      head = `⏭ ${i18n('Skipped task')}`;
+      hint = i18n('Retry whenever you are ready — the next task is already open.');
+      btns = nextBtn;
+    } else if (gate.isCurrent) {
+      head = i18n('Task {0} of {1}').replace('{0}', gate.index).replace('{1}', gate.total);
+      hint = gate.engaged
+        ? i18n('Get accepted and answer the tutor\u2019s question to finish — or skip for now and come back later.')
+        : i18n('Get accepted and answer the tutor\u2019s question to unlock the next task. Skipping becomes possible after your first attempt.');
+      btns = `${reaskReflection ? `<button type="button" class="sl-gate__reask" title="${escapeHtml(i18n('Answer the tutor\u2019s reflection question to finish this task'))}">💬 ${escapeHtml(i18n('Answer the tutor'))}</button>` : ''}`
+        + `<button type="button" class="sl-gate__skip" ${gate.engaged ? '' : 'disabled'} title="${escapeHtml(gate.engaged ? i18n('Set this task aside and move on') : i18n('Submit at least one attempt first'))}">⏭ ${escapeHtml(i18n('Skip this task'))}</button>`;
+    } else {
+      head = i18n('Earlier task');
+      hint = i18n('Open for retries; your current task is highlighted in the list.');
+      btns = nextBtn.replace(i18n('Next task'), i18n('Go to current task'));
+    }
+    $box.html(`<b>${escapeHtml(head)}</b><div class="sl-gate__hint">${escapeHtml(hint)}</div><div class="sl-gate__btns">${btns}</div>`);
+    $box.find('.sl-gate__reask').on('click', () => { if (reaskReflection) reaskReflection(); });
+    $box.find('.sl-gate__skip').on('click', async function onSkip() {
+      const action = await new ConfirmDialog({
+        $body: tpl.typoMsg(i18n('Skip this task for now? It stays open — you can come back and retry it any time. The next task unlocks right away.')),
+      }).open();
+      if (action !== 'yes') return;
+      $(this).prop('disabled', true);
+      try {
+        const res = await request.post(`${window.location.pathname}/skip`, {});
+        gate = res.gate || gate;
+        applyGateToRail(gate);
+        Notification.success(i18n('Task skipped — opening the next one.'));
+        setTimeout(() => { window.location.href = res.nextUrl || sessionBase; }, 600);
+      } catch (e) {
+        Notification.error(e.message);
+        $(this).prop('disabled', false);
+      }
+    });
   }
 
-  function wireObjectiveInputs() {
-    $('.objective-input[type!=checkbox]').on('input change', (e) => {
-      ans[e.target.name] = e.target.value;
-      saveAns();
-    });
-    $('input.objective-input[type=checkbox]').on('input', (e) => {
-      if (e.target.checked) {
-        ans[e.target.name] ||= [];
-        ans[e.target.name].push(e.target.value);
-        ans[e.target.name] = [...new Set(ans[e.target.name])].sort((a, b) => a.charCodeAt(0) - b.charCodeAt(0));
+  /* ------------------------- bonus task (students) ------------------------- */
+  /*
+   * Once every session task has been attempted, the rail offers a Bonus
+   * Task. Clicking it asks the server to diagnose the student's weak points
+   * and start an AI Studio build; the rail shows a shimmering placeholder
+   * chip while the statement is drafted, which pops into a real chip the
+   * student can open at once, and keeps pulsing while the judge is
+   * prepared in the background. No tutor on bonus tasks.
+   */
+  const bonusInfo = (window.UiContext && UiContext.slBonus) || null;
+  let bonuses = (window.UiContext && UiContext.slBonuses) || [];
+  const bonusUrl = `${sessionBase}/bonus`;
+  let bonusPoll = null;
+  /*
+   * Animation state. `bonusDesigning` covers the diagnosis call (the
+   * longest silent stretch: the AI reads every attempt and tutor exchange
+   * before any draft exists); the stage text advances on a timer since the
+   * request is one round trip. While the draft is being built, the panel
+   * mirrors the pipeline's own messages instead.
+   */
+  let bonusDesigning = false;
+  let bonusStageTimer = null;
+  const DESIGN_STAGES = [
+    i18n('Reading your attempts…'),
+    i18n('Reviewing your exchanges with the tutor…'),
+    i18n('Finding your weak points…'),
+    i18n('Designing a task that targets them…'),
+    i18n('Almost there…'),
+  ];
+  const BUILD_HINT = {
+    drafting: i18n('Writing the statement — you will be able to open it in a moment…'),
+    building: i18n('Preparing the judge: reference solution, cross-check, tests, sandbox verification…'),
+  };
+  function startBonusStages($box) {
+    clearInterval(bonusStageTimer);
+    let k = 0;
+    bonusStageTimer = setInterval(() => {
+      k = Math.min(k + 1, DESIGN_STAGES.length - 1);
+      const $st = $box.find('.sl-bonus__stage');
+      if (!$st.length) { clearInterval(bonusStageTimer); return; }
+      $st.addClass('is-swap');
+      setTimeout(() => $st.text(DESIGN_STAGES[k]).removeClass('is-swap'), 180);
+      if (k === DESIGN_STAGES.length - 1) clearInterval(bonusStageTimer);
+    }, 4000);
+  }
+
+  function bonusChipHtml(b, i, extra = '') {
+    const cls = ` bonus${b.status === 'drafting' ? ' bonus-drafting' : b.status === 'building' ? ' bonus-building' : b.status === 'failed' ? ' bonus-failed' : ''}${b.docId && String(b.docId) === String(UiContext.slPid) ? ' current' : ''}${extra}`;
+    const href = b.docId && b.status !== 'failed' ? `${sessionBase}/p/${b.docId}` : 'javascript:;';
+    const label = b.status === 'drafting' ? '…' : b.status === 'failed' ? '⚠' : `🎁${i + 1}`;
+    const title = b.status === 'drafting' ? i18n('Designing your bonus task…')
+      : b.status === 'building' ? `${b.title || i18n('Bonus task')} — ${i18n('read and code now; the judge is being prepared')}`
+        : b.status === 'failed' ? `${i18n('Bonus task failed')}: ${b.message || ''}`
+          : `${b.title || i18n('Bonus task')} — ${(b.weakPoints || []).join(', ')} · ${i18n('now in the Problem Set too')}`;
+    return `<a class="sl-rail__chip${cls}"${b.docId ? ` data-pid="${escapeHtml(String(b.docId))}"` : ''} data-bonus="${escapeHtml(b.id)}" data-bonus-status="${escapeHtml(b.status)}" href="${href}" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`;
+  }
+
+  /** Repaint the rail's bonus group from `bonuses` (creating it on first use). */
+  function renderBonusChips(newId) {
+    const $body = $('#sl-rail .sl-rail__body');
+    if (!$body.length) return;
+    let $cat = $body.find('.sl-rail__cat--bonus');
+    let $grid = $body.find('.sl-rail__grid--bonus');
+    const list = bonusDesigning
+      ? [...bonuses, { id: '__designing', status: 'drafting', title: '', weakPoints: [], docId: null }]
+      : bonuses;
+    if (!list.length) {
+      $cat.remove();
+      $grid.remove();
+      return;
+    }
+    if (!$grid.length) {
+      // The server-rendered group (if any) has no marker classes: adopt it by header text, else append.
+      const $hdr = $body.find('.sl-rail__cat').filter(function isBonus() { return $(this).text().trim() === i18n('Bonus'); }).first();
+      if ($hdr.length) {
+        $cat = $hdr.addClass('sl-rail__cat--bonus');
+        $grid = $hdr.next('.sl-rail__grid').addClass('sl-rail__grid--bonus');
       } else {
-        ans[e.target.name] = (ans[e.target.name] || []).filter((v) => v !== e.target.value);
+        $cat = $(`<div class="sl-rail__cat sl-rail__cat--bonus">${escapeHtml(i18n('Bonus'))}</div>`).appendTo($body);
+        $grid = $('<div class="sl-rail__grid sl-rail__grid--bonus"></div>').appendTo($body);
       }
-      saveAns();
+    }
+    $grid.html(list.map((b, i) => bonusChipHtml(b, i, b.id === newId ? ' bonus-new' : '')).join(''));
+  }
+
+  function renderBonusBox() {
+    const $box = $('#sl-bonus');
+    if (!$box.length || !bonusInfo) return;
+    const inProgress = bonuses.some((b) => b.status === 'drafting' || b.status === 'building');
+    const failed = bonuses.find((b) => b.status === 'failed');
+    if (!bonusInfo.available) {
+      $box.html('');
+      return;
+    }
+    if (bonusDesigning) {
+      // The diagnosis is running: a pulsing brain, a shimmering bar and
+      // staged status text, so the wait never looks stalled.
+      $box.html(`<div class="sl-bonus__design">
+          <div class="sl-bonus__design-head"><span class="sl-bonus__brain">🧠</span><b>${escapeHtml(i18n('Designing your bonus task'))}</b></div>
+          <div class="sl-bonus__bar"><i></i></div>
+          <div class="sl-bonus__stage">${escapeHtml(DESIGN_STAGES[0])}</div>
+        </div>`);
+      startBonusStages($box);
+      return;
+    }
+    if (inProgress) {
+      const b = bonuses.find((x) => x.status === 'drafting' || x.status === 'building');
+      const detail = (b.message || '').replace(/\.\.\.$/, '…');
+      $box.html(`<div class="sl-bonus__design sl-bonus__design--${escapeHtml(b.status)}">
+          <div class="sl-bonus__design-head"><span class="sl-bonus__brain">${b.status === 'drafting' ? '✍️' : '🛠️'}</span><b>${escapeHtml(b.status === 'drafting' ? i18n('Writing your bonus task') : (b.title || i18n('Bonus task')))}</b></div>
+          <div class="sl-bonus__bar"><i></i></div>
+          <div class="sl-bonus__stage">${escapeHtml(detail || BUILD_HINT[b.status] || '')}</div>
+          ${b.status === 'building' ? `<div class="sl-bonus__note">${escapeHtml(i18n('Open it from the chip above and start reading — submissions open when the judge is ready.'))}</div>` : ''}
+          ${(b.weakPoints || []).length ? `<div class="sl-bonus__kps">🎯 ${b.weakPoints.map((w) => `<span class="sl-bonus__kp">${escapeHtml(w)}</span>`).join('')}</div>` : ''}
+        </div>`);
+      return;
+    }
+    if (!bonusInfo.eligible) {
+      $box.html(`<div class="sl-bonus__note">🎁 ${escapeHtml(i18n('Attempt every task of the session to unlock a bonus task made for your weak points.'))}</div>`);
+      return;
+    }
+    // Exactly one bonus task per session: once it exists, only its state
+    // (and a retry after a failed build) is shown — never a second button.
+    if (bonuses.length) {
+      $box.html(failed
+        ? `<div class="sl-bonus__note">⚠ ${escapeHtml(failed.message || i18n('The bonus task could not be prepared.'))} <a href="javascript:;" class="sl-bonus__retry" data-id="${escapeHtml(failed.id)}">${escapeHtml(i18n('Retry'))}</a></div>`
+        : `<div class="sl-bonus__note">🎁 ${escapeHtml(i18n('Your bonus task is ready in the list above — this session offers exactly one.'))}</div>`);
+    } else {
+      $box.html(`<button type="button" class="sl-bonus__btn" id="sl-bonus-btn">🎁 ${escapeHtml(i18n('Bonus Task'))}</button>
+      <div class="sl-bonus__note">${escapeHtml(i18n('One new, harder task built from your attempts and tutor exchanges — aimed at your weak points. Each session offers exactly one.'))}</div>`);
+    }
+    $box.find('#sl-bonus-btn').on('click', createBonus);
+    $box.find('.sl-bonus__retry').on('click', async function onRetry() {
+      try {
+        await request.post(bonusUrl, { operation: 'retry', id: $(this).attr('data-id') });
+        bonuses = bonuses.map((b) => (b.id === $(this).attr('data-id') ? { ...b, status: b.docId ? 'building' : 'drafting', message: '' } : b));
+        renderBonusChips();
+        renderBonusBox();
+        startBonusPoll();
+      } catch (e) {
+        Notification.error(e.message);
+      }
     });
   }
 
-  function clearQuestionMarks() {
-    $('.sl-q-pass, .sl-q-fail, .sl-q-partial').removeClass('sl-q-pass sl-q-fail sl-q-partial');
-  }
-
-  function markQuestions(data) {
-    if (!isObjective || !data.cases) return;
-    clearQuestionMarks();
-    for (const c of data.cases) {
-      const key = caseKey(c);
-      if (!key) continue;
-      const cls = c.status === 1 ? 'sl-q-pass' : (/partial/i.test(c.message || '') ? 'sl-q-partial' : 'sl-q-fail');
-      $(`.objective_${key}`).addClass(cls);
+  async function createBonus() {
+    if (bonusDesigning) return;
+    bonusDesigning = true;
+    renderBonusChips('__designing'); // a shimmering placeholder chip appears at once
+    renderBonusBox();
+    try {
+      const res = await request.post(bonusUrl, { operation: 'create' });
+      bonusDesigning = false;
+      clearInterval(bonusStageTimer);
+      bonuses = [...bonuses, res.bonus];
+      bonusInfo.inProgress = true;
+      renderBonusChips(res.bonus.id);
+      renderBonusBox();
+      startBonusPoll();
+    } catch (e) {
+      bonusDesigning = false;
+      clearInterval(bonusStageTimer);
+      renderBonusChips();
+      renderBonusBox();
+      Notification.error(e.message);
     }
   }
+
+  function startBonusPoll() {
+    if (bonusPoll) return;
+    bonusPoll = setInterval(async () => {
+      if (!bonuses.some((b) => b.status === 'drafting' || b.status === 'building')) {
+        clearInterval(bonusPoll);
+        bonusPoll = null;
+        return;
+      }
+      try {
+        const res = await request.get(`${bonusUrl}?_fmt=json`);
+        const before = new Map(bonuses.map((b) => [b.id, b.status]));
+        bonuses = res.bonuses || bonuses;
+        bonusInfo.eligible = !!res.eligible;
+        bonusInfo.inProgress = !!res.inProgress;
+        let popped = null;
+        for (const b of bonuses) {
+          const prev = before.get(b.id);
+          if (prev === 'drafting' && b.status !== 'drafting') {
+            popped = b.id;
+            if (b.status === 'building') Notification.success(i18n('Your bonus task \u201c{0}\u201d is ready to read — open it from the side panel. Submissions open once the judge is prepared.').replace('{0}', b.title || ''));
+          }
+          if (prev && prev !== 'ready' && b.status === 'ready') {
+            Notification.success(i18n('The judge for \u201c{0}\u201d is ready — you can submit now.').replace('{0}', b.title || ''));
+            popped = b.id; // re-pop the chip as it turns solid
+            try { confettiBurst(); } catch (err) { /* decorative */ }
+            if (String(b.docId) === String(UiContext.slPid)) renderGate();
+          }
+          if (prev && prev !== 'failed' && b.status === 'failed') Notification.error(`${i18n('Bonus task failed')}: ${b.message || ''}`);
+        }
+        renderBonusChips(popped);
+        renderBonusBox();
+      } catch (e) { /* keep polling */ }
+    }, 3000);
+  }
+
+  // The rail attaches asynchronously; paint the bonus slot once it exists.
+  if (bonusInfo) {
+    let tries = 0;
+    const t = setInterval(() => {
+      tries += 1;
+      if ($('#sl-bonus').length) {
+        clearInterval(t);
+        renderBonusChips();
+        renderBonusBox();
+        if (bonuses.some((b) => b.status === 'drafting' || b.status === 'building')) startBonusPoll();
+      } else if (tries > 80) clearInterval(t);
+    }, 150);
+  }
+
+  /** Take a fresh gate from any response and repaint. */
+  function absorbGate(res) {
+    if (!res || !res.gate) return;
+    const wasDone = gate && gate.isDone;
+    gate = res.gate;
+    applyGateToRail(gate);
+    renderGate();
+    if (gate.isDone && !wasDone) {
+      Notification.success(gate.current
+        ? i18n('Task finished — the next task is unlocked!')
+        : i18n('Task finished — that was the last one. Well done!'));
+    }
+  }
+  // The rail is attached asynchronously (scratchpad mode); fill the block once it exists.
+  if (gate) {
+    let tries = 0;
+    const gateTimer = setInterval(() => {
+      tries += 1;
+      if ($('#sl-gate').length) {
+        clearInterval(gateTimer);
+        renderGate();
+        applyGateToRail(gate);
+      } else if (tries > 80) clearInterval(gateTimer);
+    }, 150);
+  }
+
+  let lastRid = null;
+  /** Assigned by initScratchpad so page-level code can clear open cards. */
+  let clearScratchpadAnnotations = () => {};
+  /*
+   * Panel chat: the launcher panel can continue the tutor's OPEN question —
+   * the card the student may have closed by mistake. initScratchpad assigns
+   * these: whether there is an open question, and how to answer it (the
+   * same endpoint and bookkeeping as the card itself).
+   */
+  let panelHasQuestion = () => false;
+  let panelAnswer = async () => {};
 
   /* ------- floating layout: body portal, drag, viewport-adaptive geometry ------- */
 
@@ -642,24 +733,14 @@ export default new NamedPage('self_learning_solve', async () => {
         appendBubble(m.role, m.content, {
           line: m.line, endLine: m.endLine, resolved: m.resolved, accepted: underAccepted,
         });
-      } else if (UiContext.slType === 'programming') {
-        // Legacy button-chat turns are retired for programming problems: the
-        // pop-up cards near the code are the only interaction channel there.
-        continue; // eslint-disable-line no-continue
-      } else appendBubble(m.role, m.content);
+      }
+      // Any other kind is a legacy button-chat turn: retired — the pop-up
+      // cards near the code are the only interaction channel.
     }
   }
 
-  function setTyping(on) {
-    waiting = on;
-    $typing.toggle(on);
-    $('#sl-send').prop('disabled', on);
-  }
-
   function panelEmptyText() {
-    return UiContext.slType === 'programming'
-      ? i18n('No tutoring history yet. Submit your code — the tutor will pop questions right at your lines.')
-      : i18n('Submit your solution first — the tutor starts from a judged attempt.');
+    return i18n('No tutoring history yet. Submit your code — the tutor will pop questions right at your lines.');
   }
 
   function openPanel() {
@@ -673,152 +754,12 @@ export default new NamedPage('self_learning_solve', async () => {
       $chat.append(`<div class="sl-empty">${escapeHtml(panelEmptyText())}</div>`);
     }
     scrollChat();
-    $input.trigger('focus');
   }
 
   function closePanel() {
     panelOpen = false;
     $tutor.hide();
     $fab.show(); // the red launcher returns so the chat history stays one click away
-  }
-
-  async function startTutor(rid, open = true) {
-    if (!UiContext.slTutor || !$tutor.length) return;
-    if (open) openPanel();
-    setTyping(true);
-    try {
-      const res = await request.post(tutorUrl, { operation: 'start', rid });
-      renderMessages(res.messages, true);
-      tutorStarted = true;
-    } catch (e) {
-      appendBubble('assistant', `⚠️ ${e.message}`);
-    } finally {
-      setTyping(false);
-      if (open) $input.trigger('focus');
-    }
-  }
-
-  async function notifyAccepted(rid) {
-    if (!UiContext.slTutor) return;
-    setTyping(true);
-    try {
-      const res = await request.post(tutorUrl, { operation: 'accepted', rid });
-      absorbSpark(res);
-      if (res.marker) appendDivider(res.marker, true);
-      if (res.reply) {
-        appendBubble('assistant', res.reply);
-        tutorStarted = true;
-      }
-      maybeOfferChallengeChat(res.challenge, rid);
-      if (!panelOpen) $fabDot.show();
-    } catch (e) { /* non-fatal */ } finally {
-      setTyping(false);
-    }
-  }
-
-  /* ------------------------ Boss Challenge (chat mode) ------------------------ */
-
-  function maybeOfferChallengeChat(ch, rid) {
-    if (!ch || !ch.available) return;
-    $('.sl-choffer').remove();
-    const resume = ch.state === 'active';
-    const $row = $(`<div class="sl-choffer">🔥 <b>${escapeHtml(i18n('Boss Challenge'))}</b> — ${escapeHtml(i18n(resume ? 'You have an unfinished Boss Challenge.' : 'Feeling brave? Beat one extra twist of this problem.'))}
-      <span class="sl-choffer__btns"><button type="button" class="sl-chaccept">${escapeHtml(i18n(resume ? 'Resume the challenge' : 'Accept the challenge'))} 🔥</button>${resume ? '' : `<button type="button" class="sl-chlater">${escapeHtml(i18n('Maybe later'))}</button>`}</span></div>`);
-    $chat.find('.sl-empty').remove();
-    $chat.append($row);
-    scrollChat();
-    if (!panelOpen) $fabDot.show();
-    $row.find('.sl-chaccept').on('click', () => startChallengeChat(rid, $row));
-    $row.find('.sl-chlater').on('click', async () => {
-      try { await request.post(tutorUrl, { operation: 'challengeDecline' }); } catch (e) { /* best-effort */ }
-      challengeInfo = { state: 'declined' };
-      $row.remove();
-    });
-  }
-
-  async function startChallengeChat(rid, $row) {
-    if (waiting) return;
-    setTyping(true);
-    try {
-      const res = await request.post(tutorUrl, { operation: 'challenge', rid });
-      if ($row) $row.remove();
-      chMode = true;
-      chHistory = [];
-      appendDivider(`🔥 ${res.title || i18n('Boss Challenge')}`);
-      if (res.hook) appendBubble('assistant', `💡 ${res.hook}`);
-      appendBubble('assistant', `🔥 ${res.question}`);
-      if (inputPlaceholder0 === null) inputPlaceholder0 = $input.attr('placeholder') || '';
-      $input.attr('placeholder', i18n('Type your challenge answer... (Enter to send)'));
-      if (!$('#sl-chexit').length) {
-        const $bar = $(`<div class="sl-chbar" id="sl-chexit">🔥 ${escapeHtml(i18n('Boss Challenge mode'))} <a href="javascript:;">${escapeHtml(i18n('Exit challenge'))}</a></div>`);
-        $bar.find('a').on('click', exitChallengeChat);
-        $typing.before($bar);
-      }
-      openPanel();
-    } catch (e) {
-      Notification.error(e.message);
-    } finally {
-      setTyping(false);
-      $input.trigger('focus');
-    }
-  }
-
-  function exitChallengeChat() {
-    chMode = false;
-    $('#sl-chexit').remove();
-    if (inputPlaceholder0 !== null) $input.attr('placeholder', inputPlaceholder0);
-  }
-
-  async function sendChallengeReply(text) {
-    appendBubble('user', text);
-    setTyping(true);
-    try {
-      const res = await request.post(tutorUrl, {
-        operation: 'challengeReply', text, history: JSON.stringify(chHistory.slice(-10)),
-      });
-      chHistory.push({ role: 'student', content: text });
-      chHistory.push({ role: 'tutor', content: res.reply });
-      absorbSpark(res);
-      appendBubble('assistant', res.reply);
-      if (res.cleared) {
-        appendDivider(`🏆 ${i18n('Challenge cleared! Legendary work!')}`, true);
-        confettiBurst();
-        challengeInfo = { state: 'cleared' };
-        exitChallengeChat();
-      }
-    } catch (e) {
-      appendBubble('assistant', `⚠️ ${e.message}`);
-    } finally {
-      setTyping(false);
-      $input.trigger('focus');
-    }
-  }
-
-  async function sendMessage() {
-    if (waiting) return;
-    const text = ($input.val() || '').trim();
-    if (!text) return;
-    if (chMode) {
-      $input.val('');
-      await sendChallengeReply(text);
-      return;
-    }
-    if (!tutorStarted) {
-      Notification.warn(i18n('Submit your solution first — the tutor starts from a judged attempt.'));
-      return;
-    }
-    $input.val('');
-    appendBubble('user', text);
-    setTyping(true);
-    try {
-      const res = await request.post(tutorUrl, { operation: 'message', text });
-      appendBubble('assistant', res.reply);
-    } catch (e) {
-      appendBubble('assistant', `⚠️ ${e.message}`);
-    } finally {
-      setTyping(false);
-      $input.trigger('focus');
-    }
   }
 
   /* ------------------------- submission & polling ------------------------- */
@@ -837,16 +778,13 @@ export default new NamedPage('self_learning_solve', async () => {
     } else {
       const icon = data.accepted ? '✅' : '❌';
       html = `<b>${icon} ${escapeHtml(data.statusText)}</b>`
-        + (isObjective
-          ? ` <span class="text-gray">(${i18n('Score')}: ${data.score})</span>`
-          : ` <span class="text-gray">(${i18n('Score')}: ${data.score}, ${data.time}ms, ${data.memory}KiB)</span>`);
+        + ` <span class="text-gray">(${i18n('Score')}: ${data.score}, ${data.time}ms, ${data.memory}KiB)</span>`;
       if (data.cases && data.cases.length) {
         html += '<div class="sl-cases">';
         for (const c of data.cases) {
           const key = caseKey(c) ?? '?';
           const cls2 = c.status === 1 ? 'pass' : (/partial/i.test(c.message || '') ? 'partial' : 'fail');
-          const label = isObjective ? (c.message || c.statusText) : c.statusText;
-          html += `<span class="${cls2}">#${escapeHtml(key)} ${escapeHtml(label)}</span>`;
+          html += `<span class="${cls2}">#${escapeHtml(key)} ${escapeHtml(c.statusText)}</span>`;
         }
         html += '</div>';
       }
@@ -877,54 +815,29 @@ export default new NamedPage('self_learning_solve', async () => {
     return null;
   }
 
+  /**
+   * The plain answer form (answer-submission tasks, which have no IDE and no
+   * tutor): submit, then poll the verdict inline. Programming tasks never
+   * reach this — they submit from the Scratchpad toolbar.
+   */
   async function handleSubmit(ev) {
     if (ev) ev.preventDefault();
-    let payload;
-    if (isObjective) {
-      const filled = Object.keys(ans).filter((k) => {
-        const v = ans[k];
-        return Array.isArray(v) ? v.length : (v !== undefined && v !== null && String(v).trim());
-      });
-      if (!filled.length) {
-        Notification.warn(i18n('Please answer at least one question before submitting.'));
-        return;
-      }
-      payload = { lang: '_', code: yaml.dump(ans) };
-    } else {
-      const lang = $('[name="lang"]').val() || '_';
-      const code = $('[name="code"]').val();
-      if (!code || !code.trim()) {
-        Notification.warn(i18n('Please write your code first.'));
-        return;
-      }
-      payload = { lang, code };
+    const lang = $('[name="lang"]').val() || '_';
+    const code = $('[name="code"]').val();
+    if (!code || !code.trim()) {
+      Notification.warn(i18n('Please write your code first.'));
+      return;
     }
     const $btn = $('#sl-submit');
     $btn.prop('disabled', true);
     $('#sl-submit-hint').text(i18n('Submitting...'));
     try {
-      const res = await request.post(window.location.pathname, payload);
-      if (!isObjective) {
-        // Programming tasks hand off to the standard record page, where the
-        // tutor window (with the problem statement alongside) takes over.
-        const prefix = window.location.pathname.split('/self-learning/')[0];
-        window.location.assign(`${prefix}/record/${res.rid}?slssid=${UiContext.slSsid}&slpid=${UiContext.slPid}`);
-        return;
-      }
+      const res = await request.post(window.location.pathname, { lang, code });
       lastRid = res.rid;
       $('#sl-submit-hint').text('');
-      clearQuestionMarks();
       renderVerdict({ judged: false, statusText: i18n('Waiting') });
       const data = await pollRecord(res.rid);
-      if (!data) return;
-      markQuestions(data);
-      if (data.accepted) {
-        Notification.success(i18n('Accepted! Great job!'));
-        await notifyAccepted(res.rid);
-      } else {
-        // Requirement: a failed submission by a student launches the Socratic tutor chat.
-        await startTutor(res.rid);
-      }
+      if (data && data.accepted) Notification.success(i18n('Accepted! Great job!'));
     } catch (e) {
       Notification.error(e.message);
       $('#sl-submit-hint').text('');
@@ -949,6 +862,9 @@ export default new NamedPage('self_learning_solve', async () => {
     let annoSession = 0; // bumped on clear; stale async work checks it
     let askedQuestions = [];
     let cardState = null; // the single active question card
+    // The last question asked, kept after its card is closed so the panel
+    // can still answer it (cleared on a new submission — the code changed).
+    let lastQuestion = null;
     let editorLocked = false;
 
     /* --------- "Submitted code" panel at the bottom of the description --------- */
@@ -1183,6 +1099,16 @@ export default new NamedPage('self_learning_solve', async () => {
       editorLocked = false;
     }
 
+    /** Panel input: enabled only while the tutor has an unanswered question. */
+    function refreshPanelInput() {
+      const open = !!(lastQuestion && !lastQuestion.resolved);
+      $('#sl-panel-input').prop('disabled', !open).attr('placeholder', open
+        ? i18n('Answer the tutor\u2019s open question here… (Enter to send)')
+        : i18n('No open question right now — submit your code to get the next one.'));
+      $('#sl-panel-send').prop('disabled', !open);
+    }
+    panelHasQuestion = () => !!(lastQuestion && !lastQuestion.resolved);
+
     function clearAnnotations() {
       annoSession += 1;
       for (const a of annoState) {
@@ -1193,6 +1119,8 @@ export default new NamedPage('self_learning_solve', async () => {
       }
       annoState = [];
       cardState = null;
+      lastQuestion = null;
+      refreshPanelInput();
       hideOverlay();
     }
     clearScratchpadAnnotations = clearAnnotations;
@@ -1332,13 +1260,10 @@ export default new NamedPage('self_learning_solve', async () => {
       .sl-offer__btns .sl-chaccept:hover { filter: brightness(1.08); }
       .sl-offer__btns .sl-chlater { background: var(--pta-card); color: var(--pta-warn-text); border: 1px solid var(--pta-warn-line); }
       .sl-offer__btns .sl-chlater:hover { background: var(--pta-warn-soft); }
-      .sl-anno--boss { border-left-color: var(--pta-warn); }
-      .sl-anno--boss .sl-anno__head { color: var(--pta-warn-text); }
-      .sl-anno--boss.sl-anno--resolved { border-left-color: var(--pta-success); }
       .sl-anno__giveup { background: var(--pta-card); color: var(--pta-warn-text); border: 1px solid var(--pta-warn-line); border-radius: 999px; padding: 1px 10px; font-size: 10.5px; cursor: pointer; margin-right: 2px; }
       .sl-anno__giveup:hover { background: var(--pta-warn-soft); }
       .pta-dark .sl-anno, .pta-dark .sl-anno-ghost { border-left-color: #e35d6a; box-shadow: 0 12px 30px -12px rgba(0, 0, 0, .65); }
-      .pta-dark .sl-anno--resolved, .pta-dark .sl-anno--boss.sl-anno--resolved { border-left-color: #69b34c; }
+      .pta-dark .sl-anno--resolved { border-left-color: #69b34c; }
       .pta-dark .sl-anno--info { border-left-color: #4dabf7; }
 `;
 
@@ -1369,7 +1294,6 @@ export default new NamedPage('self_learning_solve', async () => {
     }
 
     let thinkingRow = null;
-    let chCard = null; // the live Boss Challenge card (programming problems)
 
     /**
      * Requested UX: the full-page overlay is only for the moment right after a
@@ -1427,152 +1351,6 @@ export default new NamedPage('self_learning_solve', async () => {
       dom.querySelector('.sl-anno__close').addEventListener('click', () => removeZoneEntry(entry));
     }
 
-    /* ---------------------- Boss Challenge (in-editor) ---------------------- */
-
-    /** Offer card with Accept / Maybe-later, anchored under the code. */
-    function maybeOfferChallengeCard(rid, line) {
-      if (!challengeInfo || !challengeInfo.available) return;
-      if (chCard || document.querySelector('.sl-anno--offer')) return;
-      const ed = findScratchpadEditor();
-      if (!ed || !ed.getModel()) return;
-      const resume = challengeInfo.state === 'active';
-      const dom = document.createElement('div');
-      dom.className = 'sl-anno sl-anno--offer';
-      dom.innerHTML = '<span class="sl-anno__icon">🔥</span>'
-        + `<span class="sl-anno__q"><b>${escapeHtml(i18n('Boss Challenge'))}</b> — ${escapeHtml(i18n(resume ? 'You have an unfinished Boss Challenge.' : 'Feeling brave? Beat one extra twist of this problem.'))}</span>`
-        + '<span class="sl-anno__btns sl-offer__btns">'
-        + `<button type="button" class="sl-chaccept">${escapeHtml(i18n(resume ? 'Resume the challenge' : 'Accept the challenge'))} 🔥</button>`
-        + (resume ? '' : `<button type="button" class="sl-chlater">${escapeHtml(i18n('Maybe later'))}</button>`)
-        + '</span>';
-      const max = ed.getModel().getLineCount();
-      const anchorLine = Math.min(Math.max(1, line || max), max);
-      const entry = addZone(ed, anchorLine, 52, dom, null);
-      fitZone(entry, 44, Math.min(220, cardMaxPx()));
-      requestAnimationFrame(() => fitZone(entry, 44, Math.min(220, cardMaxPx())));
-      setTimeout(() => fitZone(entry, 44, Math.min(220, cardMaxPx())), 150);
-      dom.querySelector('.sl-chaccept').addEventListener('click', () => {
-        removeZoneEntry(entry);
-        startChallengeCard(rid, anchorLine);
-      });
-      const later = dom.querySelector('.sl-chlater');
-      if (later) {
-        later.addEventListener('click', async () => {
-          removeZoneEntry(entry);
-          challengeInfo = { state: 'declined' };
-          try { await request.post(tutorUrl, { operation: 'challengeDecline' }); } catch (e) { /* best-effort */ }
-        });
-      }
-    }
-
-    async function startChallengeCard(rid, line) {
-      showOverlay();
-      try {
-        const res = await request.post(tutorUrl, { operation: 'challenge', rid });
-        hideOverlay();
-        showBossCard(res, line);
-        // Mirror into the launcher panel history.
-        appendDivider(`🔥 ${res.title || i18n('Boss Challenge')}`);
-        if (res.hook) appendBubble('assistant', `💡 ${res.hook}`);
-        appendBubble('assistant', `🔥 ${res.question}`);
-      } catch (e) {
-        hideOverlay();
-        Notification.error(e.message);
-      }
-    }
-
-    /** The live Boss Challenge card: same chatbox anatomy, fire styling. The
-     *  editor stays UNLOCKED — revising the code is part of the challenge. */
-    function showBossCard(ch, line) {
-      const ed = findScratchpadEditor();
-      if (!ed || !ed.getModel()) return;
-      const max = ed.getModel().getLineCount();
-      const anchorLine = Math.min(Math.max(1, line || max), max);
-      const dom = document.createElement('div');
-      dom.className = 'sl-anno sl-anno--chat sl-anno--boss';
-      dom.style.setProperty('--sl-log-max', `${Math.max(110, cardMaxPx() - 118)}px`);
-      dom.innerHTML = '<div class="sl-anno__head">'
-        + `<span>🔥 ${escapeHtml(ch.title || i18n('Boss Challenge'))}</span>`
-        + '<span class="sl-anno__btns">'
-        + `<button type="button" class="sl-anno__giveup">${escapeHtml(i18n('Give up'))}</button>`
-        + `<button type="button" class="sl-anno__close" title="${escapeHtml(i18n('Dismiss'))}">×</button>`
-        + '</span></div>'
-        + '<div class="sl-anno__log"></div>'
-        + '<div class="sl-anno__input">'
-        + `<input type="text" maxlength="1500" placeholder="${escapeHtml(i18n('Type your challenge answer... (Enter to send)'))}">`
-        + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))}">➤</button>`
-        + '</div>';
-      const entry = addZone(ed, anchorLine, 140, dom, null);
-      chCard = { entry, dom, history: [] };
-      if (ch.hook) appendCardNote(ch.hook, '💡', chCard);
-      appendCardMsg('tutor', ch.question, chCard);
-      fitZone(entry, 60, cardMaxPx());
-      requestAnimationFrame(() => fitZone(entry, 60, cardMaxPx()));
-      setTimeout(() => fitZone(entry, 60, cardMaxPx()), 150);
-      dom.querySelector('.sl-anno__close').addEventListener('click', () => {
-        removeZoneEntry(entry);
-        chCard = null;
-      });
-      dom.querySelector('.sl-anno__giveup').addEventListener('click', async () => {
-        challengeInfo = { state: 'declined' };
-        appendCardNote(i18n('You gave up this challenge. It will not be offered again for this problem.'), '✖', chCard);
-        $(dom).find('.sl-anno__input input, .sl-anno__send, .sl-anno__giveup').prop('disabled', true);
-        try { await request.post(tutorUrl, { operation: 'challengeDecline' }); } catch (e) { /* best-effort */ }
-      });
-      const input = dom.querySelector('.sl-anno__input input');
-      const send = async () => {
-        const text = (input.value || '').trim();
-        if (!text || !chCard) return;
-        const card = chCard;
-        input.value = '';
-        appendCardMsg('student', text, card);
-        appendBubble('user', text);
-        const $log = $(card.dom).find('.sl-anno__log');
-        const row = $(`<div class="sl-anno__thinking"><span class="sl-spin--sm"></span><span>${escapeHtml(i18n('The tutor is thinking...'))}</span></div>`).appendTo($log)[0];
-        $(card.dom).find('.sl-anno__input input, .sl-anno__input button, .sl-anno__giveup').prop('disabled', true);
-        $log.scrollTop($log[0].scrollHeight);
-        fitZone(card.entry, 60, cardMaxPx());
-        try {
-          const res = await request.post(tutorUrl, {
-            operation: 'challengeReply',
-            text,
-            history: JSON.stringify(card.history.slice(-10)),
-            code: currentEditorCode(),
-          });
-          card.history.push({ role: 'student', content: text });
-          card.history.push({ role: 'tutor', content: res.reply });
-          row.remove();
-          absorbSpark(res);
-          appendCardMsg('tutor', res.reply, card);
-          appendBubble('assistant', res.reply, { resolved: res.cleared, accepted: true });
-          if (res.cleared) {
-            $(card.dom).addClass('sl-anno--resolved');
-            appendCardNote(i18n('Challenge cleared! Legendary work!'), '🏆', card);
-            appendDivider(`🏆 ${i18n('Challenge cleared! Legendary work!')}`, true);
-            confettiBurst();
-            challengeInfo = { state: 'cleared' };
-            $(card.dom).find('.sl-anno__input input, .sl-anno__send, .sl-anno__giveup').prop('disabled', true);
-          } else {
-            $(card.dom).find('.sl-anno__input input, .sl-anno__input button, .sl-anno__giveup').prop('disabled', false);
-            input.focus();
-          }
-        } catch (e) {
-          row.remove();
-          appendCardMsg('tutor', `⚠️ ${e.message}`, card);
-          $(card.dom).find('.sl-anno__input input, .sl-anno__input button, .sl-anno__giveup').prop('disabled', false);
-        }
-        fitZone(card.entry, 60, cardMaxPx());
-      };
-      dom.querySelector('.sl-anno__send').addEventListener('click', send);
-      input.addEventListener('keydown', (e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          send();
-        }
-      });
-      setTimeout(() => input.focus(), 50);
-    }
-
     /** A distinct green instruction row (not a chat bubble). */
     function appendCardNote(text, icon = '✏️', st = cardState) {
       if (!st) return;
@@ -1614,7 +1392,7 @@ export default new NamedPage('self_learning_solve', async () => {
         + '</div>'
         + '<div class="sl-anno__log"></div>'
         + '<div class="sl-anno__input">'
-        + `<input type="text" maxlength="1000" placeholder="${escapeHtml(i18n('Type your answer... (Enter to send)'))}">`
+        + `<input type="text" maxlength="1000" placeholder="${escapeHtml(i18n('Type your answer \u2014 it\u2019s fine to say you don\u2019t know (Enter to send)'))}">`
         + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))}">➤</button>`
         + (accepted ? '' : `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Already fixed it? Jump straight to the next issue.'))}">${escapeHtml(i18n('Next issue'))} ➜</button>`)
         + '</div>';
@@ -1622,6 +1400,8 @@ export default new NamedPage('self_learning_solve', async () => {
       cardState = {
         entry, dom, rid, line, endLine, question: ann.question, history: [], accepted,
       };
+      lastQuestion = cardState;
+      refreshPanelInput();
       // Combined pop-up on success: the celebration leads, the reflection follows.
       if (accepted) appendCardNote(i18n('Accepted! Great job!'), '🎉');
       appendCardMsg('tutor', ann.question);
@@ -1768,7 +1548,7 @@ export default new NamedPage('self_learning_solve', async () => {
         }
         hideThinking();
         if (res.marker) appendDivider(res.marker, !!res.markerAccepted); // the panel history gains the divider
-        absorbSpark(res);
+        absorbGate(res);
         if (prevCard && cardState === prevCard) {
           removeZoneEntry(prevCard.entry); // non-ghost path only
           cardState = null;
@@ -1783,12 +1563,12 @@ export default new NamedPage('self_learning_solve', async () => {
           }
         } else {
           dropGhost();
-          if (accepted) showInfoCard(`🎉 ${i18n('Accepted! Great job!')}`, afterLine || 0);
+          // Accepted with nothing left to reflect on: the server finishes
+          // the task here, so the card says so in the same words as a
+          // resolved reflection would.
+          if (accepted) showInfoCard(`🎉 ${i18n('Accepted — nothing left to ask: you have truly mastered this problem!')}`, afterLine || 0);
           else showInfoCard(i18n('All issues covered — apply your fixes and submit once to verify!'), afterLine || 0);
         }
-        // The optional Boss Challenge rides every accept: reflection card or
-        // lone celebration, the fire card offers one extra twist below it.
-        if (accepted) maybeOfferChallengeCard(rid, afterLine || 0);
       } catch (e) {
         dropGhost();
         if (session !== annoSession) return;
@@ -1823,7 +1603,7 @@ export default new NamedPage('self_learning_solve', async () => {
         cs.history.push({ role: 'student', content: text });
         cs.history.push({ role: 'tutor', content: res.reply });
         hideThinking();
-        absorbSpark(res);
+        absorbGate(res);
         appendCardMsg('tutor', res.reply);
         // Mirror the exchange into the launcher panel history.
         appendBubble('user', text, { line: cs.line, endLine: cs.endLine });
@@ -1832,6 +1612,8 @@ export default new NamedPage('self_learning_solve', async () => {
         });
         if (res.resolved) {
           askedQuestions.push(cs.question);
+          cs.resolved = true;
+          refreshPanelInput();
           $(cs.dom).addClass('sl-anno--resolved');
           $(cs.dom).find('.sl-anno__input input, .sl-anno__send').prop('disabled', true);
           if (cs.accepted) {
@@ -1854,6 +1636,60 @@ export default new NamedPage('self_learning_solve', async () => {
       }
     }
 
+    /**
+     * Answer the open question from the launcher panel. If its card is still
+     * on screen the card's own flow runs (and mirrors into the panel); if the
+     * student closed the card, the same endpoint is called here and the
+     * exchange lives in the panel alone.
+     */
+    panelAnswer = async (text) => {
+      const q = lastQuestion;
+      if (!q || q.resolved) return;
+      if (cardState === q && q.dom && document.body.contains(q.dom)) {
+        await submitCardAnswer(text);
+        return;
+      }
+      const session = annoSession;
+      const priorHistory = q.history.slice();
+      appendBubble('user', text, { line: q.line, endLine: q.endLine });
+      const $wait = $(`<div class="sl-msg assistant"><div class="sl-bubble"><em>${escapeHtml(i18n('The tutor is thinking...'))}</em></div></div>`).appendTo($chat);
+      scrollChat();
+      $('#sl-panel-input, #sl-panel-send').prop('disabled', true);
+      try {
+        const res = await request.post(tutorUrl, {
+          operation: 'annotateReply',
+          rid: q.rid,
+          line: q.line,
+          endLine: q.endLine,
+          question: q.question,
+          history: JSON.stringify(priorHistory.slice(-10)),
+          text,
+          code: currentEditorCode(),
+        });
+        $wait.remove();
+        if (session !== annoSession) return;
+        q.history.push({ role: 'student', content: text });
+        q.history.push({ role: 'tutor', content: res.reply });
+        absorbGate(res);
+        appendBubble('assistant', res.reply, {
+          line: q.line, endLine: q.endLine, resolved: res.resolved, accepted: q.accepted,
+        });
+        if (res.resolved) {
+          askedQuestions.push(q.question);
+          q.resolved = true;
+          appendDivider(q.accepted
+            ? i18n('Great reflection — you have truly mastered this problem!')
+            : i18n('Great — now FIX this line in the editor.'), q.accepted);
+        }
+      } catch (e) {
+        $wait.remove();
+        appendBubble('assistant', `⚠️ ${e.message}`);
+      } finally {
+        refreshPanelInput();
+        scrollChat();
+      }
+    };
+
     async function trackScratchpadSubmission(rid) {
       if (rid === lastTrackedRid) return; // both hook paths may fire for one submission
       lastTrackedRid = rid;
@@ -1869,6 +1705,7 @@ export default new NamedPage('self_learning_solve', async () => {
           if (data.judged) {
             judged = true;
             verdict = data;
+            absorbGate(data); // tutor-less sessions: an accepted verdict finishes the task
             break;
           }
         } catch (e) {
@@ -1897,6 +1734,13 @@ export default new NamedPage('self_learning_solve', async () => {
         // self-reflection question. If nothing is worth reflecting on, a
         // lone celebration card shows instead (never both).
         askedQuestions = [];
+        // Progression: answering that question finishes the task; keep a
+        // way to re-open it if the card was closed unanswered.
+        reaskReflection = async () => {
+          askedQuestions = [];
+          await requestNextQuestion(rid, lastLine, true);
+        };
+        renderGate();
         await requestNextQuestion(rid, lastLine, true);
         return;
       }
@@ -2040,37 +1884,16 @@ export default new NamedPage('self_learning_solve', async () => {
 
   /* ------------------------------ wiring ---------------------------------- */
 
-  if (isObjective) {
-    try {
-      db = await openDB;
-    } catch (e) { db = null; }
-    const cnt = buildObjectiveForm();
-    if (cnt) {
-      await loadAns();
-      wireObjectiveInputs();
-    }
-    $('#sl-submit').on('click', handleSubmit);
-    $('#sl-clear-answers').on('click', async () => {
-      const action = await new ConfirmDialog({
-        $body: tpl.typoMsg(i18n('All changes will be lost. Are you sure to clear all answers?')),
-      }).open();
-      if (action !== 'yes') return;
-      for (const k of Object.keys(ans)) delete ans[k];
-      try {
-        await db?.delete('solutions', cacheKey);
-      } catch (e) { /* ignore */ }
-      window.location.reload();
-    });
-  } else {
-    // The code textarea is upgraded to Monaco by the site-wide
-    // code_editor.page.js autoload.
-    $('#sl-submit-form').on('submit', handleSubmit);
-    initScratchpad();
-  }
+  // Answer-submission tasks render the plain form (its textarea is upgraded
+  // to Monaco by the site-wide code_editor.page.js autoload); programming
+  // tasks go straight into the IDE. Objective tasks never render this page
+  // — the solve route sends them to the session paper.
+  $('#sl-submit-form').on('submit', handleSubmit);
+  initScratchpad();
 
-  // Requirement: quiz and answer-submission problems have no IDE, but keep
-  // the same session problem rail, attached below the navbar in page mode,
-  // so learners can navigate among the session's problems from here too.
+  // Answer-submission problems have no IDE, but keep the same session
+  // problem rail, attached below the navbar in page mode, so learners can
+  // navigate among the session's problems from here too.
   if (UiContext.slType !== 'programming') injectRailForPage();
 
   if ($fab.length) initFabDrag();
@@ -2083,6 +1906,28 @@ export default new NamedPage('self_learning_solve', async () => {
   });
   $('#sl-tutor-close').on('click', closePanel);
   $('#sl-tutor-expand').on('click', () => setExpanded(!isExpanded));
+  // Panel chat: continue the tutor's open question (the card may be closed).
+  const sendPanel = async () => {
+    const $in = $('#sl-panel-input');
+    const text = String($in.val() || '').trim();
+    if (!text) return;
+    if (!panelHasQuestion()) {
+      Notification.info(i18n('No open question right now — submit your code to get the next one.'));
+      return;
+    }
+    $in.val('');
+    await panelAnswer(text);
+  };
+  $('#sl-panel-send').on('click', sendPanel);
+  $('#sl-panel-input').on('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      sendPanel();
+    }
+  });
+  // Until a question exists the row is disabled with an explanation.
+  $('#sl-panel-input').prop('disabled', true).attr('placeholder', i18n('No open question right now — submit your code to get the next one.'));
+  $('#sl-panel-send').prop('disabled', true);
   $(document).on('keydown', (ev) => {
     if (ev.key === 'Escape' && panelOpen && isExpanded) setExpanded(false);
   });
@@ -2091,49 +1936,16 @@ export default new NamedPage('self_learning_solve', async () => {
     syncFab();
     applyPanelLayout();
   });
-  $('#sl-send').on('click', sendMessage);
-  $input.on('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey) {
-      ev.preventDefault();
-      sendMessage();
-    }
-  });
-  $('#sl-tutor-reset').on('click', () => {
-    new ConfirmDialog({
-      $body: tpl.typoMsg(i18n('Reset this tutoring conversation? The tutor will forget everything discussed so far.')),
-    }).open().then(async (action) => {
-      if (action !== 'yes') return;
-      try {
-        await request.post(tutorUrl, { operation: 'reset' });
-        $chat.empty();
-        tutorStarted = false;
-        if (UiContext.slType === 'programming') {
-          // The card channel restarts from the next submission; the panel
-          // just returns to its empty read-only state.
-          clearScratchpadAnnotations();
-          $chat.append(`<div class="sl-empty">${escapeHtml(panelEmptyText())}</div>`);
-        } else if (lastRid) await startTutor(lastRid);
-      } catch (e) {
-        Notification.error(e.message);
-      }
-    });
-  });
 
-  // Resume a previous tutoring conversation on page load.
+  // Replay the previous tutoring history on page load (programming only —
+  // UiContext.slTutor is false for every other task kind).
   if (UiContext.slTutor && $tutor.length) {
     request.get(tutorUrl).then((res) => {
-      absorbSpark(res);
       if (res.messages && res.messages.length) {
         renderMessages(res.messages, true);
-        tutorStarted = true;
-        // For programming, legacy chat turns are filtered out; only light the
-        // dot when the read-only history actually has something to show.
+        // Legacy chat turns are filtered out; only light the dot when the
+        // read-only history actually has something to show.
         if ($chat.children().length) $fabDot.show();
-      }
-      // An unfinished Boss Challenge survives reloads: offer to resume it in
-      // the chat panel (quiz problems only — programming re-offers in-editor).
-      if (UiContext.slType === 'objective' && res.challenge && res.challenge.state === 'active') {
-        maybeOfferChallengeChat(res.challenge, null);
       }
     }).catch(() => { /* tutor unavailable; the fab still opens an empty panel */ });
   }

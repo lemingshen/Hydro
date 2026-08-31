@@ -176,9 +176,10 @@ function filtersActive(f: Filters): boolean {
  */
 const DIFFICULTY_BANDS: { label: string, min: number, max: number }[] = [
   { label: 'All', min: 0, max: 0 },
+  // Same bands as the AI Studio's rating: intro 1-3, medium 4-7, challenge 8-10.
   { label: '1-3', min: 1, max: 3 },
-  { label: '4-6', min: 4, max: 6 },
-  { label: '7-10', min: 7, max: 10 },
+  { label: '4-7', min: 4, max: 7 },
+  { label: '8-10', min: 8, max: 10 },
 ];
 
 /**
@@ -193,7 +194,7 @@ function loadTagFacet(): Promise<{ name: string, count: number }[]> {
   return tagFacetPromise;
 }
 
-function FilterBar({ value, onChange }: { value: Filters, onChange: (f: Filters) => void }) {
+function FilterBar({ value, onChange, lockKind }: { value: Filters, onChange: (f: Filters) => void, lockKind?: string }) {
   const [tagQuery, setTagQuery] = React.useState('');
   const [facet, setFacet] = React.useState<{ name: string, count: number }[]>([]);
   const [tagsOpen, setTagsOpen] = React.useState(false);
@@ -228,7 +229,20 @@ function FilterBar({ value, onChange }: { value: Filters, onChange: (f: Filters)
     <div className="problem-filter">
       <div className="problem-filter__group">
         <span className="problem-filter__label">{i18n('Type')}</span>
-        {['', 'programming', 'objective', 'subjective'].map((k) => (
+        {lockKind ? (
+          // Pinned kind: a single, non-interactive segment so the teacher
+          // can see the restriction instead of wondering where the other
+          // tasks went.
+          <button
+            type="button"
+            className="problem-filter__seg is-active"
+            onMouseDown={keepFocus}
+            title={i18n('Only this kind of task can be selected here')}
+            disabled
+          >
+            {i18n(KIND_LABEL[lockKind] || lockKind)} · {i18n('only')}
+          </button>
+        ) : ['', 'programming', 'objective', 'subjective'].map((k) => (
           <button
             key={k || 'all'}
             type="button"
@@ -257,7 +271,7 @@ function FilterBar({ value, onChange }: { value: Filters, onChange: (f: Filters)
       </div>
 
       <div className="problem-filter__group problem-filter__group--tags">
-        <span className="problem-filter__label">{i18n('Tags')}</span>
+        <span className="problem-filter__label">{i18n('Knowledge points')}</span>
         {value.tags.map((t) => (
           <button
             key={t}
@@ -319,13 +333,26 @@ function FilterBar({ value, onChange }: { value: Filters, onChange: (f: Filters)
   );
 }
 
-const ProblemSelectAutoComplete = forwardRef<AutoCompleteHandle<ProblemDoc>, AutoCompleteProps<ProblemDoc>>((props, ref) => {
+type ProblemSelectProps = AutoCompleteProps<ProblemDoc> & {
+  /**
+   * Pin the picker to one task kind ('programming' | 'objective' |
+   * 'subjective'): the Type filter becomes a fixed badge and every query
+   * sends that kind, so nothing else is ever listed. Self-learning sessions
+   * use it — they are programming-only and the server refuses the rest.
+   */
+  lockKind?: string;
+};
+
+const ProblemSelectAutoComplete = forwardRef<AutoCompleteHandle<ProblemDoc>, ProblemSelectProps>((allProps, ref) => {
+  const { lockKind, ...props } = allProps;
   const [filters, setFilters] = React.useState<Filters>({ ...EMPTY_FILTERS });
-  const signature = filterSignature(filters);
+  // The pinned kind always wins, whatever a stale filter state may hold.
+  const kind = lockKind || filters.kind;
+  const signature = filterSignature({ ...filters, kind });
 
   return (
     <div className="problem-select__shell">
-      <FilterBar value={filters} onChange={setFilters} />
+      <FilterBar value={filters} onChange={setFilters} lockKind={lockKind} />
       <AutoComplete<ProblemDoc>
         ref={ref as any}
         cacheKey={`problem-${UiContext.domainId}`}
@@ -337,7 +364,7 @@ const ProblemSelectAutoComplete = forwardRef<AutoCompleteHandle<ProblemDoc>, Aut
             q: query,
             quick: true,
             sort: query ? 'default' : 'recent',
-            ...filters.kind ? { kind: filters.kind } : {},
+            ...kind ? { kind } : {},
             ...filters.tags.length ? { tags: filters.tags.join(',') } : {},
             ...filters.dMin ? { difficultyMin: filters.dMin } : {},
             ...filters.dMax ? { difficultyMax: filters.dMax } : {},
@@ -389,6 +416,7 @@ ProblemSelectAutoComplete.propTypes = {
   allowEmptyQuery: PropTypes.bool,
   freeSolo: PropTypes.bool,
   freeSoloConverter: PropTypes.func,
+  lockKind: PropTypes.string,
 };
 
 ProblemSelectAutoComplete.displayName = 'ProblemSelectAutoComplete';

@@ -22,9 +22,10 @@
 {% macro render_problem_tags(pdoc, show_none_label=false, inline=false) %}
 {%- if pdoc.tag|length > 0 %}
   {%- if not inline %}<ul class="problem__tags">{% endif -%}
+  {#- PTA fork: tags are knowledge points; filter through tags= (safe for multi-word names) on the task's own tab. -#}
+  {%- set _kind = 'objective' if (pdoc.pid and (pdoc.pid|lower|first) == 'o') else ('subjective' if (pdoc.pid and (pdoc.pid|lower|first) == 's') else 'programming') -%}
   {%- for tag in pdoc['tag'] %}
-    {% set _w = '"' if tag and tag.includes(' ') else '' %}
-    <li class="problem__tag"><a class="problem__tag-link" href="{{ url('problem_main', query={q:'category:'+_w+tag+_w}) }}">{{ tag }}</a></li>
+    <li class="problem__tag"><a class="problem__tag-link" href="{{ url('problem_main', query={kind:_kind, tags:tag}) }}">{{ tag }}</a></li>
   {%- endfor -%}
   {%- if not inline %}</ul>{% endif -%}
 {%- else -%}
