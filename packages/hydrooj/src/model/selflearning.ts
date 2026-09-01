@@ -19,6 +19,8 @@ export interface SelfLearningDoc {
         startedAt: Date,
         finishedAt?: Date,
         error?: string,
+        /** ♻️ True for the teacher-button run that re-judges everything from scratch. */
+        force?: boolean;
         /**
          * Live progress of the retroactive grading (who is being judged
          * right now), written by the manual job and shown on the teacher's
@@ -26,6 +28,20 @@ export interface SelfLearningDoc {
          */
         progress?: {
             uid?: number, uname?: string, pid?: number | string, done?: number, total?: number, graded?: number, failed?: number,
+            /** Which grader is running: 'own' (🎓 walkthrough) or 'fix' (🔧 guidance-to-fix). */
+            phase?: string,
+            /** 🎓 split of the final combined counts (the done write). */
+            own?: { graded: number, total: number },
+            /** 🔧 split of the final combined counts (the done write). */
+            fix?: { graded: number, total: number },
+            /** 🧩 split of the final combined counts (the done write). */
+            rea?: { graded: number, total: number },
+            /** 💡 split of the final combined counts (the done write). */
+            ini?: { graded: number, total: number },
+            /** 📈 split of the final combined counts (the done write). */
+            trj?: { graded: number, total: number };
+            /** 🧠 split of the final combined counts (the done write). */
+            trf?: { graded: number, total: number };
         },
     };
     _id: ObjectId;
@@ -50,10 +66,11 @@ export interface SelfLearningDoc {
     endAt?: Date;
     extensionDays?: number;
     /**
-     * PTA fork: the session's RESULTS — every student's summed score,
-     * computed automatically once the deadline (endAt + extension) has
-     * passed (`final`), or on demand by the teacher before that
-     * (provisional). See handler/self_learning.ts computeSessionResults.
+     * PTA fork: the session's RESULTS — every student's session score
+     * (🅰 Block A per-task rubrics + 🅱 Block B cross-task rubrics, out
+     * of 100), computed automatically once the deadline (endAt +
+     * extension) has passed (`final`), or on demand by the teacher before
+     * that (provisional). See handler/self_learning.ts computeSessionResults.
      */
     results?: SessionResults;
     /** Legacy: flat percent deducted while late. Superseded by penaltyRules. */
@@ -191,6 +208,17 @@ export interface TutorThreadDoc {
      */
     surfacedKp?: { names: string[], extractedAt: Date };
     /**
+     * 🚫 Grader-manipulation flags on THIS task's evidence: which of the
+     * four task sub-rubrics (own/fix/rea/ini) were zeroed because the
+     * detector fired on student-authored content, with audit excerpts.
+     * A flagged sub-rubric scores 0 for this task regardless of any
+     * other, clean evidence on it.
+     */
+    integrity?: {
+        own?: boolean; fix?: boolean; rea?: boolean; ini?: boolean;
+        hits?: { sub: string, excerpt: string, at: Date }[];
+    };
+    /**
      * 🧩 Reasoning-quality levels of this task's failure-phase answers,
      * with normalized answer keys for replay dedupe (anti-inflation).
      */
@@ -250,6 +278,8 @@ export interface SelfLearningBonusEntry {
  * concept; graded by the evaluation backfill.
  */
 export interface TransferAssessment {
+    /** 🚫 True when the detector fired on this re-encounter's student content — 🧠 zeroes. */
+    flagged?: boolean;
     /** Canonical knowledge-point name (the concept C). */
     concept: string;
     fromPid: number;
@@ -260,6 +290,13 @@ export interface TransferAssessment {
 }
 
 export interface SelfLearningProgressDoc {
+    /**
+     * 📈 The student's ONE whole-session Independence-Trajectory judgment
+     * (Block B): level 0..4, when it was judged, and the history BASIS it
+     * was judged on (taskCount:recordCount:answeredExchanges) — the
+     * backfill re-runs the LLM only when the basis changed.
+     */
+    trajectory?: { level: number, at: Date, basis?: string, flagged?: boolean };
     _id: ObjectId;
     domainId: string;
     ssid: ObjectId;
@@ -268,7 +305,16 @@ export interface SelfLearningProgressDoc {
     skipped: number[];
     bonuses?: SelfLearningBonusEntry[];
     /** 🧠 Cross-problem concept-transfer assessments (evaluation-graded). */
-    transfer?: { assessments: TransferAssessment[] };
+    /**
+     * 🧠 Concept Transfer (Block B): the judged re-encounter assessments
+     * plus the backfill's PLAN — how many re-encounter candidates the
+     * planner found and whether the student is UNTESTABLE (surfacing
+     * settled, zero candidates → the spec's full-credit edge case).
+     */
+    transfer?: {
+        assessments?: TransferAssessment[];
+        plan?: { candidates: number, untestable: boolean, at: Date };
+    };
     updateAt: Date;
 }
 
@@ -346,18 +392,93 @@ export interface SessionResultRow {
      */
     initiative?: number | null;
     /**
-     * ⭐ One rubric composite per programming task (first-attempt tasks:
-     * 🏆 40 + 🎓 60; others: the seven components with session-level
-     * Trajectory/Transfer injected; unattempted: 0). The row total is the
-     * mean of these scores. Absent on rows from older builds.
+     * ⭐ Per-task score (Block A material): pid → 0..taskMax (100), one
+     * decimal, from handler taskRubricOf — the SUM of the task's earned
+     * sub-rubric points (🏆 judged×30% + 🎓 mean level×5; the 🔧/🧩/💡
+     * placeholders earn nothing yet, so a task currently tops out at
+     * 50). Unattempted tasks appear as 0. Absent on rows stored under
+     * another rubric version — such results re-derive on sight
+     * (SESSION_RUBRIC_VERSION).
      */
-    taskScores?: {
-        pid: number,
-        attempted: boolean,
-        firstAttempt: boolean,
-        score: number,
-        parts: { key: string, max: number, value: number, pending?: boolean }[],
-    }[];
+    taskScores?: Record<string, number>;
+    /**
+     * 🎓 Per-task Code-Ownership evidence behind taskScores: pid →
+     * { level: mean walkthrough level 0..4 (2 decimals; asked-unanswered
+     * counts 0) or null when no walkthrough exists; pts: the task's EXACT
+     * 🎓 points (round1 of the unrounded mean × 5) — the number the Σ was
+     * built from, which the 🎓 cell displays; asked: questions asked;
+     * graded: answers with a stored level }. Absent on other-version rows
+     * (pts additionally absent on rows stored before the pts field).
+     */
+    own?: Record<string, { level: number | null, pts?: number, asked: number, graded: number, flagged?: boolean }>;
+    /**
+     * 🔧 Per-task Guidance-to-Fix evidence behind taskScores: pid →
+     * { level: penalty-weighted mean level 0..4 (2 decimals) or null when
+     * no judged transitions; pts: the task's EXACT 🔧 points (round1 of
+     * the unrounded weighted mean × 3.75) — the number the Σ was built
+     * from, which the 🔧 cell displays; judged: transitions graded }.
+     * Absent on other-version rows.
+     */
+    fix?: Record<string, { level: number | null, pts?: number, judged: number, flagged?: boolean }>;
+    /**
+     * 🧩 Per-task Reasoning-Quality evidence behind taskScores: pid →
+     * { level: mean failure-phase level 0..4 (2 decimals) or null when
+     * nothing graded; pts: the task's EXACT 🧩 points (round1 of the
+     * unrounded mean × 7.5) — the number the Σ was built from, which the
+     * 🧩 cell displays; judged: answers graded }. Absent on
+     * other-version rows.
+     */
+    rea?: Record<string, { level: number | null, pts?: number, judged: number, flagged?: boolean }>;
+    /**
+     * 💡 Per-task Self-Diagnostic-Initiative evidence behind taskScores:
+     * pid → { level: the ONE first-engagement level 0..4 or null when not
+     * judged yet (no closed failure engagement with answers); pts: the
+     * task's EXACT 💡 points (level × 1.25) }. Absent on other-version
+     * rows.
+     */
+    ini?: Record<string, { level: number | null, pts?: number, flagged?: boolean }>;
+    /**
+     * ⭐ FIRST-ATTEMPT EXCEPTION markers: pid → true when the task was
+     * accepted with a single submission — such a task is scored 🏆 judged
+     * × 40% (/40) + 🎓 mean level × 15 (/60), and 🔧/🧩/💡 do not apply
+     * (the fix/rea/ini entries carry level null there). Sparse; absent
+     * on other-version rows.
+     */
+    fa?: Record<string, boolean>;
+    /**
+     * 🅱📈 The student's Independence-Trajectory sub-score: { level: the
+     * one whole-session level 0..4 or null when not judged yet; pts:
+     * level × 2.5 (0 when unjudged) }. blockB = trj.pts (+ 🧠 once it
+     * lands). Absent on other-version rows.
+     */
+    trj?: { level: number | null, pts: number, flagged?: boolean };
+    /**
+     * 🅱🧠 The student's Concept-Transfer sub-score: state 'assessed'
+     * (level = mean re-encounter level, pts = mean × 3.75, judged =
+     * re-encounters graded), 'untestable' (the edge case — pts = the full
+     * 15) or 'pending' (testable, judging awaited — pts 0). blockB =
+     * trj.pts + trf.pts. Absent on other-version rows.
+     */
+    trf?: { state: 'assessed' | 'pending' | 'untestable', level: number | null, pts: number, judged: number, flagged?: boolean };
+    /**
+     * ⭐⭐ ALL-FIRST-ATTEMPT COLLAPSE: true when EVERY task was accepted
+     * on the first attempt — the whole session rescores as 🏆 40 + 🎓 60
+     * and total = sessAch + sessOwn (up to rounding of the exact task
+     * mean); 🅰/🅱/📈/🧠 do not apply. Absent on normal rows.
+     */
+    allFa?: boolean;
+    /** ⭐⭐ The collapsed session's 🏆 part: mean(judged) × 40% (0..40). */
+    sessAch?: number;
+    /** ⭐⭐ The collapsed session's 🎓 part: mean(walkthrough level) × 15 (0..60). */
+    sessOwn?: number;
+    /** ⏱ The tiered late factor applied to this student’s total (present only when < 1). */
+    lateFactor?: number;
+    /** ⏱ Hours past the deadline of their last counted submission (1 decimal). */
+    lateHours?: number;
+    /** 🅰 Block A (0..blockAMax, 75): (Σ task scores) / (n × 100) × 75. Absent on other-version rows. */
+    blockA?: number;
+    /** 🅱 Block B (0..blockBMax, 25): cross-task rubrics — not implemented yet, stored as 0. Absent on other-version rows. */
+    blockB?: number;
     /**
      * 🧠 Why the transfer value is what it is: 'assessed' (real),
      * 'pending' (testable, not yet graded — charged 0), 'untestable'
@@ -369,7 +490,7 @@ export interface SessionResultRow {
     faTasks?: number;
     /** Count of attempted non-first-attempt tasks; 0 ⇒ the five mistake components read n/a. */
     stdTasks?: number;
-    /** The session total, out of SESSION_TOTAL_MAX (100): the sum of the rubric components. */
+    /** The session total, out of SESSION_TOTAL_MAX (100): 🅰 Block A + 🅱 Block B. */
     total: number;
     attempts: number;
     done: number;
@@ -382,21 +503,49 @@ export interface SessionResults {
     computedAt: Date;
     /** True once computed after the deadline; provisional otherwise. */
     final: boolean;
+    /**
+     * ⭐ Scoring-shape version (handler SESSION_RUBRIC_VERSION). Results
+     * stored under a DIFFERENT version — including the retired
+     * sum-of-judged-scores table, which lacks the field entirely — are
+     * re-derived on first staff sight through runSessionEvaluation.
+     */
+    rubric?: number;
     /** The session grade scale (SESSION_TOTAL_MAX, 100). */
     maxTotal: number;
-    /** The Achievement component's scale (SESSION_ACHIEVEMENT_MAX, 20); absent on results stored by older builds. */
-    achievementMax?: number;
-    /** The Ownership component's scale (SESSION_OWNERSHIP_MAX, 10); absent on results stored by older builds. */
+    /** 🅰 Block A's scale (BLOCK_A_MAX, 75); absent on other-version results. */
+    blockAMax?: number;
+    /** 🅰's earnable ceiling while the placeholder sub-rubrics are pending (BLOCK_A_EARNABLE, 37.5). Absent on other-version results. */
+    blockAEarnable?: number;
+    /** 🅱 Block B's scale (BLOCK_B_MAX, 25); absent on other-version results. */
+    blockBMax?: number;
+    /** Each task's point scale (TASK_RUBRIC_MAX, 100 = 🏆30+🎓20+🔧15+🧩30+💡5); absent on other-version results. */
+    taskMax?: number;
+    /** 🏆 Achievement's points of a task's 100 (ACHIEVEMENT_SHARE, 30); absent on other-version results. */
+    achievementShare?: number;
+    /** 🎓 Code Ownership's points of a task's 100 (OWNERSHIP_SHARE, 20); absent on other-version results. */
+    ownershipShare?: number;
+    /** 🔧 Guidance-to-Fix Conversion's points of a task's 100 (FIXCONV_SHARE, 15) — PLACEHOLDER; absent on other-version results. */
+    fixconvShare?: number;
+    /** 🧩 Reasoning Quality's points of a task's 100 (REASONING_SHARE, 30) — PLACEHOLDER; absent on other-version results. */
+    reasoningShare?: number;
+    /** 💡 Self-Diagnostic Initiative's points of a task's 100 (INITIATIVE_SHARE, 5); absent on other-version results. */
+    initiativeShare?: number;
+    /** ⭐ 🏆's points on a FIRST-ATTEMPT task (FIRST_ATTEMPT_ACH_MAX, 40); absent on other-version results. */
+    faAchShare?: number;
+    /** ⭐ 🎓's points on a FIRST-ATTEMPT task (FIRST_ATTEMPT_OWN_MAX, 60); absent on other-version results. */
+    faOwnShare?: number;
+    /** 🅱📈 Independence Trajectory's points of Block B's 25 (TRAJECTORY_SHARE, 10); absent on other-version results. */
+    trajectoryShare?: number;
+    /** 🅱🧠 Concept Transfer's points of Block B's 25 (TRANSFER_SHARE, 15) — PLACEHOLDER; absent on other-version results. */
+    transferShare?: number;
+    /** 🅱's earnable ceiling while 🧠 is pending (BLOCK_B_EARNABLE, 10); absent on other-version results. */
+    blockBEarnable?: number;
+    /** RETIRED (old 7-component rubric) component scales; absent on results stored by current builds. */
     ownershipMax?: number;
-    /** The Fix-Conversion component's scale (SESSION_FIXCONV_MAX, 15); absent on results stored by older builds. */
     fixConvMax?: number;
-    /** The Trajectory component's scale (SESSION_TRAJECTORY_MAX, 10); absent on results stored by older builds. */
     trajectoryMax?: number;
-    /** The Concept-Transfer component's scale (SESSION_TRANSFER_MAX, 15); absent on results stored by older builds. */
     transferMax?: number;
-    /** The Reasoning-Quality component's scale (SESSION_REASONING_MAX, 25); absent on results stored by older builds. */
     reasoningMax?: number;
-    /** The Self-Diagnostic-Initiative component's scale (SESSION_INITIATIVE_MAX, 5); absent on results stored by older builds. */
     initiativeMax?: number;
     rows: SessionResultRow[];
 }
@@ -551,6 +700,72 @@ export class SelfLearningModel {
         return collTutor.updateOne(
             { _id: tid },
             { $set: { surfacedKp: { names, extractedAt: new Date() }, updateAt: new Date() } },
+        );
+    }
+
+    /**
+     * ♻️ FORCE RE-EVALUATION support: clear every stored LLM judgment of
+     * the session so the (idempotent, cache-driven) evaluation phases
+     * re-grade everything from scratch. What is cleared: 🎓 per-question
+     * levels + answer keys and per-message levels, 🔧 transitions, 🧩
+     * reasoning grades + per-message rlevels, 💡 initiative, 🧠 surfaced
+     * knowledge points + the whole transfer state, 📈 the trajectory, and
+     * the 🚫 integrity flags (the deterministic detector re-derives them
+     * from the same content). What SURVIVES: every dialogue message, the
+     * walkthrough questions with their budget/acceptance bookkeeping, and
+     * all records — the evidence, as opposed to the judgments of it.
+     */
+    static async resetEvaluationState(domainId: string, ssid: ObjectId): Promise<{ threads: number, progresses: number }> {
+        const [q, t, m, p] = await Promise.all([
+            collTutor.updateMany(
+                { domainId, ssid, 'ownership.questions': { $exists: true } },
+                { $set: { 'ownership.questions.$[].levels': [], 'ownership.questions.$[].answerKeys': [] } },
+            ),
+            collTutor.updateMany(
+                { domainId, ssid },
+                { $unset: { fixconv: '', reasoning: '', initiative: '', surfacedKp: '', integrity: '' } },
+            ),
+            collTutor.updateMany(
+                { domainId, ssid, messages: { $exists: true, $ne: [] } },
+                { $unset: { 'messages.$[].level': '', 'messages.$[].rlevel': '' } },
+            ),
+            collProgress.updateMany(
+                { domainId, ssid },
+                { $unset: { trajectory: '', transfer: '' } },
+            ),
+        ]);
+        return {
+            threads: Math.max(q.modifiedCount || 0, t.modifiedCount || 0, m.modifiedCount || 0),
+            progresses: p.modifiedCount || 0,
+        };
+    }
+
+    /** 🚫 Flag one task sub-rubric as manipulation-zeroed, with the audit excerpt. */
+    static flagIntegrity(tid: ObjectId, sub: 'own' | 'fix' | 'rea' | 'ini', excerpt: string) {
+        return collTutor.updateOne(
+            { _id: tid },
+            {
+                $set: { [`integrity.${sub}`]: true },
+                $push: { 'integrity.hits': { sub, excerpt: String(excerpt || '').slice(0, 120), at: new Date() } },
+            },
+        );
+    }
+
+    /** 📈 Store the student's whole-session Independence-Trajectory judgment (Block B). */
+    static setTrajectory(domainId: string, ssid: ObjectId, uid: number, t: { level: number, at: Date, basis?: string }) {
+        return collProgress.updateOne(
+            { domainId, ssid, uid },
+            { $set: { trajectory: t, updateAt: new Date() }, $setOnInsert: { done: [], skipped: [] } },
+            { upsert: true },
+        );
+    }
+
+    /** 🧠 Store the student's transfer PLAN (candidate count + the untestable verdict). */
+    static setTransferPlan(domainId: string, ssid: ObjectId, uid: number, plan: { candidates: number, untestable: boolean, at: Date }) {
+        return collProgress.updateOne(
+            { domainId, ssid, uid },
+            { $set: { 'transfer.plan': plan, updateAt: new Date() }, $setOnInsert: { done: [], skipped: [] } },
+            { upsert: true },
         );
     }
 
@@ -714,10 +929,37 @@ export async function getSessionThreads(domainId: string, ssid: ObjectId): Promi
 }
 
 /** Rubric states per (uid, pid): the ownership walkthrough AND the fix-conversion transitions. */
-export async function getOwnershipIn(domainId: string, ssid: ObjectId, uid?: number): Promise<{ uid: number, pid: number, ownership?: OwnershipState, fixconv?: FixConvState, surfacedKp?: { names: string[] }, reasoning?: { levels: number[], answerKeys?: string[] }, initiative?: { level: number } }[]> {
-    const filter: any = { domainId, ssid, ownership: { $exists: true } };
+/**
+ * The rubric's tutoring EVIDENCE for a session: every thread carrying an
+ * 🎓 ownership walkthrough, a 🔧 fix-conversion state, a 🧩 reasoning
+ * state OR a 💡 initiative grade (a student who failed and answered but
+ * never resubmitted has reasoning only; one who resubmitted but never
+ * passed has fixconv; one whose every answer failed live grading may
+ * carry initiative alone — none must be missed).
+ */
+export async function getOwnershipIn(domainId: string, ssid: ObjectId, uid?: number): Promise<{
+    uid: number;
+    pid: number;
+    ownership?: OwnershipState;
+    fixconv?: FixConvState;
+    surfacedKp?: { names: string[] };
+    reasoning?: { levels: number[], answerKeys?: string[] };
+    initiative?: { level: number };
+    integrity?: { own?: boolean, fix?: boolean, rea?: boolean, ini?: boolean };
+}[]> {
+    const filter: any = {
+        domainId,
+        ssid,
+        $or: [
+            { ownership: { $exists: true } }, { fixconv: { $exists: true } },
+            { reasoning: { $exists: true } }, { initiative: { $exists: true } },
+            { integrity: { $exists: true } },
+        ],
+    };
     if (typeof uid === 'number') filter.uid = uid;
-    return await collTutor.find(filter).project({ uid: 1, pid: 1, ownership: 1, fixconv: 1, surfacedKp: 1, reasoning: 1, initiative: 1 }).limit(5000).toArray() as any;
+    return await collTutor.find(filter).project({
+        uid: 1, pid: 1, ownership: 1, fixconv: 1, surfacedKp: 1, reasoning: 1, initiative: 1, integrity: 1,
+    }).limit(5000).toArray() as any;
 }
 
 /* ------------------- persisted AI class reports (teachers) ------------------- */

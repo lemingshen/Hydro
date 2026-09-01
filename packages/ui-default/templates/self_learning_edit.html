@@ -146,7 +146,7 @@
               <textarea name="penaltyRules" class="monospace textbox" data-yaml>{% if sdoc and sdoc.penaltyRules %}{{ penaltyRules }}{% else %}{% include 'partials/homework_default_penalty_rules.yaml' %}{% endif %}</textarea>
             </label>
           </div></div>
-          <p class="help-text sle-sched-help">{{ _('Students can enter from the begin time. Late submissions inside the extension are scored by the tiered rules above, exactly like homework: each line is "hours: coefficient", and once a submission is more than N hours late its score is multiplied by that coefficient (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.') }}</p>
+          <p class="help-text sle-sched-help">{{ _('Students can enter from the begin time. Late work inside the extension is penalized by the tiered rules above: each line is "hours: coefficient", and the STUDENT’S TOTAL is multiplied by the tier of their last counted submission — once it is more than N hours late, that tier’s coefficient applies (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.') }}</p>
           {{ form.form_textarea({
               columns:null,
               label:'Content',

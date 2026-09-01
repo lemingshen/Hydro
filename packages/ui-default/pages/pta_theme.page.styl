@@ -1638,26 +1638,15 @@ html.page--contest_paper .paper-top__saved--on, html.page--homework_paper .paper
    the log's breathing room). */
 .sl-chat::before { content: ''; display: block; position: sticky; top: 0; height: 14px; margin: 0 -12px -4px; background: linear-gradient(180deg, var(--pta-card-2) 30%, transparent); z-index: 1; pointer-events: none; }
 .sl-float .sl-chat::-webkit-scrollbar,
-.sl-input-row textarea::-webkit-scrollbar { width: 8px; }
 .sl-float .sl-chat::-webkit-scrollbar-track,
-.sl-input-row textarea::-webkit-scrollbar-track { background: transparent; }
 .sl-float .sl-chat::-webkit-scrollbar-thumb,
-.sl-input-row textarea::-webkit-scrollbar-thumb { background: rgba(158, 35, 53, .28); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
 .sl-float .sl-chat::-webkit-scrollbar-thumb:hover,
-.sl-input-row textarea::-webkit-scrollbar-thumb:hover { background-color: rgba(158, 35, 53, .45); }
 .pta-dark .sl-float .sl-chat::-webkit-scrollbar-thumb,
 .theme--dark .sl-float .sl-chat::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .22); border: 2px solid transparent; background-clip: content-box; }
-.sl-input-row { display: flex; align-items: flex-end; gap: 8px; margin: 0; padding: 8px 10px; border-top: 1px solid var(--pta-crimson-line); flex: 0 0 auto; background: var(--pta-card); }
 /* One line tall by default; the page script grows it with the content up to
    max-height and enables scrolling only past it (numbers mirrored by the
    refined block near the end of this file and by autoGrowPanelInput). */
-.sl-input-row textarea { flex: 1 1 auto; resize: none; height: 44px; min-height: 44px; max-height: 120px; overflow-y: hidden; border-radius: 12px; line-height: 1.45; padding: 9px 12px; scrollbar-width: thin; transition: background-color .15s ease, border-color .15s ease; }
-.sl-input-row textarea:focus { border-color: var(--pta-crimson) !important; box-shadow: var(--pta-ring-crimson) !important; }
-.sl-input-row textarea:disabled { background: var(--pta-card-3); border-color: var(--pta-line); color: var(--pta-ink-faint); cursor: not-allowed; box-shadow: none; }
-.sl-input-row button { align-self: flex-end; flex: 0 0 auto; }
-.sl-input-row button:disabled { opacity: .55; filter: saturate(.35); box-shadow: none !important; cursor: not-allowed; }
-.sl-float .sl-input-row .button.primary { background: var(--pta-grad-crimson); border-color: transparent; box-shadow: 0 6px 14px -6px rgba(158, 35, 53, .6); }
-.sl-float .sl-input-row .button.primary:hover { background: var(--pta-grad-crimson); filter: brightness(1.08); }
+
 @media (max-width: 600px) {
   .sl-float { right: 8px; left: 8px; bottom: 8px; width: auto; max-width: none; height: unquote("min(560px, calc(100vh - 60px))"); }
   .sl-fab { right: 12px; bottom: 12px; }
@@ -1672,7 +1661,6 @@ html.page--contest_paper .paper-top__saved--on, html.page--homework_paper .paper
 .sl-float--expanded .sl-chat { padding-left: 20px; padding-right: 20px; }
 .sl-float--expanded .sl-chat::before { margin-left: -20px; margin-right: -20px; }
 .sl-float--expanded .sl-bubble { max-width: 620px; }
-.sl-float--expanded .sl-input-row { padding: 10px 16px; }
 
 /* ------------------- session paper: in-place answering ------------------- */
 
@@ -1803,18 +1791,6 @@ html.page--self_learning_paper .paper-note--closed { background: var(--pta-card-
 .sl-bubble--note { background: var(--pta-ok-soft) !important; border: 1px solid var(--pta-ok-line) !important; color: var(--pta-ok-text); }
 .sl-divider { margin: 16px 0 10px; font-size: 11.5px; }
 .sl-divider span { background: var(--pta-card-2); }
-.sl-input-row { padding: 10px 12px; gap: 8px; align-items: flex-end; border-top: 1px solid var(--pta-line); background: var(--pta-card); }
-/* One line tall by default; the page script (autoGrowPanelInput) raises the
-   inline height with the content and flips overflow to auto only past
-   max-height — so no scrollbar ever shows for a mere placeholder. */
-.sl-input-row textarea { height: 44px; min-height: 44px; max-height: 120px; overflow-y: hidden; border-radius: 14px !important; padding: 11px 14px !important; font-size: 13px; font-family: inherit; line-height: 1.45; }
-.sl-input-row textarea:focus { border-color: #7048e8 !important; box-shadow: 0 0 0 3px var(--pta-violet-soft) !important; }
-.sl-input-row textarea:disabled { opacity: 0.65; }
-.sl-input-row button { margin-left: 0; width: 42px; height: 42px; padding: 0 !important; border-radius: 50% !important; font-size: 0 !important; line-height: 0; flex: 0 0 auto; }
-.sl-input-row button::before { content: '➤'; font-size: 15px; line-height: 42px; }
-.sl-float .sl-input-row .button.primary { background: #7048e8; box-shadow: 0 8px 18px -10px #7048e8; }
-.sl-float .sl-input-row .button.primary:hover { background: #5f3dc4; filter: none; }
-.sl-float .sl-input-row .button.primary:disabled { opacity: 0.45; box-shadow: none; }
 .sl-float__hint { font-size: 11px; color: var(--pta-ink-faint); padding: 2px 16px 12px; background: var(--pta-card); border-top: none; }
 .sl-fab { background: linear-gradient(135deg, #7048e8, #9c36b5); box-shadow: 0 14px 30px -10px rgba(112, 72, 232, 0.6), 0 0 0 5px rgba(112, 72, 232, 0.14); }
 .sl-fab:hover { box-shadow: 0 16px 34px -10px rgba(112, 72, 232, 0.7), 0 0 0 7px rgba(112, 72, 232, 0.16); }
@@ -1823,5 +1799,5 @@ html.page--self_learning_paper .paper-note--closed { background: var(--pta-card-
 .pta-dark .sl-msg.assistant .sl-bubble { background: #262333; border-color: #3d3750; color: #e7e3f5; }
 .pta-dark .sl-msg.assistant::before { background: #322a48; border-color: #4a3d6b; }
 .pta-dark .sl-bubble code { background: #322a48; color: #cdbdfb; }
-.pta-dark .sl-input-row, .pta-dark .sl-float__hint { background: #1c1a26; border-color: #3d3750; }
+.pta-dark .sl-float__hint { background: #1c1a26; border-color: #3d3750; }
 .pta-dark .sl-divider span { background: #262333; }

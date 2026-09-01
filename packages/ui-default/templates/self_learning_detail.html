@@ -40,6 +40,29 @@
   .sld-results__table tbody tr:hover td { background: var(--pta-violet-soft); }
   .sld-results__table td:first-child, .sld-results__table th:first-child { color: var(--pta-ink-faint); }
   .sld-results__num { text-align: center !important; }
+  .sld-results__table--grouped th small { display: block; font-weight: normal; opacity: .6; font-size: .78em; }
+  .sld-results__table--grouped .sld-results__sub small { display: inline; margin-left: 1px; }
+  .sld-results__group { border-left: 1px solid var(--pta-line); }
+  .sld-results__subfirst { border-left: 1px solid var(--pta-line); }
+  .sld-results__table--grouped td.is-na { opacity: .4; }
+  .sld-results__fa { margin-left: 2px; font-size: .8em; }
+  .sld-results__table--grouped td.is-flagged { color: var(--pta-red, #c0392b); font-weight: 600; }
+  .sld-results__flag { margin-left: 1px; font-size: .8em; }
+  .sld-rubric { margin-top: 8px; }
+  .sld-rubric > summary { cursor: pointer; font-weight: 600; color: var(--pta-ink-soft); padding: 4px 0; list-style: none; }
+  .sld-rubric > summary::-webkit-details-marker { display: none; }
+  .sld-rubric > summary::after { content: '▾'; margin-left: 6px; opacity: .55; font-size: .9em; }
+  .sld-rubric:not([open]) > summary::after { content: '▸'; }
+  .sld-rubric__group { margin-top: 8px; }
+  .sld-rubric__gtitle { font-weight: 600; color: var(--pta-ink-soft); margin: 6px 0 6px; }
+  .sld-rubric__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; }
+  .sld-rubric__card { border: 1px solid rgba(148, 163, 184, .16); border-left: 3px solid rgba(148, 163, 184, .28); border-radius: 8px; padding: 7px 9px; background: rgba(148, 163, 184, .05); }
+  .sld-rubric__h { font-weight: 600; color: var(--pta-ink-soft); margin-bottom: 3px; }
+  .sld-rubric__h i { font-style: normal; opacity: .65; margin-left: 4px; font-size: .92em; }
+  .sld-rubric__b { color: var(--pta-ink-faint); }
+  .sld-rubric__foot { margin-top: 7px; color: var(--pta-ink-soft); }
+  .sld-myscore__mine { margin: 2px 0 6px; color: var(--pta-ink-soft); }
+  .sld-results__legend > div { margin-top: 3px; }
   /* expanded (full-screen) board */
   .sld-results--full { position: fixed !important; inset: 14px !important; z-index: 2001 !important; margin: 0 !important; overflow: auto; border-radius: 16px; background: var(--pta-card); box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .55); animation: none !important; transform: none !important; }
   .sld-results--full .section__body { display: flex; flex-direction: column; height: calc(100% - 58px); box-sizing: border-box; }
@@ -63,6 +86,11 @@
   .sld-myscore__main { font-size: 14px; color: var(--pta-ink); }
   .sld-myscore__main b { font-size: 24px; color: var(--pta-violet-text); margin-left: 6px; }
   .sld-myscore__main small { color: var(--pta-ink-faint); margin-left: 2px; }
+  .sld-myscore__blocks { margin-left: 14px; font-size: 12.5px; color: var(--pta-ink-soft); background: var(--pta-card-3); border-radius: 10px; padding: 2px 10px; }
+  .sld-myscore__blocks small { margin-left: 1px; }
+  .sld-myscore__suba { color: var(--pta-ink-soft); }
+  .sld-myscore__parts { font-size: .8em; color: var(--pta-ink-faint); margin-left: 3px; white-space: nowrap; }
+  .sld-myscore__parts i { font-style: normal; opacity: .65; }
   /* 🏆 One rubric component's stat beside the total (Achievement today). */
   .sld-myscore__part { font-size: 13px; color: var(--pta-ink-soft); }
   .sld-myscore__part b { font-size: 19px; color: var(--pta-gold-text); margin-left: 5px; }
@@ -167,7 +195,8 @@
       {% endif %}
     </div>
     {#-
-      Teacher view: the session's RESULTS — every student's summed score.
+      Teacher view: the session's RESULTS — every student's session score
+      (🅰 Block A per-task rubrics + 🅱 Block B cross-task rubrics, /100).
       "Evaluate all students now" computes and updates every score at any
       time; the same evaluation runs automatically once the deadline (with
       extension) has passed.
@@ -194,24 +223,76 @@
         {% endif %}
         {% if results %}
         {% if results.rows.length %}
+        {% set taskMax = results.taskMax|default(100) %}
+        {% set achShare = results.achievementShare|default(30) %}
+        {% set ownShare = results.ownershipShare|default(20) %}
+        {% set fixShare = results.fixconvShare|default(15) %}
+        {% set reaShare = results.reasoningShare|default(30) %}
+        {% set iniShare = results.initiativeShare|default(5) %}
+        {% set faAch = results.faAchShare|default(40) %}
+        {% set faOwn = results.faOwnShare|default(60) %}
+        {% set trjShare = results.trajectoryShare|default(10) %}
+        {% set trfShare = results.transferShare|default(15) %}
         <div class="sld-results__wrap">
-        <table class="sld-results__table">
-          <thead><tr>
-            <th>#</th><th>{{ _('Student') }}</th>
-            {% for pid in sdoc.pids %}<th class="sld-results__num" title="{{ pdict[pid].title if pdict[pid] else pid }}">{{ pdict[pid].pid if pdict[pid] else pid }}</th>{% endfor %}
-            <th class="sld-results__num sld-results__total">{{ _('Total') }} / {{ results.maxTotal }}</th>
-            <th class="sld-results__num">{{ _('Attempts') }}</th>
-            <th class="sld-results__num">🏁</th><th class="sld-results__num">⏭</th><th class="sld-results__num">🎁</th>
-          </tr></thead>
+        <table class="sld-results__table sld-results__table--grouped">
+          <thead>
+          <tr>
+            <th rowspan="2">#</th><th rowspan="2">{{ _('Student') }}</th>
+            {% for pid in sdoc.pids %}<th class="sld-results__num sld-results__group" colspan="6" title="{{ pdict[pid].title if pdict[pid] else pid }}">{{ pdict[pid].pid if pdict[pid] else pid }}</th>{% endfor %}
+            <th class="sld-results__num" rowspan="2" title="{{ _('Block A · per-task rubrics: task sum ÷ (tasks × 100) × {0}, all five sub-rubrics live').replace('{0}', results.blockAMax|default(75)) }}">🅰<br><small>/{{ results.blockAMax|default(75) }}</small></th>
+            <th class="sld-results__num" rowspan="2" title="{{ _('Independence Trajectory — one whole-session LLM level × {0}: does the student need less tutor help from the first task to the last?').replace('{0}', (trjShare / 4)|round(1)) }}">📈<br><small>/{{ trjShare }}</small></th>
+            <th class="sld-results__num" rowspan="2" title="{{ _('Concept Transfer — mean re-encounter level × {0}: does a resolved mistake recur on the next task exercising the same knowledge point?').replace('{0}', (trfShare / 4)|round(2)) }}">🧠<br><small>/{{ trfShare }}</small></th>
+            <th class="sld-results__num" rowspan="2" title="{{ _('Block B · cross-student-session rubrics: 📈 + 🧠') }}">🅱<br><small>/{{ results.blockBMax|default(25) }}</small></th>
+            <th class="sld-results__num sld-results__total" rowspan="2">{{ _('Total') }}<br><small>/{{ results.maxTotal }}</small></th>
+            <th class="sld-results__num" rowspan="2">{{ _('Attempts') }}</th>
+            <th class="sld-results__num" rowspan="2">🏁</th><th class="sld-results__num" rowspan="2">⏭</th><th class="sld-results__num" rowspan="2">🎁</th>
+          </tr>
+          <tr>
+            {% for pid in sdoc.pids %}
+            <th class="sld-results__num sld-results__sub sld-results__subfirst" title="{{ _('task score = 🏆 + 🎓 + 🔧 + 🧩 + 💡') }}">Σ<small>/{{ taskMax }}</small></th>
+            <th class="sld-results__num sld-results__sub" title="{{ _('Achievement — judged score × {0}%; shown as judged→points').replace('{0}', achShare) }}">🏆<small>/{{ achShare }}</small></th>
+            <th class="sld-results__num sld-results__sub" title="{{ _('Code Ownership — mean walkthrough level × {0}').replace('{0}', (ownShare / 4)|round(1)) }}">🎓<small>/{{ ownShare }}</small></th>
+            <th class="sld-results__num sld-results__sub" title="{{ _('Guidance-to-Fix Conversion — penalty-weighted mean level × {0} on failed-attempt → guided → resubmission transitions').replace('{0}', (fixShare / 4)|round(2)) }}">🔧<small>/{{ fixShare }}</small></th>
+            <th class="sld-results__num sld-results__sub" title="{{ _('Reasoning Quality — mean level × {0} on failure-phase answers, judged per exchange').replace('{0}', (reaShare / 4)|round(1)) }}">🧩<small>/{{ reaShare }}</small></th>
+            <th class="sld-results__num sld-results__sub" title="{{ _('Self-Diagnostic Initiative — first-engagement level × {0}: did they show up with a theory?').replace('{0}', (iniShare / 4)|round(2)) }}">💡<small>/{{ iniShare }}</small></th>
+            {% endfor %}
+          </tr>
+          </thead>
           <tbody>
           {% for r in results.rows %}
           <tr>
             <td>{{ loop.index }}</td>
             <td><a href="{{ url('user_detail', uid=r.uid) }}">{{ r.uname }}</a>{% if r.name %} <span class="sld-results__name">{{ r.name }}</span>{% endif %}</td>
-            {% for pid in sdoc.pids %}{% set sc = r.scores[pid|string] %}
-            <td class="sld-results__num{% if sc and sc.effective >= 100 %} is-full{% elif not sc %} is-none{% endif %}">{% if sc %}{{ sc.effective }}{% if sc.late %}<span class="sld-results__late" title="{{ _('Late: raw score {0}').replace('{0}', sc.score) }}">⏱</span>{% endif %}{% else %}—{% endif %}</td>
+            {% for pid in sdoc.pids %}{% set sc = r.scores[pid|string] %}{% set ts = r.taskScores[pid|string] if r.taskScores else none %}{% set ow = r.own[pid|string] if r.own else none %}{% set isfa = r.fa and r.fa[pid|string] %}{% set aSh = faAch if isfa else achShare %}{% set oSh = faOwn if isfa else ownShare %}
+            <td class="sld-results__num sld-results__subfirst{% if sc and sc.effective >= 100 %} is-full{% elif not sc %} is-none{% endif %}"{% if isfa %} title="{{ _('⭐ First-attempt acceptance: this task = 🏆 /{0} + 🎓 /{1}; 🔧 🧩 💡 do not apply').replace('{0}', faAch).replace('{1}', faOwn) }}"{% endif %}><b>{% if ts is number %}{{ ts }}{% else %}—{% endif %}</b>{% if isfa %}<span class="sld-results__fa">⭐</span>{% endif %}</td>
+            <td class="sld-results__num{% if not sc %} is-none{% endif %}"{% if sc %} title="{{ _('judged') }} {{ sc.effective }}/100 × {{ aSh }}%{% if isfa %} · {{ _('first-attempt') }}{% endif %}{% if sc.late %} · {{ _('Late: raw score {0}').replace('{0}', sc.score) }}{% endif %}"{% endif %}>{% if sc %}{{ sc.effective }}→{{ (sc.effective * aSh / 100)|round(1) }}{% if sc.late %}<span class="sld-results__late">⏱</span>{% endif %}{% else %}—{% endif %}</td>
+            <td class="sld-results__num{% if ow and ow.flagged %} is-flagged{% elif not (ow and ow.level is number) %} is-none{% endif %}"{% if ow and ow.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif ow and ow.level is number %} title="L{{ ow.level }} × {{ (oSh / 4)|round(1) }} ({{ ow.asked }}{{ _('q') }}){% if isfa %} · {{ _('first-attempt: /{0}, lenient grading').replace('{0}', faOwn) }}{% endif %}"{% else %} title="{{ _('no walkthrough yet') }}"{% endif %}>{% if ow and ow.flagged %}0<span class="sld-results__flag">🚫</span>{% elif ow and ow.level is number %}{{ ow.pts if ow.pts is number else (ow.level * oSh / 4)|round(1) }}{% else %}—{% endif %}</td>
+            {% if isfa %}
+            <td class="sld-results__num is-na" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
+            <td class="sld-results__num is-na" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
+            <td class="sld-results__num is-na" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
+            {% else %}
+            {% set fx = r.fix[pid|string] if r.fix else none %}
+            <td class="sld-results__num{% if fx and fx.flagged %} is-flagged{% elif not (fx and fx.level is number) %} is-none{% endif %}"{% if fx and fx.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif fx and fx.level is number %} title="{{ _('mean(level × penalty)') }} {{ fx.level }} × {{ (fixShare / 4)|round(2) }} ({{ fx.judged }}{{ _('t') }})"{% else %} title="{{ _('no guided fixes judged yet') }}"{% endif %}>{% if fx and fx.flagged %}0<span class="sld-results__flag">🚫</span>{% elif fx and fx.level is number %}{{ fx.pts if fx.pts is number else (fx.level * fixShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            {% set rx = r.rea[pid|string] if r.rea else none %}
+            <td class="sld-results__num{% if rx and rx.flagged %} is-flagged{% elif not (rx and rx.level is number) %} is-none{% endif %}"{% if rx and rx.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif rx and rx.level is number %} title="{{ _('mean level') }} {{ rx.level }} × {{ (reaShare / 4)|round(1) }} ({{ rx.judged }}{{ _('a') }})"{% else %} title="{{ _('no failure-phase answers graded yet') }}"{% endif %}>{% if rx and rx.flagged %}0<span class="sld-results__flag">🚫</span>{% elif rx and rx.level is number %}{{ rx.pts if rx.pts is number else (rx.level * reaShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            {% set ix = r.ini[pid|string] if r.ini else none %}
+            <td class="sld-results__num{% if ix and ix.flagged %} is-flagged{% elif not (ix and ix.level is number) %} is-none{% endif %}"{% if ix and ix.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif ix and ix.level is number %} title="{{ _('first engagement') }} L{{ ix.level }} × {{ (iniShare / 4)|round(2) }}"{% else %} title="{{ _('not judged yet — needs a closed first engagement with answers') }}"{% endif %}>{% if ix and ix.flagged %}0<span class="sld-results__flag">🚫</span>{% elif ix and ix.level is number %}{{ ix.pts if ix.pts is number else (ix.level * iniShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            {% endif %}
             {% endfor %}
-            <td class="sld-results__num sld-results__total"><b>{{ r.total }}</b></td>
+            {% if r.allFa %}
+            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            {% else %}
+            <td class="sld-results__num">{% if r.blockA is number %}{{ r.blockA }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num{% if r.trj and r.trj.flagged %} is-flagged{% elif not (r.trj and r.trj.level is number) %} is-none{% endif %}"{% if r.trj and r.trj.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0') }}"{% elif r.trj and r.trj.level is number %} title="L{{ r.trj.level }} × {{ (trjShare / 4)|round(1) }}"{% else %} title="{{ _('not judged yet — evaluated over the whole session history') }}"{% endif %}>{% if r.trj and r.trj.flagged %}0<span class="sld-results__flag">🚫</span>{% elif r.trj and r.trj.level is number %}{{ r.trj.pts if r.trj.pts is number else (r.trj.level * trjShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            {% set tf = r.trf %}
+            <td class="sld-results__num{% if tf and tf.flagged %} is-flagged{% elif not tf or tf.state == 'pending' %} is-none{% endif %}"{% if tf and tf.state == 'assessed' %} title="{{ _('mean level') }} {{ tf.level }} × {{ (trfShare / 4)|round(2) }} ({{ tf.judged }}{{ _('re-encounter(s)') }})"{% elif tf and tf.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0') }}"{% elif tf and tf.state == 'untestable' %} title="{{ _('no re-encountered knowledge points — full credit ({0})').replace('{0}', trfShare) }}"{% else %} title="{{ _('pending — surfacing and judging run on evaluation') }}"{% endif %}>{% if tf and tf.flagged %}0<span class="sld-results__flag">🚫</span>{% elif tf and tf.state != 'pending' %}{{ tf.pts }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num">{% if r.blockB is number %}{{ r.blockB }}{% else %}—{% endif %}</td>
+            {% endif %}
+            <td class="sld-results__num sld-results__total"{% if r.allFa %} title="{{ _('⭐⭐ All tasks first-attempt: Total = 🏆 {0}/{1} + 🎓 {2}/{3}').replace('{0}', r.sessAch).replace('{1}', faAch).replace('{2}', r.sessOwn).replace('{3}', faOwn) }}"{% endif %}><b>{{ r.total }}</b>{% if r.allFa %}<span class="sld-results__fa">⭐⭐</span>{% endif %}{% if r.lateFactor %}<span class="sld-results__fa" title="{{ _('⏱ last counted submission {0}h past the deadline — total × {1}').replace('{0}', r.lateHours).replace('{1}', r.lateFactor) }}">⏱</span>{% endif %}</td>
             <td class="sld-results__num">{{ r.attempts }}</td>
             <td class="sld-results__num">{{ r.done }}</td><td class="sld-results__num">{{ r.skipped }}</td>
             <td class="sld-results__num">{% if r.bonus == 'accepted' %}✓{% elif r.bonus == 'ready' %}·{% elif r.bonus == 'none' %}—{% else %}{{ r.bonus }}{% endif %}</td>
@@ -220,7 +301,41 @@
           </tbody>
         </table>
         </div>
-        <div class="sld-results__legend">{{ _('Score per task = best judged submission, late tier applied (⏱ = reduced for lateness; hover for the raw score).') }} {{ _('The session Total is the SUM of the per-task scores over all programming tasks. 🏁 finished · ⏭ skipped · 🎁 bonus task (✓ accepted).') }}</div>
+        <div class="sld-results__legend">
+        <details class="sld-rubric" open>
+          <summary>📖 {{ _('Scoring rubric — how every number is computed') }}</summary>
+          <div class="sld-rubric__group">
+            <div class="sld-rubric__gtitle">{{ _('Every task is worth {0} points across five sub-rubrics:').replace('{0}', taskMax) }} 🏆 {{ _('Achievement') }} ({{ achShare }}) · 🎓 {{ _('Code Ownership') }} ({{ ownShare }}) · 🔧 {{ _('Guidance-to-Fix Conversion') }} ({{ fixShare }}) · 🧩 {{ _('Reasoning Quality') }} ({{ reaShare }}) · 💡 {{ _('Self-Diagnostic Initiative') }} ({{ iniShare }}).</div>
+            <div class="sld-rubric__grid">
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🏆 <b>{{ _('Achievement') }}</b><i>/{{ achShare }}</i></div><div class="sld-rubric__b">{{ _('= the best judged submission × {0}%, shown as judged→points (⏱ marks a late submission).').replace('{0}', achShare) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🎓 <b>{{ _('Code Ownership') }}</b><i>/{{ ownShare }}</i></div><div class="sld-rubric__b">{{ _('= mean walkthrough level × {0} — the tutor asks 5–6 questions after a first-attempt acceptance, 2–3 otherwise; answers are LLM-graded L0–L4 (0 evasion · 1 restates · 2 mechanical · 3 why necessary · 4 generalization), an unanswered question counting L0.').replace('{0}', (ownShare / 4)|round(1)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🔧 <b>{{ _('Guidance-to-Fix Conversion') }}</b><i>/{{ fixShare }}</i></div><div class="sld-rubric__b">{{ _('= penalty-weighted mean level × {0} — judged on every failed-attempt → answered-guidance → resubmission transition; trials decay 1 → 0.8 → 0.6 → 0.5; L0 domain unchanged · L1 thrashing · L2 incomplete · L3 flaw addressed · L4 minimal targeted fix; engaging and then never resubmitting is not counted; — = nothing judged yet (counts 0).').replace('{0}', (fixShare / 4)|round(2)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🧩 <b>{{ _('Reasoning Quality') }}</b><i>/{{ reaShare }}</i></div><div class="sld-rubric__b">{{ _('= mean level × {0} — every failure-phase answer (while the program is not accepted) is judged per exchange, across all cycles: L0 no substantive answer, off-topic, or restates the question · L1 a guess with no reasoning (“maybe the loop?”) · L2 relevant reasoning but vague or partly wrong · L3 correct, specific reasoning about their own code · L4 correct reasoning plus predicts a consequence or generalizes; — = nothing graded yet (counts 0).').replace('{0}', (reaShare / 4)|round(1)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">💡 <b>{{ _('Self-Diagnostic Initiative') }}</b><i>/{{ iniShare }}</i></div><div class="sld-rubric__b">{{ _('= first-engagement level × {0} — one grade per task: did the student volunteer a hypothesis before the tutor localized the flaw (a wrong one still counts), and how well did they answer the comprehension stages (restate the task, state the constraints, explain the approach)? L0 no hypothesis, weak comprehension · L1 no hypothesis, adequate comprehension · L2 vague hypothesis (“something with the loop”) or strong comprehension alone · L3 specific, plausible hypothesis pointing at the right area · L4 specific hypothesis identifying the actual flaw; judged once the first engagement closes; — = not judged yet (counts 0).').replace('{0}', (iniShare / 4)|round(2)) }}</div></div>
+            </div>
+            <div class="sld-rubric__foot">{{ _('Σ is their sum — the task score.') }} {{ _('🅰 Block A = task sum ÷ (tasks × {0}) × {1} — e.g. 500/500 → 75, 250/500 → 37.5.').replace('{0}', taskMax).replace('{1}', results.blockAMax|default(75)) }}</div>
+          </div>
+          <div class="sld-rubric__group">
+            <div class="sld-rubric__gtitle">{{ _('🅱 Block B ({0}) is judged per STUDENT over the whole session:').replace('{0}', results.blockBMax|default(25)) }}</div>
+            <div class="sld-rubric__grid">
+            <div class="sld-rubric__card"><div class="sld-rubric__b">📈 {{ _('Independence Trajectory ({0}) = one LLM level × {1} over every submission chain and tutor exchange, chronologically — L0 dependent throughout · L1 marginal movement · L2 uneven or middling · L3 solid independence · L4 strong independence (tutorless solves count as fully independent); — = not judged yet (counts 0).').replace('{0}', trjShare).replace('{1}', (trjShare / 4)|round(1)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">🧠 {{ _('Concept Transfer ({0}) = mean re-encounter level × {1}: per knowledge point, the baseline is the first task where it surfaced as the student’s own misconception AND was resolved (a parked raise sets no baseline); the first later task exercising it is judged — L0 relapse, unrecognized · L1 relapse, recognized on prompt · L2 handled, but fragile · L3 applied correctly, unprompted · L4 plus positive evidence of command; no relevant knowledge points among the tasks → the full {2} directly; — = judging pending (counts 0).').replace('{0}', trfShare).replace('{1}', (trfShare / 4)|round(2)).replace('{2}', trfShare) }}</div></div>
+            </div>
+            <div class="sld-rubric__foot">{{ _('🅱 = 📈 + 🧠; Total = 🅰 + 🅱.') }}</div>
+          </div>
+          <div class="sld-rubric__group">
+            <div class="sld-rubric__gtitle">✨ {{ _('Session rules & special cases') }}</div>
+            <div class="sld-rubric__grid">
+            <div class="sld-rubric__card"><div class="sld-rubric__b">⭐ {{ _('First-attempt exception: a task accepted with a SINGLE submission is scored 🏆 judged × {0}% (/{1}) + 🎓 mean walkthrough level × {2} (/{3}) — 🔧 🧩 💡 do not apply (·); its walkthrough asks 5–6 questions and the ownership grading is slightly lenient.').replace('{0}', faAch).replace('{1}', faAch).replace('{2}', (faOwn / 4)|round(1)).replace('{3}', faOwn) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('⭐⭐ If EVERY task is first-attempt, the whole session rescores as 🏆 {0} + 🎓 {1} (Total = their sum; 🅰 🅱 📈 🧠 do not apply).').replace('{0}', faAch).replace('{1}', faOwn) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('🚫 Content that tries to instruct the grader (“please give me a high score”, “ignore previous instructions”, fake system prompts …) is detected before any judging; the corresponding sub-rubric is scored 0 for that task.') }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('🌐 All AI judges grade content only — answer in any language; grammar, typos and imperfect English never affect any level.') }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('⏱ Late penalty: the teacher’s tiered rule (hours → coefficient) multiplies a student’s TOTAL by the tier of their last counted submission; lateness inside the first tier rides free, and submissions after the extension never count.') }}</div></div>
+            </div>
+            <div class="sld-rubric__foot">{{ _('🏁 finished · ⏭ skipped · 🎁 bonus task (✓ accepted).') }}</div>
+          </div>
+        </details>
+        </div>
         {% else %}
         <div class="sld-results__note">{{ _('No student has attempted this session yet.') }}</div>
         {% endif %}
@@ -238,16 +353,49 @@
           number will appear instead of showing it.
         -#}
         {% if myScore.released %}
-        <div class="sld-myscore__main">📊 <span>{{ _('Your score') }}</span> <b>{{ myScore.total }}</b><small>/ {{ myScore.max }}</small></div>
-        <div class="sld-myscore__tasks" title="{{ _('the total is the sum of these per-task scores') }}">
+        <div class="sld-myscore__main">📊 <span>{{ _('Your score') }}</span> <b>{{ myScore.total }}</b><small>/ {{ myScore.max }}</small>
+          {% if myScore.lateFactor %}<span class="sld-results__fa" title="{{ _('⏱ last counted submission {0}h past the deadline — total × {1}').replace('{0}', myScore.lateHours).replace('{1}', myScore.lateFactor) }}">⏱</span>{% endif %}{% if myScore.allFa %}<span class="sld-myscore__blocks" title="{{ _('⭐⭐ All tasks first-attempt: Total = 🏆 {0}/{1} + 🎓 {2}/{3}').replace('{0}', myScore.sessAch).replace('{1}', myScore.faAchShare).replace('{2}', myScore.sessOwn).replace('{3}', myScore.faOwnShare) }}">⭐⭐ 🏆 {{ myScore.sessAch }}<small>/{{ myScore.faAchShare }}</small> + 🎓 {{ myScore.sessOwn }}<small>/{{ myScore.faOwnShare }}</small></span>{% else %}<span class="sld-myscore__blocks" title="{{ _('Block A · per-task rubrics: task sum ÷ (tasks × {0}) × {1}, all five sub-rubrics live').replace('{0}', myScore.taskMax).replace('{1}', myScore.blockAMax) }}">🅰 {{ myScore.blockA }}<small>/{{ myScore.blockAMax }}</small> · 🅱 {{ myScore.blockB }}<small>/{{ myScore.blockBMax }}</small> <span class="sld-myscore__suba">= 📈 {% if myScore.trjFlagged %}0🚫{% elif myScore.trjLevel is number %}{{ myScore.trjPts }}{% else %}—{% endif %}<small>/{{ myScore.trajectoryShare }}</small> + 🧠 {% if myScore.trfFlagged %}0🚫{% elif myScore.trfState != 'pending' %}{{ myScore.trfPts }}{% else %}—{% endif %}<small>/{{ myScore.transferShare }}</small></span></span>{% endif %}
+        </div>
+        <div class="sld-myscore__tasks" title="{{ _('per-task rubric scores; 🅰 Block A maps their sum onto {0} points').replace('{0}', myScore.blockAMax) }}">
           {%- for t in myScore.perTask %}
-          <span class="sld-myscore__task{% if not t.attempted %} sld-myscore__task--zero{% endif %}">{{ t.pid }} <b>{{ t.score }}</b>{% if t.late %} ⏱{% endif %}</span>
+          {% if t.firstAttempt %}<span class="sld-myscore__task" title="⭐ {{ _('First-attempt acceptance: this task = 🏆 /{0} + 🎓 /{1}; 🔧 🧩 💡 do not apply').replace('{0}', myScore.faAchShare).replace('{1}', myScore.faOwnShare) }} · 🏆 {{ _('judged') }} {{ t.judged }}/100 × {{ myScore.faAchShare }}% = {{ t.achPts }}/{{ myScore.faAchShare }} · 🎓 {% if t.ownLevel is number %}L{{ t.ownLevel }} × {{ (myScore.faOwnShare / 4)|round(1) }} = {{ t.ownPts }}/{{ myScore.faOwnShare }} ({{ _('lenient grading') }}){% else %}{{ _('no walkthrough yet') }} — 0/{{ myScore.faOwnShare }}{% endif %}">{{ t.pid }} <b>{{ t.score }}</b><small>/{{ myScore.taskMax }}</small> ⭐{% if t.late %} ⏱{% endif %} <span class="sld-myscore__parts">🏆{{ t.judged }}→{{ t.achPts }}<i>/{{ myScore.faAchShare }}</i> 🎓{% if t.ownLevel is number %}{{ t.ownPts }}{% else %}—{% endif %}<i>/{{ myScore.faOwnShare }}</i></span></span>{% else %}<span class="sld-myscore__task{% if not t.attempted %} sld-myscore__task--zero{% endif %}" title="🏆 {{ _('judged') }} {{ t.judged }}/100 × {{ myScore.achievementShare }}% = {{ t.achPts }}/{{ myScore.achievementShare }} · 🎓 {% if t.ownLevel is number %}L{{ t.ownLevel }} × {{ (myScore.ownershipShare / 4)|round(1) }} = {{ t.ownPts }}/{{ myScore.ownershipShare }}{% else %}{{ _('no walkthrough yet') }} — 0/{{ myScore.ownershipShare }}{% endif %} · 🔧 {% if t.fixLevel is number %}{{ _('mean(level × penalty)') }} {{ t.fixLevel }} × {{ (myScore.fixconvShare / 4)|round(2) }} = {{ t.fixPts }}/{{ myScore.fixconvShare }}{% else %}{{ _('no guided fixes judged yet') }} — 0/{{ myScore.fixconvShare }}{% endif %} · 🧩 {% if t.reaLevel is number %}{{ _('mean level') }} {{ t.reaLevel }} × {{ (myScore.reasoningShare / 4)|round(1) }} = {{ t.reaPts }}/{{ myScore.reasoningShare }}{% else %}{{ _('no failure-phase answers graded yet') }} — 0/{{ myScore.reasoningShare }}{% endif %} · 💡 {% if t.iniLevel is number %}{{ _('first engagement') }} L{{ t.iniLevel }} × {{ (myScore.initiativeShare / 4)|round(2) }} = {{ t.iniPts }}/{{ myScore.initiativeShare }}{% else %}{{ _('not judged yet — needs a closed first engagement with answers') }} — 0/{{ myScore.initiativeShare }}{% endif %}">{{ t.pid }} <b>{{ t.score }}</b><small>/{{ myScore.taskMax }}</small>{% if t.late %} ⏱{% endif %} <span class="sld-myscore__parts">🏆{{ t.judged }}→{{ t.achPts }}<i>/{{ myScore.achievementShare }}</i> 🎓{% if t.ownFlagged %}0🚫{% elif t.ownLevel is number %}{{ t.ownPts }}{% else %}—{% endif %}<i>/{{ myScore.ownershipShare }}</i> 🔧{% if t.fixFlagged %}0🚫{% elif t.fixLevel is number %}{{ t.fixPts }}{% else %}—{% endif %}<i>/{{ myScore.fixconvShare }}</i> 🧩{% if t.reaFlagged %}0🚫{% elif t.reaLevel is number %}{{ t.reaPts }}{% else %}—{% endif %}<i>/{{ myScore.reasoningShare }}</i> 💡{% if t.iniFlagged %}0🚫{% elif t.iniLevel is number %}{{ t.iniPts }}{% else %}—{% endif %}<i>/{{ myScore.initiativeShare }}</i></span></span>{% endif %}
           {%- endfor %}
         </div>
         <div class="sld-myscore__meta">
-          {{ _('{0} of {1} tasks attempted').replace('{0}', myScore.attempted).replace('{1}', sdoc.pids.length) }} · {{ _('best judged submission per task, late tier applied') }} · {{ _('Score per task = best judged submission, late tier applied (⏱ = reduced for lateness); the total is the sum of these scores.') }}
-          {% if myScore.ownership is not number %}<br>🎓 {{ _('Ownership is not measured yet — get a task accepted and answer the tutor’s walkthrough questions to earn it.') }}{% endif %}
+          <div class="sld-myscore__mine">{% if myScore.lateFactor %}{{ _('⏱ Late penalty: your last counted submission was {0}h past the deadline — total × {1}.').replace('{0}', myScore.lateHours).replace('{1}', myScore.lateFactor) }} {% endif %}🧭 {{ _('{0} of {1} tasks attempted').replace('{0}', myScore.attempted).replace('{1}', sdoc.pids.length) }}{% if myScore.trjLevel is number %} {{ _('Your trajectory: L{0} → {1}/{2}.').replace('{0}', myScore.trjLevel).replace('{1}', myScore.trjPts).replace('{2}', myScore.trajectoryShare) }}{% endif %}{% if myScore.trfState == 'assessed' %} {{ _('Your transfer: mean L{0} → {1}/{2} over {3} re-encounter(s).').replace('{0}', myScore.trfLevel).replace('{1}', myScore.trfPts).replace('{2}', myScore.transferShare).replace('{3}', myScore.trfJudged) }}{% elif myScore.trfState == 'untestable' %} {{ _('Your tasks shared no re-encountered knowledge points — 🧠 credits the full {0}.').replace('{0}', myScore.transferShare) }}{% endif %}{% if myScore.allFa %} {{ _('Your session: 🏆 {0}/{1} + 🎓 {2}/{3} = {4}.').replace('{0}', myScore.sessAch).replace('{1}', myScore.faAchShare).replace('{2}', myScore.sessOwn).replace('{3}', myScore.faOwnShare).replace('{4}', myScore.total) }}{% endif %}</div>
           {% if myScore.evaluatedTotal is number %}<br>✅ {{ _('Evaluated by your teacher') }} {{ datetimeSpan(myScore.evaluatedAt)|safe }}: <b>{{ myScore.evaluatedTotal }}</b> / {{ myScore.max }}{% if myScore.evaluatedTotal != myScore.total %} <span class="sld-myscore__diff">({{ _('your current score differs — the next evaluation will pick it up') }})</span>{% endif %}{% endif %}
+          <details class="sld-rubric">
+            <summary>📖 {{ _('Scoring rubric — how every number is computed') }}</summary>
+            <div class="sld-rubric__group">
+              <div class="sld-rubric__gtitle">{{ _('Every task is worth {0} points across five sub-rubrics:').replace('{0}', myScore.taskMax) }} 🏆 {{ _('Achievement') }} ({{ myScore.achievementShare }}) · 🎓 {{ _('Code Ownership') }} ({{ myScore.ownershipShare }}) · 🔧 {{ _('Guidance-to-Fix Conversion') }} ({{ myScore.fixconvShare }}) · 🧩 {{ _('Reasoning Quality') }} ({{ myScore.reasoningShare }}) · 💡 {{ _('Self-Diagnostic Initiative') }} ({{ myScore.initiativeShare }}).</div>
+              <div class="sld-rubric__grid">
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🏆 <b>{{ _('Achievement') }}</b><i>/{{ myScore.achievementShare }}</i></div><div class="sld-rubric__b">{{ _('= the best judged submission × {0}%, shown as judged→points (⏱ marks a late submission).').replace('{0}', myScore.achievementShare) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🎓 <b>{{ _('Code Ownership') }}</b><i>/{{ myScore.ownershipShare }}</i></div><div class="sld-rubric__b">{{ _('= mean walkthrough level × {0} — the tutor asks 5–6 questions after a first-attempt acceptance, 2–3 otherwise; answers are LLM-graded L0–L4 (0 evasion · 1 restates · 2 mechanical · 3 why necessary · 4 generalization), an unanswered question counting L0.').replace('{0}', (myScore.ownershipShare / 4)|round(1)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🔧 <b>{{ _('Guidance-to-Fix Conversion') }}</b><i>/{{ myScore.fixconvShare }}</i></div><div class="sld-rubric__b">{{ _('= penalty-weighted mean level × {0} — judged on every failed-attempt → answered-guidance → resubmission transition; trials decay 1 → 0.8 → 0.6 → 0.5; L0 domain unchanged · L1 thrashing · L2 incomplete · L3 flaw addressed · L4 minimal targeted fix; engaging and then never resubmitting is not counted; — = nothing judged yet (counts 0).').replace('{0}', (myScore.fixconvShare / 4)|round(2)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">🧩 <b>{{ _('Reasoning Quality') }}</b><i>/{{ myScore.reasoningShare }}</i></div><div class="sld-rubric__b">{{ _('= mean level × {0} — every failure-phase answer (while the program is not accepted) is judged per exchange, across all cycles: L0 no substantive answer, off-topic, or restates the question · L1 a guess with no reasoning (“maybe the loop?”) · L2 relevant reasoning but vague or partly wrong · L3 correct, specific reasoning about their own code · L4 correct reasoning plus predicts a consequence or generalizes; — = nothing graded yet (counts 0).').replace('{0}', (myScore.reasoningShare / 4)|round(1)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__h">💡 <b>{{ _('Self-Diagnostic Initiative') }}</b><i>/{{ myScore.initiativeShare }}</i></div><div class="sld-rubric__b">{{ _('= first-engagement level × {0} — one grade per task: did the student volunteer a hypothesis before the tutor localized the flaw (a wrong one still counts), and how well did they answer the comprehension stages (restate the task, state the constraints, explain the approach)? L0 no hypothesis, weak comprehension · L1 no hypothesis, adequate comprehension · L2 vague hypothesis (“something with the loop”) or strong comprehension alone · L3 specific, plausible hypothesis pointing at the right area · L4 specific hypothesis identifying the actual flaw; judged once the first engagement closes; — = not judged yet (counts 0).').replace('{0}', (myScore.initiativeShare / 4)|round(2)) }}</div></div>
+              </div>
+              <div class="sld-rubric__foot">{{ _('Σ is their sum — the task score.') }} {{ _('🅰 Block A = task sum ÷ (tasks × {0}) × {1} — e.g. 500/500 → 75, 250/500 → 37.5.').replace('{0}', myScore.taskMax).replace('{1}', myScore.blockAMax) }}</div>
+            </div>
+            <div class="sld-rubric__group">
+              <div class="sld-rubric__gtitle">{{ _('🅱 Block B ({0}) is judged per STUDENT over the whole session:').replace('{0}', myScore.blockBMax) }}</div>
+              <div class="sld-rubric__grid">
+            <div class="sld-rubric__card"><div class="sld-rubric__b">📈 {{ _('Independence Trajectory ({0}) = one LLM level × {1} over every submission chain and tutor exchange, chronologically — L0 dependent throughout · L1 marginal movement · L2 uneven or middling · L3 solid independence · L4 strong independence (tutorless solves count as fully independent); — = not judged yet (counts 0).').replace('{0}', myScore.trajectoryShare).replace('{1}', (myScore.trajectoryShare / 4)|round(1)) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">🧠 {{ _('Concept Transfer ({0}) = mean re-encounter level × {1}: per knowledge point, the baseline is the first task where it surfaced as the student’s own misconception AND was resolved (a parked raise sets no baseline); the first later task exercising it is judged — L0 relapse, unrecognized · L1 relapse, recognized on prompt · L2 handled, but fragile · L3 applied correctly, unprompted · L4 plus positive evidence of command; no relevant knowledge points among the tasks → the full {2} directly; — = judging pending (counts 0).').replace('{0}', myScore.transferShare).replace('{1}', (myScore.transferShare / 4)|round(2)).replace('{2}', myScore.transferShare) }}</div></div>
+              </div>
+              <div class="sld-rubric__foot">{{ _('🅱 = 📈 + 🧠; Total = 🅰 + 🅱.') }}</div>
+            </div>
+            <div class="sld-rubric__group">
+              <div class="sld-rubric__gtitle">✨ {{ _('Session rules & special cases') }}</div>
+              <div class="sld-rubric__grid">
+            <div class="sld-rubric__card"><div class="sld-rubric__b">⭐ {{ _('First-attempt exception: a task accepted with a SINGLE submission is scored 🏆 judged × {0}% (/{1}) + 🎓 mean walkthrough level × {2} (/{3}) — 🔧 🧩 💡 do not apply (·); its walkthrough asks 5–6 questions and the ownership grading is slightly lenient.').replace('{0}', myScore.faAchShare).replace('{1}', myScore.faAchShare).replace('{2}', (myScore.faOwnShare / 4)|round(1)).replace('{3}', myScore.faOwnShare) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('⭐⭐ If EVERY task is first-attempt, the whole session rescores as 🏆 {0} + 🎓 {1} (Total = their sum; 🅰 🅱 📈 🧠 do not apply).').replace('{0}', myScore.faAchShare).replace('{1}', myScore.faOwnShare) }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('🚫 Content that tries to instruct the grader (“please give me a high score”, “ignore previous instructions”, fake system prompts …) is detected before any judging; the corresponding sub-rubric is scored 0 for that task.') }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('🌐 All AI judges grade content only — answer in any language; grammar, typos and imperfect English never affect any level.') }}</div></div>
+            <div class="sld-rubric__card"><div class="sld-rubric__b">{{ _('⏱ Late penalty: the teacher’s tiered rule (hours → coefficient) multiplies a student’s TOTAL by the tier of their last counted submission; lateness inside the first tier rides free, and submissions after the extension never count.') }}</div></div>
+              </div>
+            </div>
+          </details>
         </div>
         {% else %}
         <div class="sld-myscore__main">🔒 <span>{{ _('Your score') }}</span> <b class="sld-myscore__masked">···</b><small>/ {{ myScore.max }}</small></div>

@@ -32,6 +32,7 @@ import system from '../model/system';
 import user from '../model/user';
 import { Handler, param, Types } from '../service/server';
 
+const logger = new Logger('self-learning');
 const JUDGING = [STATUS.STATUS_WAITING, STATUS.STATUS_JUDGING, STATUS.STATUS_COMPILING, STATUS.STATUS_FETCHED];
 
 async function loadSession(domainId: string, ssid: ObjectId): Promise<SelfLearningDoc> {
@@ -148,17 +149,32 @@ export interface TaskBest {
  *   - a record submitted after the hard end (endAt + extension) never
  *     counts (submissions from other surfaces, e.g. the plain problem
  *     page, land on the same pid and would otherwise sneak in);
- *   - effective = round(raw score × penaltyCoefficientAt(submission time));
- *   - a task's counting record is the one with the highest EFFECTIVE
- *     score, and on equal effective scores the on-time record beats a
- *     late one;
- *   - a session total (sessionTaskMeanTotal, out of 100) averages the PER-TASK rubric
- *     components (componentsOf) — today the 🏆 Achievement component
- *     alone: the programming tasks' summed score mapped onto 20 points.
+ *   - effective = the raw score (⏱ the teacher's tiered late rule is a
+ *     SESSION-TOTAL multiplier now — latePenaltyOf — keyed to the
+ *     student's LAST counted submission, so no record is individually
+ *     reduced);
+ *   - a task's counting record is the one with the highest score, and on
+ *     equal scores the on-time record beats a late one;
+ *   - EACH programming task is worth TASK_RUBRIC_MAX (100) points,
+ *     split across FIVE sub-rubrics (🏆30 🎓20 🔧15 🧩30 💡5, summing to
+ *     100); a task's score = the SUM of its earned sub-rubric points
+ *     (taskRubricOf; the 🔧/🧩/💡 placeholders earn nothing yet, so a
+ *     task currently tops out at 50);
+ *   - 🅰 Block A (BLOCK_A_MAX, 75) = (Σ task scores) / (taskCount × 100)
+ *     × 75 — five tasks summing 500/500 → 75, 250 → 37.5 — with an
+ *     unattempted task counting 0 but staying in the denominator (the
+ *     placeholder points not being earnable caps 🅰 at BLOCK_A_EARNABLE,
+ *     37.5, for now);
+ *   - 🅱 Block B (BLOCK_B_MAX, 25) — per STUDENT across the session:
+ *     📈 Independence Trajectory (10, one LLM level × 2.5) + 🧠 Concept
+ *     Transfer (15, mean re-encounter level × 3.75; untestable → full
+ *     15) — blockBOf;
+ *   - the session total (SESSION_TOTAL_MAX, 100) = Block A + Block B.
  *
  * EVERY consumer flows through here: the teacher's "Evaluate all students
  * now" button, the automatic post-deadline sweep and the on-view
- * finalization (all three via computeSessionResults), and the student's
+ * finalization (all three via runSessionEvaluation, THE single evaluation
+ * routine, which delegates to computeSessionResults), and the student's
  * own score card and per-task chips (SelfLearningDetailHandler). Change
  * the rubric HERE and press the button on any session to see the effect
  * immediately — the automatic evaluation will produce the same numbers.
@@ -169,8 +185,11 @@ export function scoreRecords(sdoc: SelfLearningDoc, rows: { pid: number, score: 
     for (const r of rows) {
         if (hardEnd && r.at > hardEnd) continue;
         const score = r.score || 0;
-        const effective = Math.round(score * penaltyCoefficientAt(sdoc, r.at));
-        const late = !!(sdoc.endAt && r.at > sdoc.endAt) && effective !== score;
+        // ⏱ The teacher's tiered late rule applies to the student's session
+        // TOTAL (latePenaltyOf), not per record — a record keeps its raw
+        // score; `late` merely marks submissions past the deadline.
+        const effective = score;
+        const late = !!(sdoc.endAt && r.at > sdoc.endAt);
         const cur = best.get(r.pid);
         if (!cur) best.set(r.pid, { score, effective, late, attempts: 1 });
         else {
@@ -185,12 +204,485 @@ export function scoreRecords(sdoc: SelfLearningDoc, rows: { pid: number, score: 
     return best;
 }
 
+/**
+ * ⏱ THE SESSION-LEVEL LATE PENALTY — the teacher's tiered rule
+ * (penaltyRules, "hours: coefficient") multiplies the STUDENT'S TOTAL.
+ * The student's lateness is their LAST counted submission (records after
+ * the hard end never count at all), and the factor is homework's exact
+ * tier selection (penaltyCoefficientAt): lateness inside the first
+ * tier's hour rides free. Returns null when nothing applies — no
+ * deadline, no counted rows, on time, or a factor of 1.
+ */
+export function latePenaltyOf(
+    sdoc: SelfLearningDoc,
+    rows: { at: Date }[],
+): { factor: number, hours: number } | null {
+    if (!sdoc?.endAt || !rows?.length) return null;
+    const hardEnd = sessionSchedule(sdoc).hardEndAt || null;
+    let lastAt: Date | null = null;
+    for (const r of rows) {
+        if (hardEnd && r.at > hardEnd) continue;
+        if (!lastAt || r.at > lastAt) lastAt = r.at;
+    }
+    if (!lastAt || lastAt <= sdoc.endAt) return null;
+    const factor = penaltyCoefficientAt(sdoc, lastAt);
+    if (factor >= 1) return null;
+    const hours = Math.round(((lastAt.getTime() - sdoc.endAt.getTime()) / 3600000) * 10) / 10;
+    return { factor, hours };
+}
+
 /** A 'running' manual evaluation older than this is treated as crashed. */
 export const EVAL_JOB_STALE_MS = 10 * 60 * 1000;
 
 /** The session grade scale: a session is evaluated out of 100. */
 export const SESSION_TOTAL_MAX = 100;
-/** 🏆 The Achievement component's scale: the programming tasks map onto 0..20. */
+
+/* ------------------------------------------------------------------ */
+/*  ⭐ THE SESSION RUBRIC — Blocks A & B                               */
+/* ------------------------------------------------------------------ */
+/*
+ * Total (100) = 🅰 Block A (75, per-task rubrics) + 🅱 Block B (25,
+ * cross-task rubrics; not implemented yet, counts 0).
+ *
+ * 🅰 Block A — evaluated PER TASK: every programming task is worth
+ * TASK_RUBRIC_MAX (100) points, split across FIVE sub-rubrics whose
+ * point values sum to exactly 100:
+ *   🏆 Achievement (30) — judged effective score × 30% (best test-case
+ *      score, late tier applied — exactly what scoreRecords produces;
+ *      the table shows it as "judged→points", e.g. 100→30);
+ *   🎓 Code Ownership (20) — can the student explain their OWN accepted
+ *      code? After an acceptance the AI tutor runs a walkthrough (5..6
+ *      questions when accepted on the very first attempt, 2..3 otherwise
+ *      — ownershipBudget); the LLM grades every answer on the L0..L4
+ *      authorship scale (0 evasion · 1 restates the code · 2 correct
+ *      mechanical account · 3 + why it's necessary · 4 + a
+ *      generalization; 2→3 is the discriminating boundary), an asked-
+ *      but-never-answered question counting level 0; the task earns
+ *      taskMeanOf(levels) × 5 points. No walkthrough yet → 0;
+ *   🔧 Guidance-to-Fix Conversion (15) — do students understand their
+ *      fault and make correct changes? Judged on every failed-attempt →
+ *      answered-guidance → resubmission transition (engaging and then
+ *      never resubmitting is NEVER counted — extractFixConvCandidates
+ *      only pairs an attempt with the next one); each transition is
+ *      LLM-graded L0..L4 (0 targeted domain unchanged · 1 thrashing ·
+ *      2 right area, incomplete · 3 flaw correctly addressed · 4 minimal
+ *      targeted fix, no collateral rewriting), with the trial penalty
+ *      1 → 0.8 → 0.6 → 0.5-after (fixConvPenalty, sequential per task);
+ *      the task earns mean(level × penalty) × 3.75 points
+ *      (taskFixConvMeanOf / 4 × 15). No judged transitions yet → 0;
+ *   🧩 Reasoning Quality (30) — does the tutor's question get a
+ *      substantial answer: thinking, not guessing? Judged per exchange,
+ *      across all cycles, on FAILURE-PHASE answers only (while the
+ *      program is not accepted — everything before the first
+ *      acceptance); each answer is LLM-graded L0..L4 (0 no substantive
+ *      answer, off-topic, or restates the question · 1 a guess with no
+ *      reasoning, "maybe the loop?" · 2 relevant reasoning but vague or
+ *      partly wrong · 3 correct, specific reasoning about their own
+ *      code · 4 correct reasoning PLUS predicts a consequence or
+ *      generalizes) — live in the dialogue, retroactively by
+ *      backfillReasoningGrades; the task earns mean(level) × 7.5 points
+ *      (reasoningTaskMeanOf / 4 × 30). Nothing graded yet → 0;
+ *   💡 Self-Diagnostic Initiative (5) — does the student show up with a
+ *      THEORY, or wait to be led? ONE grade per task, judged over the
+ *      FIRST-ENGAGEMENT failure dialogue only, once that window has
+ *      CLOSED (first acceptance, parking, or session end). Two signals
+ *      combine: a hypothesis VOLUNTEERED before the tutor localized the
+ *      flaw (a wrong one still counts) and the quality of the
+ *      comprehension-stage answers (restate the task, state the
+ *      constraints, explain the approach). LLM-graded L0..L4 (0 no
+ *      hypothesis, comprehension weak or absent · 1 no hypothesis,
+ *      comprehension adequate · 2 a vague hypothesis, "something with
+ *      the loop", OR strong comprehension alone · 3 a specific,
+ *      plausible hypothesis pointing at the right area · 4 a specific
+ *      hypothesis identifying the ACTUAL flaw); the task earns
+ *      mean(level) × 1.25 points (level / 4 × 5 — one level per task).
+ *      No failure engagement → 0.
+ * A task's score = the SUM of its five sub-rubric points — every
+ * sub-rubric is implemented, so a task can now reach its full 100.
+ *
+ * ⭐ FIRST-ATTEMPT EXCEPTION: a task accepted with a SINGLE submission
+ * (the chronologically first judged, non-pretest record is Accepted —
+ * firstAttemptAcceptedPids, the same truth the walkthrough budget
+ * uses) has no failure phase, so 🔧/🧩/💡 do not apply; its 100 points
+ * are 🏆 judged × 40% (/40) + 🎓 mean walkthrough level × 15 (/60),
+ * with the ownership graders instructed to be slightly lenient.
+ *
+ * 🅰 Block A = (Σ task scores) / (taskCount × 100) × BLOCK_A_MAX — the
+ * task sum mapped onto 75: five tasks summing 500/500 → 75, 250 → 37.5.
+ * An unattempted task counts 0 but stays in the denominator.
+ *
+ * 🅱 Block B (25) is evaluated per STUDENT across the whole session —
+ * every submission trajectory and the full student–tutor history:
+ *   📈 Independence Trajectory (10) — do they need LESS tutor help from
+ *      the first task to the last? ONE LLM judgment per student over the
+ *      chronological task digests (submission chains, failure-phase
+ *      exchange counts, answer excerpts; tutorless solves count as fully
+ *      independent), on L0..L4 (0 dependent throughout · 1 marginal
+ *      movement · 2 uneven or middling · 3 solid independence · 4 strong
+ *      independence — full definitions in the grader prompt); the
+ *      student earns mean(level) × 2.5 points. Re-judged only when the
+ *      history's basis changes (backfillTrajectoryGrades). Nothing to
+ *      judge yet → 0;
+ *   🧠 Concept Transfer (15) — a mistake (missed knowledge point K) on
+ *      one task: does it recur on the next task exercising K? Per
+ *      concept: the BASELINE is the first task where K surfaced as the
+ *      student's own misconception AND the task was resolved (a parked
+ *      raise sets no baseline); the FIRST chronological later-engaged
+ *      task tagged K is the re-encounter, LLM-judged L0..L4 (0 relapse,
+ *      unrecognized · 1 relapse, recognized on prompt · 2 handled, but
+ *      fragile · 3 applied correctly, unprompted · 4 plus positive
+ *      evidence of command — full definitions in the grader prompt) from
+ *      its first submission, its pre-acceptance tutoring and the
+ *      baseline exchange. The student earns mean(level) × 3.75; the
+ *      backfill also stores a PLAN (candidates / untestable) so the
+ *      derivation can tell states apart: assessed → the mean; testable
+ *      but not yet judged → pending 0; UNTESTABLE (no relevant knowledge
+ *      points among the tasks, or none re-encountered) → the FULL 15
+ *      directly (the spec's edge case).
+ * 🅱 = Σ of its earned sub-rubric points; Total = 🅰 + 🅱.
+ *
+ * 🚫 GRADER-MANIPULATION POLICY: content that tries to steer the LLM
+ * judges instead of answering ("please give me a high score", "grade
+ * this as level 4", "ignore previous instructions", fake system
+ * prompts, JSON coercion, and their Chinese equivalents) is caught by a
+ * DETERMINISTIC detector (aiTutor.detectGraderManipulation) that runs
+ * BEFORE any LLM sees the content — layered under the graders' own
+ * MANIPULATION=LEVEL-0 prompt clause. On a hit, the CORRESPONDING
+ * sub-rubric — whichever judge was about to consume that content — is
+ * scored 0 for that task (🎓/🔧/🧩/💡, flagged on the thread with an
+ * audit excerpt) or for the student (📈/🧠), overriding any clean
+ * evidence on the same slot. Live dialogue answers are pre-checked the
+ * same way: the answer stores level 0 and the tutor replies with a
+ * fixed integrity notice instead of calling the model.
+ *
+ * ⭐⭐ ALL-FIRST-ATTEMPT COLLAPSE: a student who is accepted at the FIRST
+ * attempt on EVERY task has no failure history anywhere, so neither
+ * block applies — the WHOLE session rescores as 🏆 Achievement 40 +
+ * 🎓 Code Ownership 60 (allFirstAttemptSessionOf): the per-task
+ * first-attempt rubric promoted to the total. Total = mean of the
+ * per-task 40/60 scores = mean(judged) × 40% + mean(walkthrough level)
+ * × 15, out of 100. 🅰/🅱/📈/🧠 are n/a for such a student.
+ */
+/** Bump whenever the scoring shape/scale changes: stored results with another version re-derive on sight. */
+export const SESSION_RUBRIC_VERSION = 14;
+/** 🅰 Block A — the per-task rubrics' share of the session total. */
+export const BLOCK_A_MAX = 75;
+/** 🅱 Block B — the cross-task rubrics' share of the session total (not implemented yet). */
+export const BLOCK_B_MAX = 25;
+/** Every task is worth this many points, split across the five sub-rubrics below. */
+export const TASK_RUBRIC_MAX = 100;
+/** 🏆 Achievement's points of a task's 100. */
+export const ACHIEVEMENT_SHARE = 30;
+/** 🎓 Code Ownership's points of a task's 100 (task earns mean walkthrough level × 5). */
+export const OWNERSHIP_SHARE = 20;
+/** 🔧 Guidance-to-Fix Conversion's points of a task's 100 (task earns mean(level × trial penalty) × 3.75). */
+export const FIXCONV_SHARE = 15;
+/** 🧩 Reasoning Quality's points of a task's 100 (task earns mean(failure-phase level) × 7.5). */
+export const REASONING_SHARE = 30;
+/** 💡 Self-Diagnostic Initiative's points of a task's 100 (task earns first-engagement level × 1.25). */
+export const INITIATIVE_SHARE = 5;
+/** The LLM grades each post-acceptance answer on 0..OWNERSHIP_LEVEL_MAX. */
+export const OWNERSHIP_LEVEL_MAX = 4;
+/** The LLM grades each guidance→fix transition on 0..FIXCONV_LEVEL_MAX. */
+export const FIXCONV_LEVEL_MAX = 4;
+/** The LLM grades each failure-phase answer on 0..REASONING_LEVEL_MAX. */
+export const REASONING_LEVEL_MAX = 4;
+/** The LLM grades each task's first engagement on 0..INITIATIVE_LEVEL_MAX. */
+export const INITIATIVE_LEVEL_MAX = 4;
+/* ---- 🅱 Block B (25) — cross-task sub-rubrics, per STUDENT ---- */
+/** 📈 Independence Trajectory's points of Block B's 25 (student earns level × 2.5). */
+export const TRAJECTORY_SHARE = 10;
+/** 🧠 Concept Transfer's points of Block B's 25 (student earns mean(re-encounter level) × 3.75; untestable → the full 15). */
+export const TRANSFER_SHARE = 15;
+/** The LLM grades the whole-session trajectory on 0..TRAJECTORY_LEVEL_MAX. */
+export const TRAJECTORY_LEVEL_MAX = 4;
+/** The LLM grades each concept re-encounter on 0..TRANSFER_LEVEL_MAX. */
+export const TRANSFER_LEVEL_MAX = 4;
+/** 🅱's earnable ceiling — with 📈 and 🧠 both live it equals BLOCK_B_MAX (10 + 15 = 25). */
+export const BLOCK_B_EARNABLE = TRAJECTORY_SHARE + TRANSFER_SHARE;
+/**
+ * ⭐ FIRST-ATTEMPT EXCEPTION — a task ACCEPTED with a single submission
+ * has no failure phase, so 🔧/🧩/💡 cannot apply. Its 100 points
+ * renormalize to 🏆 Achievement 40 + 🎓 Code Ownership 60 (the
+ * walkthrough asks 5–6 questions and its LLM grading is slightly
+ * lenient — see the graders in lib/ai_tutor).
+ */
+export const FIRST_ATTEMPT_ACH_MAX = 40;
+export const FIRST_ATTEMPT_OWN_MAX = 60;
+/**
+ * 🔧 The trial penalty across a task's guided resubmissions, sequential:
+ * the 1st guidance→fix trial counts in full, the 2nd ×0.8, the 3rd ×0.6,
+ * and every trial after that ×0.5.
+ */
+export function fixConvPenalty(trial: number): number {
+    if (trial <= 1) return 1;
+    if (trial === 2) return 0.8;
+    if (trial === 3) return 0.6;
+    return 0.5;
+}
+/** Σ of the IMPLEMENTED sub-rubric points per task — ALL FIVE now: 30 + 20 + 15 + 30 + 5 = 100. */
+export const IMPLEMENTED_TASK_SHARES = ACHIEVEMENT_SHARE + OWNERSHIP_SHARE + FIXCONV_SHARE + REASONING_SHARE + INITIATIVE_SHARE;
+/** 🅰's earnable ceiling — with every sub-rubric implemented it equals BLOCK_A_MAX (100/100 × 75 = 75). */
+export const BLOCK_A_EARNABLE = Math.round((IMPLEMENTED_TASK_SHARES * BLOCK_A_MAX * 10) / TASK_RUBRIC_MAX) / 10;
+
+const round1 = (x: number) => Math.round(x * 10) / 10;
+
+export interface TaskRubricPart {
+    /** Stable machine key of the sub-rubric ('achievement' | 'ownership' | 'fixconv' | 'reasoning' | 'initiative'). */
+    key: string;
+    /** The sub-rubric's point value of the task's 100 (30/20/15/30/5). */
+    share: number;
+    /** The POINTS this task earned on the sub-rubric (0..share, one decimal); null = pending placeholder. */
+    points: number | null;
+    /** True while the sub-rubric is not implemented yet (points null, earns nothing). */
+    pending?: boolean;
+}
+/** 🎓 The Code-Ownership evidence of ONE task, as taskRubricOf consumes it. */
+export interface TaskOwnershipInput {
+    /** taskMeanOf of the walkthrough (0..4, asked-unanswered = 0); null = no walkthrough questions yet. */
+    level: number | null;
+}
+export interface TaskRubricBreakdown {
+    pid: number;
+    /** False = no judged record inside the counting window (score 0). */
+    attempted: boolean;
+    /** ⭐ True = accepted on the very first attempt: the task is 🏆40 + 🎓60 and 🔧/🧩/💡 do not apply. */
+    firstAttempt: boolean;
+    /** The task's score, 0..TASK_RUBRIC_MAX: the SUM of its earned sub-rubric points (pending → 0 earned). */
+    score: number;
+    /** 🏆 The points earned on Achievement (0..30 = judged × 30%). */
+    achPts: number;
+    /** The judged evidence behind 🏆: best effective score 0..100. */
+    judged: number;
+    late: boolean;
+    /** 🎓 The points earned on Code Ownership (0..20 = mean level × 5; 0 when unmeasured). */
+    ownPts: number;
+    /** 🎓 The mean walkthrough level behind it (0..4, 2 decimals); null = no walkthrough yet. */
+    ownLevel: number | null;
+    /** 🔧 The points earned on Guidance-to-Fix Conversion (0..15 = penalty-weighted mean level × 3.75; 0 when unmeasured). */
+    fixPts: number;
+    /** 🔧 The penalty-weighted mean level behind it (0..4, 2 decimals); null = no judged transitions yet. */
+    fixLevel: number | null;
+    /** 🧩 The points earned on Reasoning Quality (0..30 = mean failure-phase level × 7.5; 0 when unmeasured). */
+    reaPts: number;
+    /** 🧩 The mean failure-phase level behind it (0..4, 2 decimals); null = nothing graded yet. */
+    reaLevel: number | null;
+    /** 💡 The points earned on Self-Diagnostic Initiative (0..5 = first-engagement level × 1.25; 0 when unjudged). */
+    iniPts: number;
+    /** 💡 The first-engagement level behind it (0..4); null = not judged yet (no closed engagement with answers). */
+    iniLevel: number | null;
+    parts: TaskRubricPart[];
+}
+
+/** 🔧 The Guidance-to-Fix evidence of ONE task, as taskRubricOf consumes it. */
+export interface TaskFixConvInput {
+    /** taskFixConvMeanOf of the state (0..4, penalty-weighted); null = no judged transitions yet. */
+    level: number | null;
+}
+
+/** 🧩 The Reasoning-Quality evidence of ONE task, as taskRubricOf consumes it. */
+export interface TaskReasoningInput {
+    /** reasoningTaskMeanOf of the state (0..4); null = no graded failure-phase answers yet. */
+    level: number | null;
+}
+
+/** 💡 The Self-Diagnostic-Initiative evidence of ONE task, as taskRubricOf consumes it. */
+export interface TaskInitiativeInput {
+    /** The one first-engagement level (0..4); null = not judged yet. */
+    level: number | null;
+}
+
+/**
+ * ⭐ ONE task's rubric — the five sub-rubric points and their sum. The
+ * single place a task's points are decided: the evaluation, the
+ * teacher's table, the CSV and the student's own card all call this, so
+ * they can never disagree. Implementing a placeholder later = replace
+ * its null points with the real computation here; everything downstream
+ * follows automatically.
+ */
+export function taskRubricOf(
+    pid: number,
+    best: TaskBest | null | undefined,
+    own?: TaskOwnershipInput | null,
+    fix?: TaskFixConvInput | null,
+    rea?: TaskReasoningInput | null,
+    ini?: TaskInitiativeInput | null,
+    firstAttempt = false,
+): TaskRubricBreakdown {
+    // ⭐ First-attempt acceptance: the task's shares renormalize to
+    // 🏆 40 + 🎓 60 (no failure phase existed, so 🔧/🧩/💡 cannot apply).
+    const fa = !!firstAttempt && !!best;
+    const achShare = fa ? FIRST_ATTEMPT_ACH_MAX : ACHIEVEMENT_SHARE;
+    const ownShare = fa ? FIRST_ATTEMPT_OWN_MAX : OWNERSHIP_SHARE;
+    // 🏆 Achievement (30, or 40 first-attempt): judged effective score × share%.
+    const judged = best ? Math.min(100, Math.max(0, best.effective || 0)) : 0;
+    const achPts = round1((judged / 100) * achShare);
+    // 🎓 Code Ownership (20, or 60 first-attempt): mean walkthrough level
+    // × share/4. No walkthrough (not accepted, or the tutor never asked) → 0.
+    const ownLevel = typeof own?.level === 'number'
+        ? Math.min(OWNERSHIP_LEVEL_MAX, Math.max(0, own.level)) : null;
+    const ownPts = ownLevel === null ? 0 : round1((ownLevel / OWNERSHIP_LEVEL_MAX) * ownShare);
+    // 🔧 Guidance-to-Fix Conversion (15): penalty-weighted mean level ×
+    // 3.75 (level/4 × 15). No judged transitions (never failed, never
+    // engaged, or engaged-then-skipped) → 0.
+    const fixLevel = typeof fix?.level === 'number'
+        ? Math.min(FIXCONV_LEVEL_MAX, Math.max(0, fix.level)) : null;
+    const fixPts = fixLevel === null ? 0 : round1((fixLevel / FIXCONV_LEVEL_MAX) * FIXCONV_SHARE);
+    // 🧩 Reasoning Quality (30): mean failure-phase level × 7.5
+    // (level/4 × 30). Nothing graded (never failed, or never answered
+    // while failing) → 0.
+    const reaLevel = typeof rea?.level === 'number'
+        ? Math.min(REASONING_LEVEL_MAX, Math.max(0, rea.level)) : null;
+    const reaPts = reaLevel === null ? 0 : round1((reaLevel / REASONING_LEVEL_MAX) * REASONING_SHARE);
+    // 💡 Self-Diagnostic Initiative (5): the one first-engagement level ×
+    // 1.25 (level/4 × 5). Not judged (no closed failure engagement with
+    // answers) → 0.
+    const iniLevel = typeof ini?.level === 'number'
+        ? Math.min(INITIATIVE_LEVEL_MAX, Math.max(0, ini.level)) : null;
+    const iniPts = iniLevel === null ? 0 : round1((iniLevel / INITIATIVE_LEVEL_MAX) * INITIATIVE_SHARE);
+    const parts: TaskRubricPart[] = fa
+        ? [
+            { key: 'achievement', share: achShare, points: achPts },
+            { key: 'ownership', share: ownShare, points: ownPts },
+        ]
+        : [
+            { key: 'achievement', share: achShare, points: achPts },
+            { key: 'ownership', share: ownShare, points: ownPts },
+            { key: 'fixconv', share: FIXCONV_SHARE, points: fixPts },
+            { key: 'reasoning', share: REASONING_SHARE, points: reaPts },
+            { key: 'initiative', share: INITIATIVE_SHARE, points: iniPts },
+        ];
+    const score = round1(parts.reduce((a, pp) => a + (pp.points || 0), 0));
+    return {
+        pid,
+        attempted: !!best,
+        firstAttempt: fa,
+        score,
+        achPts,
+        judged,
+        late: !!best?.late,
+        ownPts,
+        ownLevel: ownLevel === null ? null : Math.round(ownLevel * 100) / 100,
+        fixPts: fa ? 0 : fixPts,
+        fixLevel: fa ? null : (fixLevel === null ? null : Math.round(fixLevel * 100) / 100),
+        reaPts: fa ? 0 : reaPts,
+        reaLevel: fa ? null : (reaLevel === null ? null : Math.round(reaLevel * 100) / 100),
+        iniPts: fa ? 0 : iniPts,
+        iniLevel: fa ? null : iniLevel,
+        parts,
+    };
+}
+
+/**
+ * 🅰 Block A = (Σ task scores) / (n × TASK_RUBRIC_MAX) × BLOCK_A_MAX,
+ * one decimal — the task sum mapped onto 75, exactly the spec: five
+ * tasks summing 500/500 → 75, 250 → 37.5.
+ */
+export function blockAOf(tasks: TaskRubricBreakdown[]): number {
+    if (!tasks.length) return 0;
+    const sum = tasks.reduce((a, t) => a + (t.score || 0), 0);
+    // Multiply before dividing: 475/500 × 75 must round from the exact
+    // 71.25 (→ 71.3), not from 0.95's float representation (→ 71.2).
+    return round1((sum * BLOCK_A_MAX) / (tasks.length * TASK_RUBRIC_MAX));
+}
+
+/** 📈 The Independence-Trajectory evidence of ONE student, as blockBOf consumes it. */
+export interface TrajectoryInput {
+    /** The one whole-session level (0..4); null = not judged yet. */
+    level: number | null;
+}
+
+/**
+ * ⭐⭐ THE ALL-FIRST-ATTEMPT COLLAPSE — when EVERY programming task was
+ * accepted on the very first attempt, the whole session rescores as
+ * 🏆 40 + 🎓 60: Total = mean of the per-task first-attempt scores
+ * (each already 🏆 judged × 40% + 🎓 level × 15), with the two parts
+ * reported for transparency. Returns null unless every task's breakdown
+ * is a first-attempt one (any normal or unattempted task → the standard
+ * Block A + Block B rubric applies instead).
+ */
+export function allFirstAttemptSessionOf(
+    tasks: TaskRubricBreakdown[],
+): { total: number, ach: number, own: number } | null {
+    if (!tasks.length || !tasks.every((t) => t.firstAttempt && t.attempted)) return null;
+    const n = tasks.length;
+    const sum = tasks.reduce((a, t) => a + (t.score || 0), 0);
+    return {
+        // Multiply before dividing (the 71.25-style exactness rule).
+        total: round1((sum * SESSION_TOTAL_MAX) / (n * TASK_RUBRIC_MAX)),
+        ach: round1(tasks.reduce((a, t) => a + (t.achPts || 0), 0) / n),
+        own: round1(tasks.reduce((a, t) => a + (t.ownPts || 0), 0) / n),
+    };
+}
+
+/** 🧠 The Concept-Transfer sub-score of ONE student, as blockBOf consumes it. */
+export interface TransferSubScore {
+    /** assessed = ≥1 re-encounter judged; pending = testable, judging awaited; untestable = the edge case (full credit). */
+    state: 'assessed' | 'pending' | 'untestable';
+    /** Mean re-encounter level (0..4, 2 decimals); null unless assessed. */
+    level: number | null;
+    /** The points: assessed → round1(mean × 3.75); untestable → TRANSFER_SHARE; pending → 0. */
+    pts: number;
+    /** Re-encounters judged so far. */
+    judged: number;
+    /** 🚫 True when a manipulation flag zeroed the sub-rubric. */
+    flagged?: boolean;
+}
+
+/**
+ * 🧠 Derive the transfer sub-score from what the backfill stored on the
+ * progress doc: the judged assessments and the PLAN (candidate count +
+ * the untestable verdict). Assessed → mean(level) × 3.75 over judged
+ * re-encounters; no assessments but a clean plan with ZERO candidates →
+ * UNTESTABLE, the spec's edge case: the full 15 directly; anything else
+ * (candidates awaiting judgment, or no clean plan yet) → pending 0.
+ */
+export function transferSubScoreOf(
+    assessments?: { level: number, flagged?: boolean }[] | null,
+    plan?: { candidates: number, untestable: boolean } | null,
+): TransferSubScore {
+    // 🚫 A single flagged re-encounter zeroes the whole 🧠 sub-rubric.
+    if ((assessments || []).some((a) => a.flagged)) {
+        return {
+            state: 'assessed', level: 0, pts: 0, judged: (assessments || []).length, flagged: true,
+        };
+    }
+    const levels = (assessments || []).map((a) => Math.min(TRANSFER_LEVEL_MAX, Math.max(0, +a.level || 0)));
+    if (levels.length) {
+        const mean = levels.reduce((a, b) => a + b, 0) / levels.length;
+        return {
+            state: 'assessed',
+            level: Math.round(mean * 100) / 100,
+            pts: round1((mean / TRANSFER_LEVEL_MAX) * TRANSFER_SHARE),
+            judged: levels.length,
+        };
+    }
+    if (plan?.untestable) return { state: 'untestable', level: null, pts: TRANSFER_SHARE, judged: 0 };
+    return { state: 'pending', level: null, pts: 0, judged: 0 };
+}
+
+/**
+ * 🅱 Block B = the SUM of the student's earned cross-task sub-rubric
+ * points: 📈 Independence Trajectory = level × 2.5 (level/4 × 10; not
+ * judged yet → 0) + 🧠 Concept Transfer (transferSubScoreOf: assessed →
+ * mean × 3.75, untestable → the full 15, pending → 0). Both live, so it
+ * tops at BLOCK_B_MAX (25).
+ */
+export function blockBOf(trj?: TrajectoryInput | null, trf?: TransferSubScore | null): number {
+    const trjLevel = typeof trj?.level === 'number'
+        ? Math.min(TRAJECTORY_LEVEL_MAX, Math.max(0, trj.level)) : null;
+    const trjPts = trjLevel === null ? 0 : round1((trjLevel / TRAJECTORY_LEVEL_MAX) * TRAJECTORY_SHARE);
+    return round1(trjPts + (trf?.pts || 0));
+}
+
+/** 📈 The one trajectory sub-score on its own (level × 2.5; 0 when unjudged) — what the 📈 column shows. */
+export function trajectoryPtsOf(level: number | null): number {
+    if (typeof level !== 'number') return 0;
+    const l = Math.min(TRAJECTORY_LEVEL_MAX, Math.max(0, level));
+    return round1((l / TRAJECTORY_LEVEL_MAX) * TRAJECTORY_SHARE);
+}
+
+/** 🏆 RETIRED (old 7-component rubric) — kept only for the dormant machinery below. */
 export const SESSION_ACHIEVEMENT_MAX = 20;
 
 /**
@@ -262,10 +754,8 @@ export interface SessionComponents {
     initiative: number | null;
 }
 
-/** 🎓 The Ownership component's scale: explanation levels map onto 0..10. */
+/** 🎓 RETIRED (old 7-component rubric): explanation levels mapped onto 0..10. */
 export const SESSION_OWNERSHIP_MAX = 10;
-/** The LLM grades each post-acceptance answer on 0..OWNERSHIP_LEVEL_MAX. */
-export const OWNERSHIP_LEVEL_MAX = 4;
 /** Hard cap of graded answers per walkthrough question (anti-spam). */
 export const MAX_LEVELS_PER_QUESTION = 8;
 
@@ -307,6 +797,58 @@ export function dialogueHistoryFor(
         turns.push({ role: m.role === 'user' ? 'student' : 'tutor', content: String(m.content || '').slice(0, 800) });
     }
     return turns.slice(-12);
+}
+
+/**
+ * ⏯ The thread's OPEN question, if any — the one the student may still
+ * answer. Per the stored-message contract: an assistant 'anno' message
+ * WITHOUT a resolved flag is a QUESTION; WITH one it is a reply, and a
+ * reply carrying resolved=true closes the question. Only the LAST
+ * question can be open (a newer question supersedes the older ones).
+ * Used to REHYDRATE the launcher panel after a page reload, so closing
+ * the pop-up card — or the tab — never strands an unanswered question:
+ * the round tutor button reopens the panel and answering continues
+ * through the very same endpoint. accepted mirrors which grading the
+ * reply will get (🎓 walkthrough after the first acceptance, 🧩 before).
+ */
+export function openTutorQuestionOf(thread: TutorThreadDoc | null): {
+    question: string;
+    line?: number;
+    endLine?: number;
+    accepted: boolean;
+    history: { role: string, content: string }[];
+    /** Every question asked so far (chronological, capped) — reseeds the client's repeat-avoidance memory after a reload. */
+    asked: string[];
+    /** 🎓 The walkthrough's Qn/m counter, when the open question belongs to it. */
+    ownership: { asked: number, max: number } | null;
+} | null {
+    const messages = thread?.messages || [];
+    let q: TutorMessage | null = null;
+    let resolved = false;
+    const asked: string[] = [];
+    for (const m of messages) {
+        if (m.kind !== 'anno' || m.role !== 'assistant') continue;
+        if ((m as any).resolved === undefined) {
+            q = m; // a fresh question opens (and supersedes any earlier one)
+            resolved = false;
+            asked.push(String(m.content || '').slice(0, 500));
+        } else if (q && (m as any).resolved === true) {
+            resolved = true; // a resolving reply closes the current question
+        }
+    }
+    if (!q || resolved) return null;
+    const accepted = !!(thread?.firstAcceptedAt && q.at && new Date(q.at as any) >= new Date(thread.firstAcceptedAt as any));
+    const history = dialogueHistoryFor(thread, String(q.content || '').slice(0, 300)) || [];
+    const own = thread?.ownership;
+    return {
+        question: String(q.content || '').slice(0, 800),
+        line: (q as any).line,
+        endLine: (q as any).endLine,
+        accepted,
+        history,
+        asked: asked.slice(-12),
+        ownership: accepted && own ? { asked: (own.questions || []).length, max: own.maxQ } : null,
+    };
 }
 
 export interface WalkthroughAnswer { index: number, text: string, level?: number, at?: Date }
@@ -377,21 +919,17 @@ export function extractFixConvCandidates(
 ): FixConvCandidate[] {
     const out: FixConvCandidate[] = [];
     /*
-     * The trial counter follows ERROR CHAINS, not raw position: repeated
-     * guided resubmissions that fail to move the verdict are retries of the
-     * SAME struggle (1 → 0.8 → 0.6 → 0.5), but once a resubmission
-     * IMPROVES the score (or gets accepted) the chain closes — the next
-     * guided transition targets a DIFFERENT error and starts fresh at
-     * trial 1. Any improvement resets the chain, guided or not. This is
-     * decided purely from record scores, so trial numbers stay
-     * deterministic and never depend on an LLM output.
+     * ⭐ Trials are SEQUENTIAL per task, exactly as the rubric states:
+     * the task's 1st qualifying transition is trial 1 (penalty ×1), the
+     * 2nd trial 2 (×0.8), the 3rd ×0.6, and every one after ×0.5 —
+     * decided purely from the record timeline, so trial numbers stay
+     * deterministic and never depend on an LLM output. (Stored trials
+     * from an older numbering rule are reconciled by the backfill's
+     * setFixConvTrial pass on the next evaluation.)
      */
-    let chain = 0;
+    let trial = 0;
     for (let k = 0; k + 1 < attempts.length; k++) {
-        if (attempts[k].accepted) {
-            chain = 0;
-            continue;
-        }
+        if (attempts[k].accepted) continue; // guidance on failures only
         const t0 = attempts[k].at.getTime();
         const t1 = attempts[k + 1].at.getTime();
         const msgIdx: number[] = [];
@@ -402,15 +940,70 @@ export function extractFixConvCandidates(
             if (t > t0 && t < t1) msgIdx.push(i);
         }
         if (msgIdx.length) {
-            chain += 1;
+            trial += 1;
             out.push({
-                fromIdx: k, toIdx: k + 1, trial: chain, msgIdx,
+                fromIdx: k, toIdx: k + 1, trial, msgIdx,
             });
         }
-        const improved = attempts[k + 1].accepted || ((attempts[k + 1].score || 0) > (attempts[k].score || 0));
-        if (improved) chain = 0;
     }
     return out;
+}
+
+/**
+ * 📈 ONE student's chronological task digests — exactly what the
+ * trajectory judge reads: per touched task (ordered by first
+ * submission), the submission chain, how many failure-phase exchanges
+ * were answered before the first acceptance (0 = solved without tutor
+ * help), and short excerpts of the first/last failure answers. Pure
+ * record+thread arithmetic; exported for the test harness.
+ */
+export function trajectoryTaskDigestsOf(
+    rows: { pid: number, at: Date, accepted: boolean, score: number }[],
+    msgsByPid: Map<number, TutorMessage[]>,
+    labelOf: (pid: number) => string,
+): { label: string, chain: string, answered: number, first?: string, last?: string }[] {
+    const byPid = new Map<number, { at: number, accepted: boolean, score: number }[]>();
+    for (const r of rows || []) {
+        if (!byPid.has(r.pid)) byPid.set(r.pid, []);
+        byPid.get(r.pid)!.push({ at: new Date(r.at).getTime(), accepted: !!r.accepted, score: r.score || 0 });
+    }
+    const pids = [...byPid.keys()];
+    for (const list of byPid.values()) list.sort((a, b) => a.at - b.at);
+    pids.sort((a, b) => byPid.get(a)![0].at - byPid.get(b)![0].at);
+    return pids.map((pid) => {
+        const list = byPid.get(pid)!;
+        const shown = list.slice(0, 12);
+        const chain = shown.map((r) => `${r.accepted ? 'AC' : 'WA'}(${r.score})`).join(' → ')
+            + (list.length > shown.length ? ` → … (${list.length - shown.length} more)` : '');
+        let firstAc = Infinity;
+        for (const r of list) {
+            if (r.accepted) {
+                firstAc = r.at;
+                break;
+            }
+        }
+        const answers: string[] = [];
+        for (const m of msgsByPid.get(pid) || []) {
+            if (m.kind !== 'anno' || m.role !== 'user' || !m.at) continue;
+            if (new Date(m.at).getTime() >= firstAc) continue;
+            answers.push(String(m.content || '').slice(0, 160));
+        }
+        const out: { label: string, chain: string, answered: number, first?: string, last?: string } = {
+            label: labelOf(pid), chain, answered: answers.length,
+        };
+        if (answers.length) out.first = answers[0];
+        if (answers.length > 1) out.last = answers[answers.length - 1];
+        return out;
+    });
+}
+
+/**
+ * 📈 The re-judge trigger: a stable key of the history's size — when it
+ * matches the stored one, the LLM is not called again.
+ */
+export function trajectoryBasisOf(digests: { chain: string, answered: number }[], totalRows: number): string {
+    const answered = digests.reduce((a, d) => a + d.answered, 0);
+    return `${digests.length}:${totalRows}:${answered}`;
 }
 
 /**
@@ -476,18 +1069,36 @@ export async function backfillOwnershipGrades(
             await SelfLearningModel.initOwnership(thread._id, ownership);
         }
         for (const pair of walk.pairs) {
-            if (!pair.answers.length) {
-                if (!(ownership.questions || []).find((x) => x.question === pair.key)) {
-                    const q = {
-                        question: pair.key, line: pair.line, at: pair.at || new Date(), levels: [], answerKeys: [],
-                    };
-                    await SelfLearningModel.pushOwnershipQuestion(thread._id, q);
-                    ownership.questions.push(q);
-                }
-                continue;
+            // The asked question must exist in the state — answered or not —
+            // so an ignored question counts its deliberate level-0 and a
+            // graded answer has a slot to land in.
+            let q = (ownership.questions || []).find((x) => x.question === pair.key);
+            if (!q) {
+                q = {
+                    question: pair.key, line: pair.line, at: pair.at || new Date(), levels: [], answerKeys: [],
+                };
+                await SelfLearningModel.pushOwnershipQuestion(thread._id, q);
+                ownership.questions.push(q);
             }
             for (const ans of pair.answers) {
-                if (typeof ans.level === 'number') continue; // graded live already
+                if (typeof ans.level === 'number') {
+                    /*
+                     * Graded live already — but REPAIR the state if that
+                     * grade never landed in it (e.g. the question-store
+                     * write was lost before the answer arrived, so
+                     * pushOwnershipLevel matched nothing): adopt the
+                     * message's level under the same dedup + cap rules,
+                     * with no LLM call.
+                     */
+                    const key = normalizeAnswerKey(ans.text);
+                    if (!q.answerKeys?.includes(key) && (q.levels?.length || 0) < MAX_LEVELS_PER_QUESTION) {
+                        await SelfLearningModel.pushOwnershipLevel(thread._id, pair.key, ans.level, key);
+                        q.levels.push(ans.level);
+                        q.answerKeys ||= [];
+                        q.answerKeys.push(key);
+                    }
+                    continue;
+                }
                 work.push({ thread, ownership, pair, ans });
             }
         }
@@ -524,6 +1135,7 @@ export async function backfillOwnershipGrades(
             .filter((mm) => mm.kind === 'anno')
             .map((mm) => ({ role: mm.role === 'user' ? 'student' : 'tutor', content: String(mm.content || '').slice(0, 800) }));
         const level = await aiTutor.runOwnershipGrading({
+            firstAttempt: w.ownership.acceptedAttempt === 1 || (w.ownership.minQ ?? 0) >= 5,
             title: (pdict[w.thread.pid] as any)?.title || String(w.thread.pid),
             code: codeOf.get(codeKey)!,
             question: w.pair.key,
@@ -534,6 +1146,11 @@ export async function backfillOwnershipGrades(
             out.failed += 1;
             continue;
         }
+        // 🚫 Manipulation → 🎓 flagged for this task; the level-0 record
+        // still lands so the walkthrough's bookkeeping stays coherent.
+        // eslint-disable-next-line no-await-in-loop
+        if (level === aiTutor.GRADER_FLAGGED) await SelfLearningModel.flagIntegrity(w.thread._id, 'own', '');
+        const storeLevel = level === aiTutor.GRADER_FLAGGED ? 0 : level;
         if (!q) {
             q = {
                 question: w.pair.key, line: w.pair.line, at: w.pair.at || new Date(), levels: [], answerKeys: [],
@@ -541,9 +1158,9 @@ export async function backfillOwnershipGrades(
             await SelfLearningModel.pushOwnershipQuestion(w.thread._id, q);
             w.ownership.questions.push(q);
         }
-        await SelfLearningModel.pushOwnershipLevel(w.thread._id, w.pair.key, level, key);
-        await SelfLearningModel.setMessageLevel(w.thread._id, w.ans.index, level);
-        q.levels.push(level);
+        await SelfLearningModel.pushOwnershipLevel(w.thread._id, w.pair.key, storeLevel, key);
+        await SelfLearningModel.setMessageLevel(w.thread._id, w.ans.index, storeLevel);
+        q.levels.push(storeLevel);
         if (!q.answerKeys) q.answerKeys = [];
         q.answerKeys.push(key);
         out.graded += 1;
@@ -657,8 +1274,16 @@ export async function backfillFixConversionGrades(
             out.failed += 1;
             continue;
         }
+        // 🚫 Manipulation → 🔧 flagged for this task.
+        // eslint-disable-next-line no-await-in-loop
+        if (level === aiTutor.GRADER_FLAGGED) await SelfLearningModel.flagIntegrity(w.thread._id, 'fix', '');
         await SelfLearningModel.pushFixConvTransition(w.thread._id, {
-            fromRid: from.rid, toRid: to.rid, trial: w.cand.trial, level, asked: w.cand.msgIdx.length, at: to.at,
+            fromRid: from.rid,
+            toRid: to.rid,
+            trial: w.cand.trial,
+            level: level === aiTutor.GRADER_FLAGGED ? 0 : level,
+            asked: w.cand.msgIdx.length,
+            at: to.at,
         });
         out.graded += 1;
     }
@@ -696,7 +1321,7 @@ export async function backfillConceptTransferGrades(
     const tagDocs = await problem.getMulti(domainId, { docId: { $in: progPids } }).project({ docId: 1, tag: 1 }).toArray();
     const tagsByPid = new Map<number, string[]>();
     for (const d of tagDocs as any[]) tagsByPid.set(d.docId, (d.tag || []).map((t: any) => String(t)));
-    if (![...tagsByPid.values()].some((t) => t.length)) return out; // untagged session: nothing testable
+    const sessionUntagged = ![...tagsByPid.values()].some((t) => t.length);
     const threads = await getSessionThreads(domainId, sdoc.docId);
     const threadOf = new Map<string, TutorThreadDoc>();
     for (const t of threads) threadOf.set(`${t.uid}:${t.pid}`, t);
@@ -722,6 +1347,15 @@ export async function backfillConceptTransferGrades(
             .map((m) => ({ role: m.role === 'user' ? 'student' : 'tutor', content: String(m.content || '').slice(0, 600) }));
     };
     const allUids = [...rowsOf.keys()].filter((u) => u !== sdoc.owner);
+    if (sessionUntagged) {
+        // The spec's edge case, session-wide: with no knowledge points
+        // among the tasks, every student is UNTESTABLE (full credit).
+        for (const uid of allUids) {
+            // eslint-disable-next-line no-await-in-loop
+            await SelfLearningModel.setTransferPlan(domainId, sdoc.docId, uid, { candidates: 0, untestable: true, at: new Date() });
+        }
+        return out;
+    }
     const surfWork: { uid: number, pid: number, thread: TutorThreadDoc }[] = [];
     for (const uid of allUids) {
         const rows = rowsOf.get(uid)!;
@@ -734,6 +1368,7 @@ export async function backfillConceptTransferGrades(
             surfWork.push({ uid, pid, thread: th });
         }
     }
+    const surfDirty = new Set<number>();
     out.total = surfWork.length; // judge items are known only after surfacing
     const unames = allUids.length ? await user.getList(domainId, allUids) : {};
     const label = (uid: number) => (unames as any)[uid]?.uname || String(uid);
@@ -752,6 +1387,7 @@ export async function backfillConceptTransferGrades(
         });
         if (idx === null) {
             out.failed += 1;
+            surfDirty.add(w.uid); // this student's plan can't settle yet
             continue; // surfacedKp stays absent -> retried next evaluation
         }
         const names = idx.map((n) => tagsByPid.get(w.pid)![n - 1]).filter(Boolean);
@@ -769,11 +1405,23 @@ export async function backfillConceptTransferGrades(
             const th = threadOf.get(`${uid}:${pid}`);
             if (th?.surfacedKp?.names?.length) surfacedByPid.set(pid, th.surfacedKp.names);
         }
-        if (!surfacedByPid.size) continue;
+        const cands = surfacedByPid.size
+            ? extractTransferCandidates(engagements, tagsByPid, surfacedByPid, resolved) : [];
+        // 🧠 The student's PLAN: how many re-encounters exist, and — only
+        // when this student's surfacing is fully settled — whether they
+        // are UNTESTABLE (zero candidates → the edge case's full credit).
+        // eslint-disable-next-line no-await-in-loop
+        await SelfLearningModel.setTransferPlan(domainId, sdoc.docId, uid, {
+            candidates: cands.length,
+            untestable: !surfDirty.has(uid) && cands.length === 0,
+            at: new Date(),
+        });
+        if (!cands.length) continue;
+        // eslint-disable-next-line no-await-in-loop
         const prog = await SelfLearningModel.getProgress(domainId, sdoc.docId, uid);
         const doneConcepts = new Set((prog?.transfer?.assessments || []).map((a) => a.concept));
         let count = prog?.transfer?.assessments?.length || 0;
-        for (const cand of extractTransferCandidates(engagements, tagsByPid, surfacedByPid, resolved)) {
+        for (const cand of cands) {
             if (doneConcepts.has(cand.concept)) continue;
             if (count >= MAX_TRANSFER_PER_STUDENT) break;
             count += 1;
@@ -812,8 +1460,14 @@ export async function backfillConceptTransferGrades(
             out.failed += 1;
             continue;
         }
+        // 🚫 Manipulation → this concept's assessment is a flagged 0 (🧠 zeroes).
         await SelfLearningModel.pushTransferAssessment(domainId, sdoc.docId, w.uid, {
-            concept: w.cand.concept, fromPid: w.cand.fromPid, toPid: w.cand.toPid, level, at: new Date(),
+            concept: w.cand.concept,
+            fromPid: w.cand.fromPid,
+            toPid: w.cand.toPid,
+            level: level === aiTutor.GRADER_FLAGGED ? 0 : level,
+            at: new Date(),
+            ...(level === aiTutor.GRADER_FLAGGED ? { flagged: true } : {}),
         });
         out.graded += 1;
     }
@@ -915,9 +1569,13 @@ export async function backfillReasoningGrades(
             out.failed += 1;
             continue;
         }
-        await SelfLearningModel.setMessageRlevel(w.thread._id, w.idx, level);
-        await SelfLearningModel.pushReasoningLevel(w.thread._id, level, key);
-        state.levels.push(level);
+        // 🚫 Manipulation → 🧩 flagged for this task.
+        // eslint-disable-next-line no-await-in-loop
+        if (level === aiTutor.GRADER_FLAGGED) await SelfLearningModel.flagIntegrity(w.thread._id, 'rea', '');
+        const rlv = level === aiTutor.GRADER_FLAGGED ? 0 : level;
+        await SelfLearningModel.setMessageRlevel(w.thread._id, w.idx, rlv);
+        await SelfLearningModel.pushReasoningLevel(w.thread._id, rlv, key);
+        state.levels.push(rlv);
         if (!state.answerKeys) state.answerKeys = [];
         state.answerKeys.push(key);
         out.graded += 1;
@@ -1012,48 +1670,158 @@ export async function backfillInitiativeGrades(
             out.failed += 1;
             continue;
         }
-        await SelfLearningModel.setInitiative(w.thread._id, level);
+        // 🚫 Manipulation → 💡 flagged for this task.
+        // eslint-disable-next-line no-await-in-loop
+        if (level === aiTutor.GRADER_FLAGGED) await SelfLearningModel.flagIntegrity(w.thread._id, 'ini', '');
+        await SelfLearningModel.setInitiative(w.thread._id, level === aiTutor.GRADER_FLAGGED ? 0 : level);
         out.graded += 1;
     }
     return out;
 }
 
 
+/**
+ * 📈 INDEPENDENCE-TRAJECTORY grading: ONE whole-session judgment per
+ * student, over their chronological task digests. Cached by a BASIS key
+ * (task count : record count : answered-exchange count): the LLM is
+ * called only for students whose history changed since the stored
+ * judgment, so a settled session costs zero calls. Owner and course
+ * staff are skipped. Failures leave the old judgment (or none) in place
+ * and are retried next evaluation.
+ */
+export async function backfillTrajectoryGrades(
+    domainId: string,
+    sdoc: SelfLearningDoc,
+    onProgress?: (p: OwnershipBackfillProgress) => Promise<void> | void,
+): Promise<{ graded: number, failed: number, total: number }> {
+    const out = { graded: 0, failed: 0, total: 0 };
+    if (!aiTutor.tutorEnabled() || !aiTutor.tutorConfigured()) return out;
+    const pids = sdoc.pids || [];
+    if (!pids.length) return out;
+    const pdict = await problem.getList(domainId, pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
+    const progPids = programmingPidsOf(sdoc, pdict);
+    if (!progPids.length) return out;
+    const recs = await record.getMulti(domainId, {
+        pid: { $in: progPids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+    }).project({ uid: 1, pid: 1, status: 1, score: 1 }).limit(200000).toArray();
+    const rowsOf = new Map<number, { pid: number, at: Date, accepted: boolean, score: number }[]>();
+    for (const r of recs as any[]) {
+        if (!rowsOf.has(r.uid)) rowsOf.set(r.uid, []);
+        rowsOf.get(r.uid)!.push({
+            pid: r.pid, at: r._id.getTimestamp(), accepted: r.status === STATUS.STATUS_ACCEPTED, score: r.score || 0,
+        });
+    }
+    const threads = await getSessionThreads(domainId, sdoc.docId);
+    const msgsByUidPid = new Map<number, Map<number, TutorMessage[]>>();
+    for (const t of threads) {
+        if (!msgsByUidPid.has(t.uid)) msgsByUidPid.set(t.uid, new Map());
+        msgsByUidPid.get(t.uid)!.set(t.pid, t.messages || []);
+    }
+    const progressDocs = await collProgress.find({ domainId, ssid: sdoc.docId }).project({ uid: 1, trajectory: 1 }).toArray();
+    const trajOf = new Map((progressDocs as any[]).map((p) => [p.uid, p.trajectory]));
+    const uids = [...rowsOf.keys()].filter((uid) => uid !== sdoc.owner);
+    const udict: any = uids.length ? await user.getList(domainId, uids) : {};
+    const labelOf = (pid: number) => String((pdict[pid] as any)?.pid || (pdict[pid] as any)?.title || pid);
+    interface Item { uid: number, digests: ReturnType<typeof trajectoryTaskDigestsOf>, basis: string }
+    const work: Item[] = [];
+    for (const uid of uids) {
+        const udoc: any = udict[uid];
+        try {
+            const staff = udoc && typeof udoc.hasPerm === 'function'
+                && (udoc.hasPerm(PERM.PERM_EDIT_HOMEWORK) || udoc.hasPerm(PERM.PERM_CREATE_HOMEWORK));
+            if (staff) continue;
+        } catch (e) { /* keep */ }
+        const rows = rowsOf.get(uid) || [];
+        // ⭐⭐ Every task accepted first-try → the session collapses to
+        // 🏆 40 + 🎓 60 and 📈 is n/a: skip the (unused) LLM judgment.
+        // eslint-disable-next-line ts/no-use-before-define
+        const faPids = firstAttemptAcceptedPids(rows);
+        if (progPids.length && progPids.every((pid) => faPids.has(pid))) continue;
+        const digests = trajectoryTaskDigestsOf(rows, msgsByUidPid.get(uid) || new Map(), labelOf);
+        if (!digests.length) continue;
+        const basis = trajectoryBasisOf(digests, rows.length);
+        if (trajOf.get(uid)?.basis === basis) continue; // unchanged history — cached judgment stands
+        work.push({ uid, digests, basis });
+    }
+    out.total = work.length;
+    if (!work.length) return out;
+    let done = 0;
+    for (const w of work) {
+        done += 1;
+        try {
+            await onProgress?.({
+                uid: w.uid,
+                uname: (udict as any)[w.uid]?.uname || String(w.uid),
+                pid: `${w.digests.length}`,
+                done,
+                total: out.total,
+                graded: out.graded,
+                failed: out.failed,
+            });
+        } catch (e) { /* best-effort */ }
+        // eslint-disable-next-line no-await-in-loop
+        const level = await aiTutor.runTrajectoryGrading({ tasks: w.digests });
+        if (level === null) {
+            out.failed += 1;
+            continue;
+        }
+        // 🚫 Manipulation anywhere in the digests → 📈 = 0, flagged.
+        // eslint-disable-next-line no-await-in-loop
+        await SelfLearningModel.setTrajectory(domainId, sdoc.docId, w.uid, {
+            level: level === aiTutor.GRADER_FLAGGED ? 0 : level,
+            at: new Date(),
+            basis: w.basis,
+            ...(level === aiTutor.GRADER_FLAGGED ? { flagged: true } : {}),
+        });
+        out.graded += 1;
+    }
+    return out;
+}
 
 /**
  * ⭐ Budgets are FROZEN onto the thread when its walkthrough is created,
- * so a policy deepening (5–6 → 8–10 for first-attempt acceptances, whose
- * Ownership carries 60 of that task’s 100 points) must be inherited by threads
- * that already exist: raise the stored budget in place, and REOPEN a
- * walkthrough that was closed under the smaller budget — otherwise the
- * students the track was built for could never be asked the deeper
- * questions, capping the 60-point ownership part at a 5–6-question sample
- * (or at the zeros of questions they never answered, which answering now
- * heals). Guided (non-first-attempt) budgets are unchanged.
+ * so a POLICY CHANGE must be inherited by threads that already exist —
+ * in either direction:
+ *   - a deepened budget raises the stored one and REOPENS a walkthrough
+ *     that was closed under the smaller budget, so its student can still
+ *     be asked the newly-owed questions;
+ *   - a shallower budget (e.g. the first-attempt track settling on the
+ *     rubric's 5..6) lowers the stored one and CLOSES a walkthrough that
+ *     already reached the new maximum, so no student is asked beyond the
+ *     current policy. Questions already asked and answers already graded
+ *     are never removed — every recorded level keeps counting in the
+ *     🎓 mean.
  */
 async function reconcileOwnershipBudget(thread: TutorThreadDoc): Promise<void> {
     const own = thread.ownership as any;
     if (!own) return;
     const budget = ownershipBudget((own.acceptedAttempt || 1) === 1);
-    if ((own.maxQ || 0) >= budget.max) return; // already current (or deeper)
-    const reopen = !!own.done && (own.questions?.length || 0) < budget.min;
+    if ((own.maxQ || 0) === budget.max && (own.minQ || 0) === budget.min) return; // already current
+    const asked = own.questions?.length || 0;
+    const reopen = !!own.done && asked < budget.min;
+    const close = !own.done && asked >= budget.max;
     await SelfLearningModel.updateOwnershipBudget(thread._id, budget.min, budget.max, reopen);
     own.minQ = budget.min;
     own.maxQ = budget.max;
     if (reopen) own.done = false;
+    if (close) {
+        await SelfLearningModel.setOwnershipDone(thread._id);
+        own.done = true;
+    }
 }
 
 /**
  * 🎓 The ownership question budget, fixed once per task at its FIRST
  * acceptance: 5..6 questions when that acceptance was the very first
- * attempt, 2..3 otherwise. The tutor must keep asking below min, may stop
- * between min and max, and the server refuses past max.
+ * attempt, 2..3 otherwise (the rubric's spec). The tutor must keep asking
+ * below min, may stop between min and max, and the server refuses past
+ * max.
  */
 export function ownershipBudget(firstAttempt: boolean): { min: number, max: number } {
-    // ⭐ First-attempt acceptances get a DEEPER walkthrough: on the
-    // per-task rubric, Ownership carries 60 of a first-attempt task’s
-    // 100 points, so the tutor asks more questions to earn it.
-    return firstAttempt ? { min: 8, max: 10 } : { min: 2, max: 3 };
+    // ⭐ A first-attempt acceptance skipped the whole failure-phase
+    // dialogue, so its walkthrough digs deeper: 5..6 questions instead of
+    // the guided track's 2..3.
+    return firstAttempt ? { min: 5, max: 6 } : { min: 2, max: 3 };
 }
 
 /**
@@ -1094,7 +1862,13 @@ export async function acceptedOnFirstAttempt(
  *   (tradeoff, alternative, complexity). The 2→3 boundary discriminates
  *   authorship.
  * Per task: the mean level over every graded response, with an asked-but-
- * never-answered question counting as one level-0 response. The component
+ * never-answered question counting as one level-0 response.
+ * ⭐ THE CURRENT RUBRIC consumes exactly that per-task mean: taskRubricOf
+ * turns taskMeanOf(state) into the task's 🎓 points (level × 5, out of
+ * 20), with no-walkthrough tasks charged 0. What follows below —
+ * ownershipOf and the session-mean mapping — is the RETIRED 7-component
+ * aggregation, kept dormant.
+ * (Retired semantics:) The component
  * is the mean of those task means over the programming tasks that have at
  * least one ownership question, mapped onto SESSION_OWNERSHIP_MAX
  * (÷ 4 × 10), one decimal. Tasks never accepted ask no ownership
@@ -1138,30 +1912,21 @@ export function ownershipOf(
     return Math.round((mean / OWNERSHIP_LEVEL_MAX) * max * 10) / 10;
 }
 
-/** 🔧 The Fix-Conversion component's scale: guided fixes map onto 0..15. */
+/** 🔧 RETIRED (old 7-component rubric): guided fixes mapped onto 0..15. */
 export const SESSION_FIXCONV_MAX = 15;
-/** The LLM grades each guidance→fix transition on 0..FIXCONV_LEVEL_MAX. */
-export const FIXCONV_LEVEL_MAX = 4;
 /** Cap of judged transitions per task (bounds LLM cost and gaming). */
 export const MAX_FIXCONV_PER_TASK = 12;
-
-/**
- * 🔧 The trial penalty across multiple guided resubmissions of one task:
- * the 1st guidance→fix trial counts in full, the 2nd ×0.8, the 3rd ×0.6,
- * and every trial after that ×0.5.
- */
-export function fixConvPenalty(trial: number): number {
-    if (trial <= 1) return 1;
-    if (trial === 2) return 0.8;
-    if (trial === 3) return 0.6;
-    return 0.5;
-}
 
 /**
  * One task's PENALTY-WEIGHTED mean fix-conversion level (0..4): each judged
  * transition contributes level × fixConvPenalty(trial); null when the task
  * has no judged transitions. The teacher's hover breakdown shows the same
  * per-task numbers fixConvOf aggregates.
+ */
+/**
+ * ⭐ THE CURRENT RUBRIC consumes exactly this per-task weighted mean:
+ * taskRubricOf turns taskFixConvMeanOf(state) into the task's 🔧 points
+ * (level × 3.75, out of 15), with no-transition tasks charged 0.
  */
 export function taskFixConvMeanOf(state: { transitions: { level: number, trial: number }[] } | undefined | null): number | null {
     if (!state || !state.transitions?.length) return null;
@@ -1379,10 +2144,8 @@ export function trajectoryComponentOf(info: TrajectoryInfo | null): number | nul
     return Math.round((info.score / 100) * SESSION_TRAJECTORY_MAX * 10) / 10;
 }
 
-/** 🧠 The Concept-Transfer component's scale: transfer maps onto 0..15. */
+/** 🧠 RETIRED (old 7-component rubric): the Concept-Transfer scale, 0..15. */
 export const SESSION_TRANSFER_MAX = 15;
-/** The LLM grades each concept re-encounter on 0..TRANSFER_LEVEL_MAX. */
-export const TRANSFER_LEVEL_MAX = 4;
 /** Cap of transfer assessments per student per session (bounds LLM cost). */
 export const MAX_TRANSFER_PER_STUDENT = 20;
 
@@ -1467,8 +2230,6 @@ export function extractTransferCandidates(
 
 /** 🧩 The Reasoning-Quality component's scale: 0..25. */
 export const SESSION_REASONING_MAX = 25;
-/** The LLM grades each failure-phase answer on 0..REASONING_LEVEL_MAX. */
-export const REASONING_LEVEL_MAX = 4;
 /** Cap of graded failure answers per task (anti-spam, bounds LLM cost). */
 export const MAX_REASONING_PER_TASK = 24;
 
@@ -1489,10 +2250,8 @@ export function reasoningOf(states: { levels: number[] }[] | undefined | null): 
     return Math.round((mean / REASONING_LEVEL_MAX) * SESSION_REASONING_MAX * 10) / 10;
 }
 
-/** 💡 The Self-Diagnostic-Initiative component's scale: 0..5. */
+/** 💡 RETIRED (old 7-component rubric): the Self-Diagnostic-Initiative scale, 0..5. */
 export const SESSION_INITIATIVE_MAX = 5;
-/** The LLM grades each task's first engagement on 0..INITIATIVE_LEVEL_MAX. */
-export const INITIATIVE_LEVEL_MAX = 4;
 
 /**
  * 💡 SELF-DIAGNOSTIC INITIATIVE — does the student show up with a
@@ -1506,7 +2265,6 @@ export function initiativeOf(levels: number[] | undefined | null): number | null
     const mean = list.reduce((a, b) => a + b, 0) / list.length;
     return Math.round((mean / INITIATIVE_LEVEL_MAX) * SESSION_INITIATIVE_MAX * 10) / 10;
 }
-
 
 /** Every rubric component of one student, from their per-task bests and ownership states. */
 export function componentsOf(
@@ -1546,10 +2304,14 @@ export function componentsOf(
  * aggregates; the TOTAL comes from the per-task composites alone.
  */
 export const TASK_SCORE_MAX = 100;
-export const FIRST_ATTEMPT_ACH_MAX = 40;
-export const FIRST_ATTEMPT_OWN_MAX = 60;
 
-/** Per-task reasoning mean (0..4) from the thread's failure-answer levels; null when nothing graded. */
+/**
+ * ⭐ THE CURRENT RUBRIC consumes exactly this per-task mean: taskRubricOf
+ * turns reasoningTaskMeanOf(state) into the task's 🧩 points (level ×
+ * 7.5, out of 30), with nothing-graded tasks charged 0. Per-task
+ * reasoning mean (0..4) from the thread's failure-answer levels; null
+ * when nothing graded.
+ */
 export function reasoningTaskMeanOf(state: { levels: number[] } | undefined | null): number | null {
     const levels = (state?.levels || []).map((l) => Math.min(REASONING_LEVEL_MAX, Math.max(0, +l || 0)));
     if (!levels.length) return null;
@@ -1557,7 +2319,13 @@ export function reasoningTaskMeanOf(state: { levels: number[] } | undefined | nu
 }
 
 /**
- * 🧠 Transfer's null has THREE causes, and only one deserves a 0:
+ * 🧠 RETIRED note (old 7-component rubric): the three-cause analysis
+ * below described a RENORMALIZATION for the untestable case. THE CURRENT
+ * RUBRIC replaces it with the spec's edge case — an untestable student
+ * (no relevant knowledge points among the tasks, or none re-encountered)
+ * receives the FULL TRANSFER_SHARE (15) directly (transferSubScoreOf);
+ * assessed → mean × 3.75; pending → 0. The states themselves survive:
+ * Transfer's null has THREE causes, and only one deserves a 0:
  *   'assessed'   — ≥ 1 re-encounter judged: the value is real;
  *   'pending'    — testable but not yet graded (surfacing incomplete, or
  *                  planned candidates await judging): pending-0, resolves
@@ -2103,9 +2871,21 @@ class SelfLearningEditHandler extends Handler {
             throw new ValidationError('pids', null, `Only programming tasks can be added to a self-learning session. Remove: ${rejected.join(', ')}`);
         }
         if (this.sdoc) {
-            await SelfLearningModel.edit(domainId, this.sdoc.docId, {
-                title, content, pids, ...schedule,
-            });
+            const patch: any = { title, content, pids, ...schedule };
+            /*
+             * 📊 Deadline moved: results finality follows the schedule AS
+             * IT IS NOW. If the new hard end (endAt + extension) is back in
+             * the future while the stored results are marked final, demote
+             * them to provisional — the automatic post-deadline sweep skips
+             * 'results.final: true' sessions, so without this the NEW
+             * deadline passing would never trigger the evaluation again.
+             * (Dotted key: flip the flag in place, keep the stored table.)
+             */
+            const newHardEnd = new Date(schedule.endAt.getTime() + Math.max(0, Math.round((schedule.extensionDays || 0) * DAY_MS)));
+            if (this.sdoc.results?.final && newHardEnd > new Date()) {
+                patch['results.final'] = false;
+            }
+            await SelfLearningModel.edit(domainId, this.sdoc.docId, patch);
             this.response.redirect = this.url('self_learning_detail', { ssid: this.sdoc.docId });
         } else {
             const ssid = await SelfLearningModel.add(domainId, this.user._id, title, content, pids, schedule);
@@ -2124,12 +2904,17 @@ class SelfLearningEditHandler extends Handler {
 /*  Session results: every student's summed score (auto after deadline) */
 /* ------------------------------------------------------------------ */
 /*
- * THE evaluation entry point — every way of "evaluating the students" is
- * this one function:
+ * THE evaluation funnel — every way of "evaluating the students" runs the
+ * SAME function, runSessionEvaluation (below), which claims the shared
+ * evalJob, calls computeSessionResults exactly once, stores the results,
+ * and records the job outcome the teacher page polls:
  *   1. the teacher's "Evaluate all students now" button (postRecompute);
  *   2. the automatic post-deadline sweep (finalizeDueSessions, on a timer);
- *   3. the on-view finalization when a teacher opens an ended session.
- * The scoring itself is delegated to scoreRecords / sessionTaskMeanTotal (the
+ *   3. the on-view finalization when a teacher opens an ended session
+ *      (including the stale-schema re-derivation).
+ * computeSessionResults itself is called from NOWHERE else, so the three
+ * triggers cannot diverge in scoring, finality, storage, or presentation.
+ * The scoring is delegated to scoreRecords / sessionTaskMeanTotal (the
  * shared rubric near the top of this file), which the student's own score
  * card also uses — so changing the rubric there and pressing the button is
  * a faithful preview of what the automatic evaluation will store. Bonus
@@ -2184,15 +2969,67 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
      * Pure record+thread arithmetic — no LLM.
      */
     /*
-     * ROLLBACK: the evaluation is the original one — per-task judged
-     * scores (late tier applied) and their SUM. The rubric machinery
-     * (components, per-task 40/60, LLM backfills) stays in the codebase,
-     * dormant, but is neither run nor reported here.
+     * ⭐ THE RUBRIC (Blocks A & B): every task is worth 100 = 🏆30 +
+     * 🎓20 + 🔧15 + 🧩30 + 💡5; its score is the SUM of the earned
+     * sub-rubric points (🏆 = judged × 30%, 🎓 = mean walkthrough level
+     * × 5; the 🔧/🧩/💡 placeholders earn nothing yet). 🅰 Block A =
+     * (Σ task scores) / (N × 100) × 75; 🅱 Block B (cross-task, 25) is
+     * not implemented yet and counts 0; the total (0..100) is 🅰 + 🅱.
      */
+    // 🎓/🔧 The stored tutoring evidence, uid → pid → per-task inputs.
+    interface Evidence {
+        own?: { level: number | null, asked: number, graded: number, flagged?: boolean };
+        fix?: { level: number | null, judged: number, flagged?: boolean };
+        rea?: { level: number | null, judged: number, flagged?: boolean };
+        ini?: { level: number | null, flagged?: boolean };
+    }
+    const evByUidPid = new Map<number, Map<number, Evidence>>();
+    const evOf = (uid: number, pid: number): Evidence => {
+        let m = evByUidPid.get(uid);
+        if (!m) {
+            m = new Map();
+            evByUidPid.set(uid, m);
+        }
+        let e = m.get(pid);
+        if (!e) {
+            e = {};
+            m.set(pid, e);
+        }
+        return e;
+    };
+    for (const t of await getOwnershipIn(domainId, sdoc.docId)) {
+        const e = evOf(t.uid, t.pid);
+        if (t.ownership) {
+            e.own = {
+                level: taskMeanOf(t.ownership),
+                asked: t.ownership.questions?.length || 0,
+                graded: (t.ownership.questions || []).reduce((a, q) => a + (q.levels?.length || 0), 0),
+            };
+        }
+        if (t.fixconv?.transitions?.length) {
+            e.fix = { level: taskFixConvMeanOf(t.fixconv), judged: t.fixconv.transitions.length };
+        }
+        if (t.reasoning?.levels?.length) {
+            e.rea = { level: reasoningTaskMeanOf(t.reasoning), judged: t.reasoning.levels.length };
+        }
+        if (typeof t.initiative?.level === 'number') {
+            e.ini = { level: t.initiative.level };
+        }
+        // 🚫 Manipulation flags override any clean evidence on the same
+        // slot: the corresponding sub-rubric scores 0 for this task.
+        const ig = t.integrity;
+        if (ig?.own) e.own = { level: 0, asked: e.own?.asked || 0, graded: e.own?.graded || 0, flagged: true };
+        if (ig?.fix) e.fix = { level: 0, judged: e.fix?.judged || 0, flagged: true };
+        if (ig?.rea) e.rea = { level: 0, judged: e.rea?.judged || 0, flagged: true };
+        if (ig?.ini) e.ini = { level: 0, flagged: true };
+    }
     const result: SessionResultRow[] = [];
     for (const uid of studentUids) {
         const udoc: any = udict[uid];
         const m = scoreRecords(sdoc, rowsOf.get(uid) || []);
+        // ⭐ First-attempt truth from the same chronological record history
+        // the walkthrough budget classifies on.
+        const faSet = firstAttemptAcceptedPids(rowsOf.get(uid) || []);
         const scores: SessionResultRow['scores'] = {};
         let attempts = 0;
         for (const pid of pids) {
@@ -2202,8 +3039,67 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
                 attempts += v.attempts;
             }
         }
-        // The original total: the sum of per-task effective scores.
-        const total = Math.round(progPids.reduce((acc, pid) => acc + (m.get(pid)?.effective || 0), 0) * 10) / 10;
+        // One rubric breakdown per programming task (unattempted → 0, still
+        // in Block A's denominator) — through THE shared taskRubricOf,
+        // fed the 🎓 walkthrough evidence.
+        const evOfUid = evByUidPid.get(uid);
+        const breakdowns = progPids.map((pid) => {
+            const e = evOfUid?.get(pid);
+            return taskRubricOf(
+                pid, m.get(pid) || null, e?.own || null, e?.fix || null, e?.rea || null, e?.ini || null, faSet.has(pid),
+            );
+        });
+        const taskScores: Record<string, number> = {};
+        const own: NonNullable<SessionResultRow['own']> = {};
+        const fix: NonNullable<SessionResultRow['fix']> = {};
+        const rea: NonNullable<SessionResultRow['rea']> = {};
+        const ini: NonNullable<SessionResultRow['ini']> = {};
+        const fa: NonNullable<SessionResultRow['fa']> = {};
+        for (const b of breakdowns) {
+            taskScores[String(b.pid)] = b.score;
+            const e = evOfUid?.get(b.pid);
+            // pts = the EXACT numbers Σ was built from (round1 of the
+            // unrounded means × the share/4) — the 🎓/🔧 cells show these,
+            // so the Σ column always equals the visible parts sum even in
+            // thirds cases where re-deriving from the 2-decimal level
+            // would drift 0.1.
+            own[String(b.pid)] = {
+                level: b.ownLevel, pts: b.ownPts, asked: e?.own?.asked || 0, graded: e?.own?.graded || 0,
+                ...(e?.own?.flagged ? { flagged: true } : {}),
+            };
+            fix[String(b.pid)] = {
+                level: b.fixLevel, pts: b.fixPts, judged: e?.fix?.judged || 0,
+                ...(e?.fix?.flagged ? { flagged: true } : {}),
+            };
+            rea[String(b.pid)] = {
+                level: b.reaLevel, pts: b.reaPts, judged: e?.rea?.judged || 0,
+                ...(e?.rea?.flagged ? { flagged: true } : {}),
+            };
+            ini[String(b.pid)] = { level: b.iniLevel, pts: b.iniPts, ...(e?.ini?.flagged ? { flagged: true } : {}) };
+            if (b.firstAttempt) fa[String(b.pid)] = true;
+        }
+        // ⭐⭐ Every task accepted first-try → the whole session rescores
+        // as 🏆 40 + 🎓 60; the blocks (and 📈/🧠) do not apply.
+        const allFa = allFirstAttemptSessionOf(breakdowns);
+        const blockA = blockAOf(breakdowns);
+        // 📈 The student's whole-session trajectory judgment, stored on
+        // their progress doc by backfillTrajectoryGrades.
+        const trjLevelRaw = progressOf.get(uid)?.trajectory?.level;
+        const trjLevel = typeof trjLevelRaw === 'number'
+            ? Math.min(TRAJECTORY_LEVEL_MAX, Math.max(0, trjLevelRaw)) : null;
+        const trjPts = trajectoryPtsOf(trjLevel);
+        // 🧠 Assessments + the backfill's plan → assessed / pending /
+        // untestable (the edge case's full 15), zero extra queries.
+        const trf = transferSubScoreOf(
+            progressOf.get(uid)?.transfer?.assessments,
+            progressOf.get(uid)?.transfer?.plan,
+        );
+        const blockB = blockBOf({ level: trjLevel }, trf);
+        // ⏱ The tiered late rule lands HERE — on the total (the collapsed
+        // ⭐⭐ total included), keyed to the last counted submission.
+        const lp = latePenaltyOf(sdoc, rowsOf.get(uid) || []);
+        const totalBase = allFa ? allFa.total : round1(blockA + blockB);
+        const total = lp ? round1(totalBase * lp.factor) : totalBase;
         const pg = progressOf.get(uid);
         const bonus = (pg?.bonuses || [])[0];
         let bonusState = 'none';
@@ -2219,6 +3115,22 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
             uname: udoc?.uname || String(uid),
             name: `${udoc?.firstName || ''} ${udoc?.lastName || ''}`.trim(),
             scores,
+            taskScores,
+            own,
+            fix,
+            rea,
+            ini,
+            fa,
+            trj: {
+                level: trjLevel,
+                pts: trjPts,
+                ...(progressOf.get(uid)?.trajectory?.flagged ? { flagged: true } : {}),
+            },
+            trf,
+            blockA,
+            blockB,
+            ...(allFa ? { allFa: true, sessAch: allFa.ach, sessOwn: allFa.own } : {}),
+            ...(lp ? { lateFactor: lp.factor, lateHours: lp.hours } : {}),
             total,
             attempts,
             done: (pg?.done || []).filter((x) => pids.includes(x)).length,
@@ -2228,16 +3140,256 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
     }
     result.sort((a, b) => b.total - a.total || a.uname.localeCompare(b.uname));
     const results: SessionResults = {
-        computedAt: new Date(), final, maxTotal: progPids.length * 100, rows: result,
+        computedAt: new Date(),
+        final,
+        rubric: SESSION_RUBRIC_VERSION,
+        maxTotal: SESSION_TOTAL_MAX,
+        blockAMax: BLOCK_A_MAX,
+        blockBMax: BLOCK_B_MAX,
+        taskMax: TASK_RUBRIC_MAX,
+        achievementShare: ACHIEVEMENT_SHARE,
+        ownershipShare: OWNERSHIP_SHARE,
+        fixconvShare: FIXCONV_SHARE,
+        reasoningShare: REASONING_SHARE,
+        initiativeShare: INITIATIVE_SHARE,
+        faAchShare: FIRST_ATTEMPT_ACH_MAX,
+        faOwnShare: FIRST_ATTEMPT_OWN_MAX,
+        blockAEarnable: BLOCK_A_EARNABLE,
+        trajectoryShare: TRAJECTORY_SHARE,
+        transferShare: TRANSFER_SHARE,
+        blockBEarnable: BLOCK_B_EARNABLE,
+        rows: result,
     };
     await SelfLearningModel.edit(domainId, sdoc.docId, { results });
     return results;
 }
 
 /**
+ * ⚛️ Atomically claim the session's evaluation job (evalJob = running).
+ * Exactly ONE caller wins at any moment — the teacher's button, the
+ * post-deadline sweep and the on-view finalization all pass through this
+ * claim, so two evaluations of the same session can never run
+ * concurrently, whichever combination of triggers fires. A 'running' job
+ * older than EVAL_JOB_STALE_MS (crashed worker) may be taken over.
+ */
+async function claimEvalJob(domainId: string, ssid: ObjectId, startedAt: Date, force = false): Promise<boolean> {
+    const staleBefore = new Date(startedAt.getTime() - EVAL_JOB_STALE_MS);
+    const res = await document.coll.findOneAndUpdate(
+        {
+            domainId,
+            docType: TYPE_SELF_LEARNING,
+            docId: ssid,
+            $or: [
+                { evalJob: { $exists: false } },
+                { 'evalJob.state': { $ne: 'running' } },
+                { 'evalJob.startedAt': { $lt: staleBefore } },
+            ],
+        } as any,
+        // force rides the job doc so the status poll (and a re-attached
+        // page) can label the run as a from-scratch re-evaluation.
+        { $set: { evalJob: { state: 'running', startedAt, ...(force ? { force: true } : {}) }, updateAt: new Date() } } as any,
+    );
+    return !!res;
+}
+
+/**
+ * ⭐ The evaluation BODY — the code every trigger executes once the job
+ * is claimed, and the ONLY caller of computeSessionResults. It evaluates
+ * and stores every student's score, marks the results FINAL exactly when
+ * the session's deadline (endAt + extension) has passed at run time
+ * (sessionSchedule phase 'ended' — the identical rule for the button, the
+ * sweep and the on-view path), and records the job outcome that the
+ * teacher page's progress card polls (postEvalStatus). On failure the
+ * evalJob is marked failed (the card reports it) and the error rethrown
+ * for the caller's logging.
+ */
+async function runClaimedEvaluation(domainId: string, ssid: ObjectId, startedAt: Date, forceReset = false): Promise<SessionResults> {
+    try {
+        const sdoc = await SelfLearningModel.get(domainId, ssid);
+        if (!sdoc) throw new Error('session no longer exists');
+        /*
+         * ♻️ FORCE: the teacher's button re-evaluates EVERYTHING from
+         * scratch. All six graders are cache-driven idempotent, so one
+         * central reset of the stored judgments (levels, transitions,
+         * reasoning, initiative, surfacing, transfer, trajectory and the
+         * 🚫 flags — the walkthrough QUESTIONS and every dialogue message
+         * survive untouched) makes the normal phases below naturally
+         * re-judge every item. The 🚫 detector is deterministic, so
+         * cleared flags re-derive from the same content. A crash mid-run
+         * leaves a partially regraded state that the next (normal)
+         * evaluation simply completes.
+         */
+        if (forceReset) {
+            const rc = await SelfLearningModel.resetEvaluationState(domainId, ssid);
+            logger.info('[self-learning] ♻️ force re-evaluation %s/%s: reset %d thread(s), %d progress doc(s)',
+                domainId, ssid, rc.threads, rc.progresses);
+        }
+        /*
+         * 🎓 GRADE FIRST, aggregate second: every recorded-but-ungraded
+         * walkthrough answer is judged here (backfillOwnershipGrades —
+         * idempotent, resumable, skipped entirely when the AI tutor is
+         * disabled), with live progress written to evalJob.progress so the
+         * teacher's card can show "🎓 Now grading 3/7 · name · P5" — for
+         * EVERY trigger, button and automatic alike, because this function
+         * is the single evaluation body they all share. Answers graded
+         * live at answer time are already stored and are skipped; the 🔧
+         * guidance-to-fix, 🧩 reasoning, 💡 initiative, 📈 trajectory and
+         * 🧠 concept-transfer graders run right after on the same footing
+         * — six phases, all idempotent.
+         */
+        let own = { graded: 0, failed: 0, total: 0 };
+        let fix = { graded: 0, failed: 0, total: 0 };
+        let rea = { graded: 0, failed: 0, total: 0 };
+        let ini = { graded: 0, failed: 0, total: 0 };
+        let trj = { graded: 0, failed: 0, total: 0 };
+        let trf = { graded: 0, failed: 0, total: 0 };
+        let lastWrite = 0;
+        let lastUid = 0;
+        const writeProgress = (phase: 'own' | 'fix' | 'rea' | 'ini' | 'trj' | 'trf') => async (p: OwnershipBackfillProgress) => {
+            const t = Date.now();
+            const force = p.uid !== lastUid || p.done === 1 || p.done === p.total;
+            if (!force && t - lastWrite < 400) return;
+            lastWrite = t;
+            lastUid = p.uid;
+            await SelfLearningModel.edit(domainId, ssid, { 'evalJob.progress': { ...p, phase } } as any).catch(() => { /* best-effort */ });
+        };
+        try {
+            own = await backfillOwnershipGrades(domainId, sdoc, writeProgress('own'));
+            if (own.graded || own.failed) {
+                logger.info('[self-learning] 🎓 ownership backfill %s/%s: %d graded, %d failed of %d',
+                    domainId, ssid, own.graded, own.failed, own.total);
+            }
+        } catch (e) {
+            logger.warn('[self-learning] 🎓 ownership backfill %s/%s failed: %s', domainId, ssid, e.message);
+        }
+        // 🔧 Guidance-to-Fix: judge every not-yet-graded qualifying
+        // transition (idempotent; trial numbers reconciled to the
+        // current sequential rule as a side effect).
+        try {
+            fix = await backfillFixConversionGrades(domainId, sdoc, writeProgress('fix'));
+            if (fix.graded || fix.failed) {
+                logger.info('[self-learning] 🔧 fix-conversion backfill %s/%s: %d graded, %d failed of %d',
+                    domainId, ssid, fix.graded, fix.failed, fix.total);
+            }
+        } catch (e) {
+            logger.warn('[self-learning] 🔧 fix-conversion backfill %s/%s failed: %s', domainId, ssid, e.message);
+        }
+        // 🧩 Reasoning Quality: grade every recorded failure-phase answer
+        // that has no level yet (idempotent via rlevel + answer dedup).
+        try {
+            rea = await backfillReasoningGrades(domainId, sdoc, writeProgress('rea'));
+            if (rea.graded || rea.failed) {
+                logger.info('[self-learning] 🧩 reasoning backfill %s/%s: %d graded, %d failed of %d',
+                    domainId, ssid, rea.graded, rea.failed, rea.total);
+            }
+        } catch (e) {
+            logger.warn('[self-learning] 🧩 reasoning backfill %s/%s failed: %s', domainId, ssid, e.message);
+        }
+        // 💡 Self-Diagnostic Initiative: one grade per task, judged over
+        // the CLOSED first-engagement dialogue (idempotent — a graded
+        // thread is skipped forever).
+        try {
+            ini = await backfillInitiativeGrades(domainId, sdoc, writeProgress('ini'));
+            if (ini.graded || ini.failed) {
+                logger.info('[self-learning] 💡 initiative backfill %s/%s: %d graded, %d failed of %d',
+                    domainId, ssid, ini.graded, ini.failed, ini.total);
+            }
+        } catch (e) {
+            logger.warn('[self-learning] 💡 initiative backfill %s/%s failed: %s', domainId, ssid, e.message);
+        }
+        // 📈 Independence Trajectory: one whole-session judgment per
+        // student, re-run only when their history's basis changed.
+        try {
+            trj = await backfillTrajectoryGrades(domainId, sdoc, writeProgress('trj'));
+            if (trj.graded || trj.failed) {
+                logger.info('[self-learning] 📈 trajectory backfill %s/%s: %d graded, %d failed of %d',
+                    domainId, ssid, trj.graded, trj.failed, trj.total);
+            }
+        } catch (e) {
+            logger.warn('[self-learning] 📈 trajectory backfill %s/%s failed: %s', domainId, ssid, e.message);
+        }
+        // 🧠 Concept Transfer: surface → plan (stored per student) →
+        // judge each first re-encounter; concept-keyed, idempotent.
+        try {
+            trf = await backfillConceptTransferGrades(domainId, sdoc, writeProgress('trf'));
+            if (trf.graded || trf.failed) {
+                logger.info('[self-learning] 🧠 transfer backfill %s/%s: %d graded, %d failed of %d',
+                    domainId, ssid, trf.graded, trf.failed, trf.total);
+            }
+        } catch (e) {
+            logger.warn('[self-learning] 🧠 transfer backfill %s/%s failed: %s', domainId, ssid, e.message);
+        }
+        const final = sessionSchedule(sdoc).phase === 'ended';
+        const results = await computeSessionResults(domainId, sdoc, final);
+        // The done write keeps the summary counts so the finished card
+        // (which stays on screen) can report them — combined, plus the
+        // per-grader split for the card's detail line.
+        await SelfLearningModel.edit(domainId, ssid, {
+            evalJob: {
+                state: 'done',
+                startedAt,
+                finishedAt: new Date(),
+                progress: {
+                    done: own.total + fix.total + rea.total + ini.total + trj.total + trf.total,
+                    total: own.total + fix.total + rea.total + ini.total + trj.total + trf.total,
+                    graded: own.graded + fix.graded + rea.graded + ini.graded + trj.graded + trf.graded,
+                    failed: own.failed + fix.failed + rea.failed + ini.failed + trj.failed + trf.failed,
+                    own: { graded: own.graded, total: own.total },
+                    fix: { graded: fix.graded, total: fix.total },
+                    rea: { graded: rea.graded, total: rea.total },
+                    ini: { graded: ini.graded, total: ini.total },
+                    trj: { graded: trj.graded, total: trj.total },
+                    trf: { graded: trf.graded, total: trf.total },
+                },
+            },
+        });
+        return results;
+    } catch (e) {
+        await SelfLearningModel.edit(domainId, ssid, {
+            evalJob: {
+                state: 'failed', startedAt, finishedAt: new Date(), error: String(e.message || e).slice(0, 200),
+            },
+        }).catch(() => { /* best-effort */ });
+        throw e;
+    }
+}
+
+export interface SessionEvaluationOutcome {
+    /** True when THIS call performed the evaluation (it claimed the job and ran). */
+    ran: boolean;
+    /** True when another evaluation already held the job — nothing was started. */
+    alreadyRunning: boolean;
+    /** The freshly stored results when ran; otherwise whatever is currently stored. */
+    results: SessionResults | null;
+}
+
+/**
+ * ⭐ THE single evaluation entry point: claim the job, run the shared
+ * evaluation body, report the outcome. The post-deadline sweep and the
+ * on-view finalization await this directly; the teacher's button claims
+ * and then detaches the same body (postRecompute) so the HTTP response
+ * returns immediately — either way the code that evaluates and presents
+ * the scores is one and the same.
+ */
+export async function runSessionEvaluation(domainId: string, ssid: ObjectId, force = false): Promise<SessionEvaluationOutcome> {
+    const startedAt = new Date();
+    const claimed = await claimEvalJob(domainId, ssid, startedAt, force);
+    if (!claimed) {
+        const current = await SelfLearningModel.get(domainId, ssid);
+        if (!current) throw new NotFoundError(domainId, ssid);
+        return { ran: false, alreadyRunning: true, results: current.results || null };
+    }
+    const results = await runClaimedEvaluation(domainId, ssid, startedAt, force);
+    return { ran: true, alreadyRunning: false, results };
+}
+
+/**
  * Sessions whose hard end has passed and whose results are not final yet:
- * compute them. Runs on a timer in apply() (first worker only) and when a
- * teacher opens a closed session, so results exist whichever comes first.
+ * evaluate them through THE shared runSessionEvaluation — the exact
+ * function behind the teacher's "Evaluate all students now" button — so
+ * the deadline passing and the button produce identical results. Runs on
+ * a timer in apply() (first worker only) and when a teacher opens a
+ * closed session, so results exist whichever comes first.
  */
 export async function finalizeDueSessions(): Promise<number> {
     const now = new Date();
@@ -2249,14 +3401,14 @@ export async function finalizeDueSessions(): Promise<number> {
         const hardEnd = new Date(new Date(d.endAt).getTime() + (d.extensionDays || 0) * DAY_MS);
         if (hardEnd > now) continue;
         try {
-            const sdoc = await SelfLearningModel.get(d.domainId, d.docId);
-            if (!sdoc) continue;
-            try {
-            } catch (e) {
-                logger.warn('[self-learning] rubric backfill %s/%s failed: %s', d.domainId, d.docId, e.message);
-            }
-            await computeSessionResults(d.domainId, sdoc, true);
-            n++;
+            // eslint-disable-next-line no-await-in-loop
+            const outcome = await runSessionEvaluation(d.domainId, d.docId);
+            if (outcome.ran) n++;
+            // alreadyRunning: a concurrent evaluation (e.g. the teacher's
+            // button) holds the job; running now, it stores 'ended'-phase
+            // FINAL results itself. If it computed just before the
+            // deadline (provisional), results.final stays false and the
+            // next sweep tick finalizes.
         } catch (e) {
             logger.warn('[self-learning] results for %s/%s failed: %s', d.domainId, d.docId, e.message);
         }
@@ -2267,90 +3419,43 @@ export async function finalizeDueSessions(): Promise<number> {
 class SelfLearningDetailHandler extends Handler {
     /**
      * Teacher: (re)compute the results now — final if the session is closed,
-     * provisional otherwise. This is the SAME computeSessionResults (and
-     * therefore the same scoreRecords rubric) the automatic post-deadline
-     * sweep runs: pressing the button is an exact preview of the automatic
-     * evaluation.
+     * provisional otherwise. This runs THE shared evaluation — the atomic
+     * claim plus runClaimedEvaluation, the identical code path behind the
+     * automatic post-deadline sweep and the on-view finalization — so
+     * pressing the button IS the automatic evaluation, just on demand.
      */
     @param('ssid', Types.ObjectId)
-    async postRecompute({ domainId }, ssid: ObjectId) {
+    @param('force', Types.Boolean, true)
+    async postRecompute({ domainId }, ssid: ObjectId, forceArg = false) {
         const sdoc = await loadSession(domainId, ssid);
         if (!this.user.own(sdoc) && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)) throw new PermissionError();
-        const now = new Date();
-        const running = sdoc.evalJob?.state === 'running'
-            && now.getTime() - new Date(sdoc.evalJob.startedAt).getTime() < EVAL_JOB_STALE_MS;
-        if (!running) {
-            // Mark the job BEFORE responding so the very first status poll
-            // (and any reloaded page) already sees it.
-            await SelfLearningModel.edit(domainId, ssid, { evalJob: { state: 'running', startedAt: now } });
-            /*
-             * BACKGROUND: the evaluation runs detached from this request —
-             * refreshing the page, closing the tab or re-logging in never
-             * cancels it. Progress lives on sdoc.evalJob (postEvalStatus);
-             * a stale 'running' job (server crash mid-compute) unblocks
-             * itself after EVAL_JOB_STALE_MS.
-             * 'ended' is the terminal SessionPhase (an earlier build tested
-             * the nonexistent 'closed', so manual evaluations were never
-             * final).
-             */
+        /*
+         * The claim happens BEFORE responding so the very first status poll
+         * (and any reloaded page) already sees the running job. The
+         * evaluation itself runs DETACHED from this request — refreshing
+         * the page, closing the tab or re-logging in never cancels it.
+         * Progress lives on sdoc.evalJob (postEvalStatus); a stale
+         * 'running' job (server crash mid-compute) unblocks itself after
+         * EVAL_JOB_STALE_MS. If the automatic sweep (or another staff
+         * member) already holds the job, alreadyRunning is reported and
+         * the page's poll simply re-attaches to that run — the button and
+         * the automatic evaluation share one job, one body, one card.
+         */
+        const startedAt = new Date();
+        const claimed = await claimEvalJob(domainId, ssid, startedAt, !!forceArg);
+        if (claimed) {
             (async () => {
                 try {
-                    const fresh = await SelfLearningModel.get(domainId, ssid);
-                    if (!fresh) throw new Error('session no longer exists');
-                    // Grade every recorded-but-ungraded post-acceptance
-                    // answer FIRST (this is where the LLM time goes), then
-                    // aggregate — so pressing the button judges the stored
-                    // interaction histories, exactly as a teacher expects.
-                    let bf = { graded: 0, failed: 0, total: 0 };
-                    try {
-                        // Live progress: write who is being judged (throttled,
-                        // but never skipping a student change or the ends) so
-                        // the teacher's card — on this page or a reloaded one
-                        // — can display it.
-                        let lastWrite = 0;
-                        let lastUid = 0;
-                        const writeProgress = async (p) => {
-                            const t = Date.now();
-                            const force = p.uid !== lastUid || p.done === 1 || p.done === p.total;
-                            if (!force && t - lastWrite < 400) return;
-                            lastWrite = t;
-                            lastUid = p.uid;
-                            await SelfLearningModel.edit(domainId, ssid, { 'evalJob.progress': p } as any).catch(() => { /* best-effort */ });
-                        };
-                        // ROLLBACK: no LLM grading — the evaluation reports
-                        // raw per-task scores and their sum only. (The
-                        // writeProgress plumbing stays for a future re-enable.)
-                        void writeProgress;
-                        if (bf.graded || bf.failed) logger.info('[self-learning] rubric backfill %s/%s: %d graded, %d failed', domainId, ssid, bf.graded, bf.failed);
-                    } catch (e) {
-                        logger.warn('[self-learning] ownership backfill %s/%s failed: %s', domainId, ssid, e.message);
-                    }
-                    await computeSessionResults(domainId, fresh, sessionSchedule(fresh).phase === 'ended');
-                    // The done write keeps the summary counts so the finished
-                    // card (which now stays on screen) can report them.
-                    await SelfLearningModel.edit(domainId, ssid, {
-                        evalJob: {
-                            state: 'done',
-                            startedAt: now,
-                            finishedAt: new Date(),
-                            progress: {
-                                done: bf.total, total: bf.total, graded: bf.graded, failed: bf.failed,
-                            },
-                        },
-                    });
+                    await runClaimedEvaluation(domainId, ssid, startedAt, !!forceArg);
                 } catch (e) {
+                    // runClaimedEvaluation already recorded the failed job.
                     logger.warn('[self-learning] manual evaluation for %s/%s failed: %s', domainId, ssid, e.message);
-                    await SelfLearningModel.edit(domainId, ssid, {
-                        evalJob: {
-                            state: 'failed', startedAt: now, finishedAt: new Date(), error: String(e.message || e).slice(0, 200),
-                        },
-                    }).catch(() => { /* best-effort */ });
                 }
             })();
         }
         // XHR callers poll postEvalStatus; the no-JS form fallback just
         // returns to the page (the job keeps running in the background).
-        this.response.body = { started: !running, alreadyRunning: running };
+        this.response.body = { started: claimed, alreadyRunning: !claimed };
         this.response.redirect = this.url('self_learning_detail', { ssid });
     }
 
@@ -2371,6 +3476,9 @@ class SelfLearningDetailHandler extends Handler {
         const fixByPid = new Map<number, { transitions: { level: number, trial: number, toRid?: any }[] }>();
         const reasonByPid = new Map<number, { levels: number[] }>();
         const initByPid = new Map<number, number>();
+        // 🐛 Hoisted above its first use in the loop below (was a TDZ
+        // crash the moment any thread carried surfacedKp).
+        const surfacedByPid = new Map<number, string[]>();
         for (const t of await getOwnershipIn(domainId, sdoc.docId, uid)) {
             if (t.ownership) byPid.set(t.pid, t.ownership as any);
             if (t.fixconv) fixByPid.set(t.pid, t.fixconv as any);
@@ -2402,7 +3510,6 @@ class SelfLearningDetailHandler extends Handler {
          */
         const tagDocs = await problem.getMulti(domainId, { docId: { $in: progPids } }).project({ docId: 1, tag: 1 }).toArray();
         const tagsByPid = new Map<number, string[]>((tagDocs as any[]).map((d) => [d.docId, (d.tag || []).map((t: any) => String(t))]));
-        const surfacedByPid = new Map<number, string[]>();
         const tasks = [];
         for (const pid of progPids) {
             const state = byPid.get(pid) || null;
@@ -2529,22 +3636,9 @@ class SelfLearningDetailHandler extends Handler {
             && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
         const solvedCount = sdoc.pids.filter((pid) => psdict[pid]?.status === STATUS.STATUS_ACCEPTED).length;
         const schedule = sessionSchedule(sdoc);
-        /*
-         * ↩️ ROLLBACK MIGRATION — results computed under the retired rubric
-         * (maxTotal 100) would render nonsensically next to the sum legend.
-         * Evaluation is LLM-free and instant now, so a STAFF view simply
-         * re-derives stale-schema results on sight; the Evaluate button and
-         * the post-deadline sweep run the exact same computeSessionResults,
-         * so all three paths agree with what the table presents.
-         */
-        if (!isStudentView && sdoc.results && sdoc.results.maxTotal !== programmingPidsOf(sdoc, pdict).length * 100) {
-            try {
-                sdoc.results = await computeSessionResults(domainId, sdoc, sdoc.results.final === true);
-                logger.info('[self-learning] re-derived stale-schema results for %s/%s', domainId, sdoc.docId);
-            } catch (e) {
-                logger.warn('[self-learning] stale-results refresh failed for %s/%s: %s', domainId, sdoc.docId, e.message);
-            }
-        }
+        // (Stale-schema results re-derivation moved into the teacher
+        // results section below, where it runs through THE shared
+        // runSessionEvaluation together with the on-view finalization.)
         // One task at a time: the student's gate (finished / skipped /
         // current / locked per task) for the task list. Staff see no gate.
         let gateOf: Record<number, string> | null = null;
@@ -2584,6 +3678,7 @@ class SelfLearningDetailHandler extends Handler {
         let myScores: Record<number, TaskBest> | null = null;
         let myBest: Map<number, TaskBest> | null = null;
         let myFirstAc: Set<number> = new Set();
+        let myLateRows: { at: Date }[] = [];
         if (isStudentView && !hideProblems && this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
             try {
                 const rdocs = await record.getMulti(domainId, {
@@ -2594,6 +3689,7 @@ class SelfLearningDetailHandler extends Handler {
                 }));
                 myBest = scoreRecords(sdoc, myRows);
                 myFirstAc = firstAttemptAcceptedPids(myRows);
+                myLateRows = myRows;
                 myScores = {};
                 for (const [pid, v] of myBest) myScores[pid] = v;
             } catch (e) { /* score chips are optional */ }
@@ -2615,27 +3711,116 @@ class SelfLearningDetailHandler extends Handler {
             // the pdict this page already loaded.
             const progPids = programmingPidsOf(sdoc, pdict);
             if (totalScoreReleased(sdoc, schedule)) {
-                // 🎓 The student's own ownership walkthrough states — the same
-                // fetch and the same rubric the evaluation runs.
-                // ROLLBACK: raw per-task scores + their sum.
-                const perTask = progPids.map((pid) => {
-                    const bb = myBest!.get(pid) || null;
-                    return {
-                        pid: (pdict[pid] as any)?.pid || String(pid),
-                        score: bb ? bb.effective : 0,
-                        attempted: !!bb,
-                        late: !!(bb as any)?.late,
-                    };
-                });
-                const total = Math.round(perTask.reduce((acc, t) => acc + t.score, 0) * 10) / 10;
+                /*
+                 * ⭐ THE shared rubric (taskRubricOf → blockAOf + blockBOf),
+                 * the very functions the evaluation stores — so this card
+                 * can never disagree with the teacher's table. Per task:
+                 * score /100 = Σ earned sub-rubric points (🏆 judged×30% +
+                 * 🎓 mean level×5, from the STORED walkthrough levels —
+                 * live-graded as the student answers, backfilled by every
+                 * evaluation; 🔧/🧩/💡 pending); 🅰 = task-sum × 75/(N×100);
+                 * 🅱 = 0 (coming).
+                 */
+                const myOwn = new Map<number, { level: number | null, asked: number }>();
+                const myFix = new Map<number, { level: number | null, judged: number }>();
+                const myRea = new Map<number, { level: number | null, judged: number }>();
+                const myIni = new Map<number, { level: number | null }>();
+                for (const t of await getOwnershipIn(domainId, sdoc.docId, this.user._id)) {
+                    if (t.ownership) myOwn.set(t.pid, { level: taskMeanOf(t.ownership), asked: t.ownership.questions?.length || 0 });
+                    if (t.fixconv?.transitions?.length) {
+                        myFix.set(t.pid, { level: taskFixConvMeanOf(t.fixconv), judged: t.fixconv.transitions.length });
+                    }
+                    if (t.reasoning?.levels?.length) {
+                        myRea.set(t.pid, { level: reasoningTaskMeanOf(t.reasoning), judged: t.reasoning.levels.length });
+                    }
+                    if (typeof t.initiative?.level === 'number') myIni.set(t.pid, { level: t.initiative.level });
+                    // 🚫 Flags override clean evidence — the slot is 0.
+                    const ig = (t as any).integrity;
+                    if (ig?.own) myOwn.set(t.pid, { level: 0, asked: myOwn.get(t.pid)?.asked || 0, flagged: true } as any);
+                    if (ig?.fix) myFix.set(t.pid, { level: 0, judged: myFix.get(t.pid)?.judged || 0, flagged: true } as any);
+                    if (ig?.rea) myRea.set(t.pid, { level: 0, judged: myRea.get(t.pid)?.judged || 0, flagged: true } as any);
+                    if (ig?.ini) myIni.set(t.pid, { level: 0, flagged: true } as any);
+                }
+                const breakdowns = progPids.map((pid) => taskRubricOf(
+                    pid, myBest!.get(pid) || null, myOwn.get(pid) || null, myFix.get(pid) || null,
+                    myRea.get(pid) || null, myIni.get(pid) || null, myFirstAc.has(pid),
+                ));
+                const blockA = blockAOf(breakdowns);
+                const myProg = await SelfLearningModel.getProgress(domainId, sdoc.docId, this.user._id);
+                const myTrjRaw = myProg?.trajectory?.level;
+                const myTrjLevel = typeof myTrjRaw === 'number'
+                    ? Math.min(TRAJECTORY_LEVEL_MAX, Math.max(0, myTrjRaw)) : null;
+                const myTrf = transferSubScoreOf(myProg?.transfer?.assessments, myProg?.transfer?.plan);
+                const blockB = blockBOf({ level: myTrjLevel }, myTrf);
+                // ⭐⭐ All tasks accepted first-try → the collapsed 40+60 total.
+                const myAllFa = allFirstAttemptSessionOf(breakdowns);
+                const myLp = latePenaltyOf(sdoc, myLateRows);
+                const myTotalBase = myAllFa ? myAllFa.total : Math.round((blockA + blockB) * 10) / 10;
+                const total = myLp ? Math.round(myTotalBase * myLp.factor * 10) / 10 : myTotalBase;
+                const perTask = breakdowns.map((b) => ({
+                    pid: (pdict[b.pid] as any)?.pid || String(b.pid),
+                    score: b.score,
+                    achPts: b.achPts,
+                    judged: b.judged,
+                    ownPts: b.ownPts,
+                    ownLevel: b.ownLevel,
+                    ownAsked: myOwn.get(b.pid)?.asked || 0,
+                    fixPts: b.fixPts,
+                    fixLevel: b.fixLevel,
+                    fixJudged: myFix.get(b.pid)?.judged || 0,
+                    reaPts: b.reaPts,
+                    reaLevel: b.reaLevel,
+                    reaJudged: myRea.get(b.pid)?.judged || 0,
+                    iniPts: b.iniPts,
+                    iniLevel: b.iniLevel,
+                    ownFlagged: !!(myOwn.get(b.pid) as any)?.flagged,
+                    fixFlagged: !!(myFix.get(b.pid) as any)?.flagged,
+                    reaFlagged: !!(myRea.get(b.pid) as any)?.flagged,
+                    iniFlagged: !!(myIni.get(b.pid) as any)?.flagged,
+                    firstAttempt: b.firstAttempt,
+                    attempted: b.attempted,
+                    late: b.late,
+                }));
                 const evaluated = sdoc.results?.rows?.find((r) => r.uid === this.user._id) || null;
                 myScore = {
                     released: true,
                     total,
-                    max: progPids.length * 100,
+                    max: SESSION_TOTAL_MAX,
+                    blockA,
+                    blockAMax: BLOCK_A_MAX,
+                    blockAEarnable: BLOCK_A_EARNABLE,
+                    blockB,
+                    blockBMax: BLOCK_B_MAX,
+                    taskMax: TASK_RUBRIC_MAX,
+                    achievementShare: ACHIEVEMENT_SHARE,
+                    ownershipShare: OWNERSHIP_SHARE,
+                    fixconvShare: FIXCONV_SHARE,
+                    reasoningShare: REASONING_SHARE,
+                    initiativeShare: INITIATIVE_SHARE,
+                    faAchShare: FIRST_ATTEMPT_ACH_MAX,
+                    faOwnShare: FIRST_ATTEMPT_OWN_MAX,
+                    trajectoryShare: TRAJECTORY_SHARE,
+                    transferShare: TRANSFER_SHARE,
+                    blockBEarnable: BLOCK_B_EARNABLE,
+                    trjLevel: myTrjLevel,
+                    trjPts: trajectoryPtsOf(myTrjLevel),
+                    trjFlagged: !!myProg?.trajectory?.flagged,
+                    trfState: myTrf.state,
+                    trfLevel: myTrf.level,
+                    trfPts: myTrf.pts,
+                    trfJudged: myTrf.judged,
+                    trfFlagged: !!myTrf.flagged,
+                    allFa: !!myAllFa,
+                    sessAch: myAllFa ? myAllFa.ach : null,
+                    sessOwn: myAllFa ? myAllFa.own : null,
+                    lateFactor: myLp ? myLp.factor : null,
+                    lateHours: myLp ? myLp.hours : null,
                     perTask,
                     attempted: perTask.filter((t) => t.attempted).length,
                     evaluatedTotal: evaluated ? evaluated.total : null,
+                    // The template renders "Evaluated by your teacher {when}":
+                    // the evaluation time is the stored table's computedAt.
+                    evaluatedAt: evaluated ? (sdoc.results?.computedAt || null) : null,
                 };
             } else {
                 myScore = {
@@ -2660,17 +3845,123 @@ class SelfLearningDetailHandler extends Handler {
             // the background timer ever finalized results).
             const closed = schedule.phase === 'ended';
             results = sdoc.results || null;
-            if (closed && !results?.final) {
-                try { results = await computeSessionResults(domainId, sdoc, true); } catch (e) { /* the table is optional */ }
+            /*
+             * Two on-view cases start an evaluation right here, BOTH
+             * through THE shared claim + runClaimedEvaluation — the
+             * identical body behind the Evaluate button and the
+             * post-deadline sweep, so all paths always agree:
+             *   - ↩️ stale-rubric results (stored under another
+             *     SESSION_RUBRIC_VERSION) re-derive on sight;
+             *   - an ended session whose results are not final yet
+             *     finalizes on first sight if the sweep has not got to it.
+             * The evaluation now includes 🎓 LLM grading, so it runs
+             * DETACHED (exactly like the button): this page serves the
+             * stored table (or 'pending'), and its status poll re-attaches
+             * to the running job's progress card, swapping the fresh table
+             * in on completion. If another evaluation already holds the
+             * job, the poll re-attaches to that one — same presentation
+             * either way.
+             */
+            const staleSchema = !!results && results.rubric !== SESSION_RUBRIC_VERSION;
+            if (staleSchema || (closed && !results?.final)) {
+                const startedAt = new Date();
+                const claimed = await claimEvalJob(domainId, sdoc.docId, startedAt).catch(() => false);
+                if (claimed) {
+                    if (staleSchema) logger.info('[self-learning] re-deriving stale-rubric results for %s/%s on view', domainId, sdoc.docId);
+                    (async () => {
+                        try {
+                            await runClaimedEvaluation(domainId, sdoc.docId, startedAt);
+                        } catch (e) {
+                            // runClaimedEvaluation already recorded the failed job.
+                            logger.warn('[self-learning] on-view evaluation failed for %s/%s: %s', domainId, sdoc.docId, e.message);
+                        }
+                    })();
+                    sdoc.evalJob = { state: 'running', startedAt } as any; // JSON callers see the claim this response made
+                }
             }
             resultsState = results ? (results.final ? 'final' : 'provisional') : (schedule.phase === 'open' ? 'open' : 'pending');
             if (exportAs === 'csv' && results) {
                 const csvEsc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-                const head = ['uid', 'username', 'name', ...sdoc.pids.map((pid) => pdict[pid]?.pid || String(pid)), 'total', 'max', 'attempts', 'finished', 'skipped', 'bonus'];
+                const label = (pid: number) => pdict[pid]?.pid || String(pid);
+                // Mirrors the on-screen table: per task a 7-column group —
+                // score, then the five sub-rubrics (🏆 as judged + points,
+                // 🎓 as level + points, 🔧/🧩/💡 pending → empty) — then
+                // 🅰/🅱/total.
+                // firstAttempt=1 rows are the ⭐ exception: achievement is
+                // /40 and ownership /60 there, and fixconv/reasoning/
+                // initiative are n/a (empty).
+                const perTaskHead = (pid: number) => [
+                    `${label(pid)} (/${results.taskMax ?? TASK_RUBRIC_MAX})`,
+                    `${label(pid)} firstAttempt`,
+                    `${label(pid)} judged (/100)`,
+                    `${label(pid)} achievement `
+                    + `(/${results.achievementShare ?? ACHIEVEMENT_SHARE}, FA /${results.faAchShare ?? FIRST_ATTEMPT_ACH_MAX})`,
+                    `${label(pid)} ownership level (/4)`,
+                    `${label(pid)} ownership (/${results.ownershipShare ?? OWNERSHIP_SHARE}, FA /${results.faOwnShare ?? FIRST_ATTEMPT_OWN_MAX})`,
+                    `${label(pid)} fixconv (/${results.fixconvShare ?? FIXCONV_SHARE})`,
+                    `${label(pid)} reasoning (/${results.reasoningShare ?? REASONING_SHARE})`,
+                    `${label(pid)} initiative (/${results.initiativeShare ?? INITIATIVE_SHARE})`,
+                ];
+                const head = [
+                    'uid', 'username', 'name',
+                    ...sdoc.pids.flatMap((pid) => perTaskHead(pid)),
+                    'late hours',
+                    'late factor',
+                    'allFirstAttempt',
+                    `session achievement (/${results.faAchShare ?? FIRST_ATTEMPT_ACH_MAX})`,
+                    `session ownership (/${results.faOwnShare ?? FIRST_ATTEMPT_OWN_MAX})`,
+                    `blockA (/${results.blockAMax ?? BLOCK_A_MAX})`,
+                    'trajectory level (/4)',
+                    `trajectory (/${results.trajectoryShare ?? TRAJECTORY_SHARE})`,
+                    `transfer (/${results.transferShare ?? TRANSFER_SHARE})`,
+                    'transfer state',
+                    `blockB (/${results.blockBMax ?? BLOCK_B_MAX})`,
+                    'total', 'max', 'attempts', 'finished', 'skipped', 'bonus',
+                ];
                 const lines = [head.map(csvEsc).join(',')];
+                const r1c = (x: number) => Math.round(x * 10) / 10;
                 for (const r of results.rows) {
+                    const perTaskCells = (pid: number) => {
+                        const sc = r.scores[String(pid)];
+                        const ow = r.own?.[String(pid)];
+                        const achShare = results.achievementShare ?? ACHIEVEMENT_SHARE;
+                        const ownShare = results.ownershipShare ?? OWNERSHIP_SHARE;
+                        const fx = r.fix?.[String(pid)];
+                        const rx = r.rea?.[String(pid)];
+                        const ix = r.ini?.[String(pid)];
+                        const isFa = !!r.fa?.[String(pid)];
+                        const aSh = isFa ? (results.faAchShare ?? FIRST_ATTEMPT_ACH_MAX) : achShare;
+                        const oSh = isFa ? (results.faOwnShare ?? FIRST_ATTEMPT_OWN_MAX) : ownShare;
+                        return [
+                            r.taskScores?.[String(pid)] ?? '',
+                            isFa ? 1 : '',
+                            sc?.effective ?? 0,
+                            sc ? r1c((sc.effective * aSh) / 100) : 0,
+                            ow?.level ?? '',
+                            typeof ow?.pts === 'number' ? ow.pts
+                                : (typeof ow?.level === 'number' ? r1c((ow.level * oSh) / 4) : 0),
+                            typeof fx?.pts === 'number' ? fx.pts
+                                : (typeof fx?.level === 'number' ? r1c((fx.level * (results.fixconvShare ?? FIXCONV_SHARE)) / 4) : ''),
+                            typeof rx?.pts === 'number' ? rx.pts
+                                : (typeof rx?.level === 'number' ? r1c((rx.level * (results.reasoningShare ?? REASONING_SHARE)) / 4) : ''),
+                            typeof ix?.pts === 'number' ? ix.pts
+                                : (typeof ix?.level === 'number' ? r1c((ix.level * (results.initiativeShare ?? INITIATIVE_SHARE)) / 4) : ''),
+                        ];
+                    };
                     lines.push([
-                        r.uid, r.uname, r.name, ...sdoc.pids.map((pid) => r.scores[String(pid)]?.effective ?? 0),
+                        r.uid, r.uname, r.name,
+                        ...sdoc.pids.flatMap((pid) => perTaskCells(pid)),
+                        r.lateHours ?? '',
+                        r.lateFactor ?? '',
+                        r.allFa ? 1 : '',
+                        r.allFa ? (r.sessAch ?? '') : '',
+                        r.allFa ? (r.sessOwn ?? '') : '',
+                        r.allFa ? '' : (r.blockA ?? ''),
+                        r.allFa ? '' : (r.trj?.level ?? ''),
+                        r.allFa ? '' : (typeof r.trj?.pts === 'number' ? r.trj.pts : ''),
+                        r.allFa ? '' : (typeof r.trf?.pts === 'number' ? r.trf.pts : ''),
+                        r.allFa ? '' : (r.trf?.state ?? ''),
+                        r.allFa ? '' : (r.blockB ?? ''),
                         r.total, results.maxTotal, r.attempts, r.done, r.skipped, r.bonus,
                     ].map(csvEsc).join(','));
                 }
@@ -2897,6 +4188,14 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
         // The tutor flows only run for programming tasks (see tutorEligible).
         this.UiContext.slTutor = aiTutor.tutorConfigured() && this.isStudent && this.tutorEligible;
         this.UiContext.slType = this.problemKind;
+        // ⏯ RESUME: while the session has not ended, an unanswered tutor
+        // question RIDES THE PAGE — reloads (or closing the pop-up card and
+        // coming back tomorrow) keep it answerable from the round button.
+        if (this.UiContext.slTutor && sessionSchedule(this.sdoc).phase !== 'ended') {
+            const th = await SelfLearningModel.getThread(domainId, this.sdoc.docId, this.pdoc.docId, this.user._id);
+            const oq = openTutorQuestionOf(th);
+            if (oq && th?.rid) this.UiContext.slOpenQuestion = { ...oq, rid: th.rid.toHexString() };
+        }
         // Schedule cues for the fullscreen IDE (students only — the page
         // itself shows the notice; enforcement stays in post()).
         if (this.isStudent) {
@@ -3327,12 +4626,17 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
     checkTutorAllowed() {
         if (!aiTutor.tutorEnabled()) throw new ForbiddenError('The AI tutor is disabled.');
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
+        // ⏯ The tutor lives and dies with the session clock: questions can
+        // be asked AND answered through the late window (extension), but
+        // once the hard end passes, every tutor operation closes.
+        if (this.sdoc && sessionSchedule(this.sdoc).phase === 'ended') {
+            throw new ForbiddenError('The session has ended — the AI tutor is closed.');
+        }
         // Programming tasks only — every operation of this handler, history
         // included, is refused for objective / subjective / answer tasks.
         if (!this.tutorEligible) throw new ForbiddenError('The AI tutor is only available for programming tasks.');
         if (!this.isStudent) throw new ForbiddenError('The AI tutor is only available to student accounts.');
     }
-
 
     async tutorCtx(rdoc: RecordDoc | null, attemptCount: number, everAccepted: boolean): Promise<aiTutor.TutorTurnContext> {
         const uiLang = this.user.viewLang || this.session.viewLang || system.get('server.language') || 'en';
@@ -3495,14 +4799,15 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             ctx.liveCode = String(this.args.code).slice(0, 8000);
         }
         /*
-         * 🎓 CODE-OWNERSHIP walkthrough — the 10-point rubric component:
-         * once a submission is ACCEPTED, the tutor asks a short sequence of
-         * questions probing whether the student can explain THEIR OWN code,
-         * and the LLM grades each answer 0..4 (postAnnotateReply). The
-         * question budget is fixed at the FIRST acceptance — 5..6 questions
-         * when that acceptance was the very first attempt, 2..3 otherwise —
-         * and later re-acceptances continue the same unfinished sequence
-         * rather than re-rolling it.
+         * 🎓 CODE-OWNERSHIP walkthrough — the 20-point per-task sub-rubric
+         * (task earns mean(level) × 5): once a submission is ACCEPTED, the
+         * tutor asks a short sequence of questions probing whether the
+         * student can explain THEIR OWN code, and the LLM grades each
+         * answer 0..4 (postAnnotateReply). The question budget is fixed at
+         * the FIRST acceptance — 5..6 questions when that acceptance was
+         * the very first attempt, 2..3 otherwise — and later
+         * re-acceptances continue the same unfinished sequence rather than
+         * re-rolling it.
          */
         let ownership: OwnershipState | undefined;
         if (accepted && thread) {
@@ -3548,10 +4853,16 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             }]);
             if (accepted && ownership) {
                 // The sliced text is the dedup/grade key postAnnotateReply
-                // matches on, so store exactly what the reply will send.
-                await SelfLearningModel.pushOwnershipQuestion(thread._id, {
-                    question: String(annotation.question).slice(0, 300), line: annotation.line, at: new Date(), levels: [],
-                });
+                // matches on, so store exactly what the reply will send —
+                // and only ONCE: should the model ever repeat a question
+                // verbatim despite the asked list, a second entry would sit
+                // unanswered forever and drag the mean with a phantom L0.
+                const qkey = String(annotation.question).slice(0, 300);
+                if (!(ownership.questions || []).find((x) => x.question === qkey)) {
+                    await SelfLearningModel.pushOwnershipQuestion(thread._id, {
+                        question: qkey, line: annotation.line, at: new Date(), levels: [],
+                    });
+                }
             }
         }
         if (accepted && !annotation && thread && ownership && !ownership.done) {
@@ -3624,6 +4935,37 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
          */
         const serverTurns = dialogueHistoryFor(thread, question.slice(0, 300));
         if (serverTurns) turns = serverTurns;
+        // 🚫 Deterministic pre-check: an answer that tries to steer the
+        // grader never reaches the LLM — it stores level 0 on the
+        // corresponding sub-rubric and gets a fixed integrity notice.
+        const manip = aiTutor.detectGraderManipulation([text]);
+        if (manip.hit && thread) {
+            const accepted = rdoc.status === STATUS.STATUS_ACCEPTED;
+            const sub = accepted ? 'own' as const : 'rea' as const;
+            const notice = 'This answer contains instructions aimed at the grader, so it is scored 0 for this exchange. '
+                + 'Please answer the question itself. / 该回答包含试图操纵评分的指令，本次交流计 0 分。请针对问题本身作答。';
+            const userIdx = (thread.messages || []).length;
+            await SelfLearningModel.pushMessages(thread._id, [
+                { role: 'user', kind: 'anno', content: text.slice(0, 2000), at: new Date(), line, endLine } as any,
+                { role: 'assistant', kind: 'anno', content: notice, at: new Date(), line, endLine, resolved: false } as any,
+            ]);
+            if (accepted) {
+                const qkey = question.slice(0, 300);
+                let q0 = (thread.ownership?.questions || []).find((qq) => qq.question === qkey);
+                if (!q0) {
+                    q0 = { question: qkey, line, at: new Date(), levels: [], answerKeys: [] } as any;
+                    await SelfLearningModel.pushOwnershipQuestion(thread._id, q0!);
+                }
+                await SelfLearningModel.pushOwnershipLevel(thread._id, qkey, 0, normalizeAnswerKey(text));
+                await SelfLearningModel.setMessageLevel(thread._id, userIdx, 0);
+            } else {
+                await SelfLearningModel.pushReasoningLevel(thread._id, 0, normalizeAnswerKey(text));
+                await SelfLearningModel.setMessageRlevel(thread._id, userIdx, 0);
+            }
+            await SelfLearningModel.flagIntegrity(thread._id, sub, manip.excerpt || '');
+            this.response.body = { reply: notice, resolved: false, level: 0, flagged: true };
+            return;
+        }
         const ctx = await this.tutorCtx(rdoc, thread?.attemptCount || 1, await this.everAccepted(domainId));
         if (typeof this.args.code === 'string' && this.args.code.trim()) {
             ctx.liveCode = String(this.args.code).slice(0, 8000);
@@ -3634,6 +4976,9 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             question: question.slice(0, 300),
             history: turns,
             answer: text.slice(0, 1000),
+            // ⭐ First-attempt acceptance (frozen at walkthrough creation
+            // from the record history) activates the ownership leniency.
+            firstAttempt: thread?.ownership ? (thread.ownership.acceptedAttempt === 1 || (thread.ownership.minQ ?? 0) >= 5) : false,
         });
         /*
          * 🎓 CODE-OWNERSHIP grading: runAnnotationDialogue returns a level
@@ -3742,10 +5087,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         };
     }
 
-
 }
-
-const logger = new Logger('self-learning');
 
 /* ------------------------------------------------------------------------ */
 /* Site-wide PTA UI backend — migrated here from problem_trajectory.ts.     */
@@ -4040,7 +5382,6 @@ class BulkAddUsersHandler extends Handler {
         };
     }
 }
-
 
 /* ---------------------- teacher-facing AI class report ---------------------- */
 
@@ -4556,7 +5897,6 @@ class AiClassReportHandler extends Handler {
     }
 }
 
-
 /* ---------------- subjective (project-level, teacher-graded) tasks ---------------- */
 
 const SUBJECTIVE_MAX_FILE = 25 * 1024 * 1024; // 25 MB per file
@@ -4692,7 +6032,6 @@ class SubjectiveFileHandler extends Handler {
         this.response.redirect = await storage.signDownloadLink(entry.target, entry.name, false);
     }
 }
-
 
 /* ------------------------------------------------------------------ */
 /*  Combined objective paper for a test / homework                     */

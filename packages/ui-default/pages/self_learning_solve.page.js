@@ -61,7 +61,6 @@ export function confettiBurst() {
   } catch (e) { /* celebration is optional */ }
 }
 
-
 const POLL_INTERVAL = 1500;
 const MAX_POLLS = 120; // ~3 minutes
 
@@ -455,8 +454,7 @@ export default new NamedPage('self_learning_solve', async () => {
    * these: whether there is an open question, and how to answer it (the
    * same endpoint and bookkeeping as the card itself).
    */
-  let panelHasQuestion = () => false;
-  let panelAnswer = async () => {};
+
   /** Scrolls the editor to the open question's anchored lines (assigned by initScratchpad). */
   let panelRevealQuestion = () => {};
   /**
@@ -465,17 +463,6 @@ export default new NamedPage('self_learning_solve', async () => {
    * scrollbar appears only past the stylesheet's max-height. Declared up
    * here because refreshPanelInput (inside initScratchpad) calls it.
    */
-  const PANEL_INPUT_MIN = 44; // one comfortable line at 13px / 1.45
-  const PANEL_INPUT_MAX = 120; // keep in sync with .sl-input-row textarea max-height
-  function autoGrowPanelInput() {
-    const el = $('#sl-panel-input')[0];
-    if (!el) return;
-    el.style.height = 'auto';
-    const want = el.scrollHeight + 2; // + top/bottom border (border-box)
-    el.style.height = `${Math.min(Math.max(want, PANEL_INPUT_MIN), PANEL_INPUT_MAX)}px`;
-    el.style.overflowY = want > PANEL_INPUT_MAX ? 'auto' : 'hidden';
-  }
-  $('#sl-panel-input').on('input', autoGrowPanelInput);
 
   /* ------- floating layout: body portal, drag, viewport-adaptive geometry ------- */
 
@@ -1262,28 +1249,20 @@ export default new NamedPage('self_learning_solve', async () => {
       editorLocked = false;
     }
 
-    /** Panel input: enabled only while the tutor has an unanswered question. */
+    /**
+     * The panel is a READ-ONLY history: answering happens only in the
+     * pop-up card at the code line. This keeps just the header 📍 chip
+     * mirroring where the open question is anchored (click jumps there).
+     */
     function refreshPanelInput() {
       const open = !!(lastQuestion && !lastQuestion.resolved);
-      // The disabled placeholder must FIT the one-line box (the fuller
-      // wording lives in the toast shown when a send is attempted anyway).
-      $('#sl-panel-input').prop('disabled', !open).attr('placeholder', open
-        ? i18n('Answer the tutor\u2019s open question here… (Enter to send)')
-        : i18n('No open question yet — submit your code first.'));
-      $('#sl-panel-send').prop('disabled', !open);
-      // Header chip: where the open question is anchored; click jumps there.
       const $tag = $('#sl-tutor-qtag');
       if (open && lastQuestion.line) {
         const loc = lastQuestion.endLine && lastQuestion.endLine !== lastQuestion.line
           ? `L${lastQuestion.line}–${lastQuestion.endLine}` : `L${lastQuestion.line}`;
         $tag.text(`📍 ${loc}`).attr('title', i18n('Jump to the anchored lines')).show();
       } else $tag.hide();
-      // Chromium counts the placeholder in scrollHeight, so a wrapped
-      // placeholder gets room instead of a scrollbar; elsewhere the hidden
-      // overflow clips cleanly with no bar.
-      autoGrowPanelInput();
     }
-    panelHasQuestion = () => !!(lastQuestion && !lastQuestion.resolved);
     panelRevealQuestion = () => {
       const ed = findScratchpadEditor();
       if (ed && lastQuestion && lastQuestion.line) {
@@ -1417,8 +1396,11 @@ export default new NamedPage('self_learning_solve', async () => {
       .sl-anno button { border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 0 5px; border-radius: 6px; color: var(--pta-crimson-text); line-height: 1.5; transition: background .15s ease; }
       .sl-anno button:hover { background: rgba(194, 37, 92, .1); }
       .sl-anno__input { display: flex; gap: 6px; flex: 0 0 auto; align-items: center; }
-      .sl-anno__input input { flex: 1 1 auto; border: 1px solid var(--pta-crimson-line); border-radius: 999px; padding: 5px 12px; font-size: 12.5px; color: var(--pta-ink); background: var(--pta-card); transition: border-color .15s ease, box-shadow .15s ease; }
-      .sl-anno__input input:focus { outline: none; border-color: var(--pta-crimson); box-shadow: var(--pta-ring-crimson); }
+      .sl-anno__input textarea { flex: 1 1 auto; resize: none; height: 34px; min-height: 34px; max-height: 96px;
+        overflow-y: hidden; border: 1px solid var(--pta-crimson-line); border-radius: 14px; padding: 7px 12px;
+        font-size: 12.5px; font-family: inherit; line-height: 1.4; color: var(--pta-ink); background: var(--pta-card);
+        transition: border-color .15s ease, box-shadow .15s ease; }
+      .sl-anno__input textarea:focus { outline: none; border-color: var(--pta-crimson); box-shadow: var(--pta-ring-crimson); }
       .sl-anno__input .sl-anno__send { width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: none; background: var(--pta-grad-crimson); color: #fff; box-shadow: 0 4px 10px -4px rgba(158, 35, 53, .6); transition: filter .12s ease, transform .12s var(--pta-ease); }
       .sl-anno__input .sl-anno__send:hover { filter: brightness(1.1); transform: translateY(-1px); background: var(--pta-grad-crimson); }
       .sl-anno__input button:disabled { opacity: .5; cursor: default; transform: none; }
@@ -1571,7 +1553,7 @@ export default new NamedPage('self_learning_solve', async () => {
         }
         $log.append(thinkingRow);
         $log.scrollTop($log[0].scrollHeight);
-        $(cardState.dom).find('.sl-anno__input input, .sl-anno__input button').prop('disabled', true);
+        $(cardState.dom).find('.sl-anno__input textarea, .sl-anno__input button').prop('disabled', true);
         fitZone(cardState.entry, 60, cardMaxPx());
         return;
       }
@@ -1588,7 +1570,7 @@ export default new NamedPage('self_learning_solve', async () => {
       hideOverlay(); // no-op when only the in-card spinner was shown; also unlocks
       if (cardState) {
         if (!$(cardState.dom).hasClass('sl-anno--resolved')) {
-          $(cardState.dom).find('.sl-anno__input input, .sl-anno__input button').prop('disabled', false);
+          $(cardState.dom).find('.sl-anno__input textarea, .sl-anno__input button').prop('disabled', false);
         } else {
           $(cardState.dom).find('.sl-anno__skip').prop('disabled', false);
         }
@@ -1653,14 +1635,15 @@ export default new NamedPage('self_learning_solve', async () => {
         + `<span>🤖 ${escapeHtml(i18n('AI Socratic Tutor'))}</span>`
         + `<span class="sl-anno__btns">${(opts.ownership && opts.ownership.max)
           ? `<span class="sl-anno__qcount" title="${escapeHtml(i18n('Walkthrough question {0} of up to {1}').replace('{0}', opts.ownership.asked).replace('{1}', opts.ownership.max))}">Q${opts.ownership.asked}/${opts.ownership.max}</span>`
-          : ''}<button type="button" class="sl-anno__close" title="${escapeHtml(i18n('Dismiss'))}">×</button></span>`
+          : ''}</span>`
         + '</div>'
         + '<div class="sl-anno__log"></div>'
         + '<div class="sl-anno__input">'
-        + `<input type="text" maxlength="1000" placeholder="${escapeHtml(i18n('Type your answer \u2014 it\u2019s fine to say you don\u2019t know (Enter to send)'))}">`
+        + '<textarea rows="1" maxlength="1000" placeholder="'
+        + `${escapeHtml(i18n('Type your answer \u2014 it\u2019s fine to say you don\u2019t know (Enter to send)'))}"></textarea>`
         + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))}">➤</button>`
         + (accepted
-          ? `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Skip to the next question'))}">${escapeHtml(i18n('Skip this question'))} ➜</button>`
+          ? ''
           : `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Already fixed it? Jump straight to the next issue.'))}">${escapeHtml(i18n('Next issue'))} ➜</button>`)
         + '</div>';
       const entry = addZone(ed, endLine, 120, dom, { line, endLine });
@@ -1673,28 +1656,34 @@ export default new NamedPage('self_learning_solve', async () => {
       // post-acceptance card only — follow-up questions go straight in.
       // (The Q-counter above shows counts only; the LLM's per-answer grades
       // never reach the client.)
-      if (accepted && (!opts.ownership || opts.ownership.asked <= 1)) appendCardNote(i18n('Accepted! Great job!'), '🎉');
+      if (accepted && !opts.restored && (!opts.ownership || opts.ownership.asked <= 1)) appendCardNote(i18n('Accepted! Great job!'), '🎉');
       appendCardMsg('tutor', ann.question);
       // Mirror into the launcher panel: the red button replays this dialogue.
       appendBubble('assistant', ann.question, { line, endLine });
       fitZone(entry, 60, cardMaxPx());
       requestAnimationFrame(() => fitZone(entry, 60, cardMaxPx()));
       setTimeout(() => fitZone(entry, 60, cardMaxPx()), 150);
-      dom.querySelector('.sl-anno__close').addEventListener('click', () => {
-        // Dismissing ends the guided sequence for this attempt.
-        removeZoneEntry(entry);
-        cardState = null;
-      });
       $(dom).find('.sl-anno__skip').on('click', () => {
         const cs = cardState;
         if (!cs || cs.dom !== dom) return;
-        // Fast path: advance without answering. Record the question as asked
-        // and continue with the current editor code. (🎓 On an accepted
-        // walkthrough the skipped question stays in the stored sequence.)
+        // Guided flow only (the accepted walkthrough has no skip): the
+        // student fixed the flaw in the editor and advances — the next
+        // question is generated against the CURRENT code.
         if (!askedQuestions.includes(cs.question)) askedQuestions.push(cs.question);
         requestNextQuestion(cs.rid, cs.endLine, cs.accepted);
       });
-      const input = dom.querySelector('.sl-anno__input input');
+      const input = dom.querySelector('.sl-anno__input textarea');
+      // The answer box GROWS with the student's text (one line → up to
+      // five), and the Monaco view-zone grows with it — long answers are
+      // welcome. Enter sends; Shift+Enter makes a new line.
+      const growField = () => {
+        input.style.height = 'auto';
+        const want = input.scrollHeight + 2;
+        input.style.height = `${Math.min(Math.max(want, 34), 96)}px`;
+        input.style.overflowY = want > 96 ? 'auto' : 'hidden';
+        fitZone(entry, 60, cardMaxPx());
+      };
+      input.addEventListener('input', growField);
       const send = () => {
         const text = (input.value || '').trim();
         if (text) submitCardAnswer(text);
@@ -1702,7 +1691,7 @@ export default new NamedPage('self_learning_solve', async () => {
       dom.querySelector('.sl-anno__send').addEventListener('click', send);
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           send();
         }
@@ -1859,7 +1848,9 @@ export default new NamedPage('self_learning_solve', async () => {
       const cs = cardState;
       const priorHistory = cs.history.slice();
       appendCardMsg('student', text);
-      $(cs.dom).find('.sl-anno__input input').val('');
+      const $field = $(cs.dom).find('.sl-anno__input textarea');
+      $field.val('').css({ height: '', 'overflow-y': 'hidden' });
+      fitZone(cs.entry, 60, cardMaxPx());
       // 🎓 Accepted card: the answer is being GRADED for the ownership
       // rubric — show the staged evaluation theatre instead of the plain
       // spinner. (The editor stays locked either way.)
@@ -1901,7 +1892,7 @@ export default new NamedPage('self_learning_solve', async () => {
           cs.resolved = true;
           refreshPanelInput();
           $(cs.dom).addClass('sl-anno--resolved');
-          $(cs.dom).find('.sl-anno__input input, .sl-anno__send').prop('disabled', true);
+          $(cs.dom).find('.sl-anno__input textarea, .sl-anno__send').prop('disabled', true);
           if (cs.accepted) {
             // 🎓 Ownership walkthrough: a resolved answer chains straight
             // into the next question. The server closes the sequence (and
@@ -1928,81 +1919,6 @@ export default new NamedPage('self_learning_solve', async () => {
         appendCardMsg('tutor', `⚠️ ${e.message}`);
       }
     }
-
-    /**
-     * Answer the open question from the launcher panel. If its card is still
-     * on screen the card's own flow runs (and mirrors into the panel); if the
-     * student closed the card, the same endpoint is called here and the
-     * exchange lives in the panel alone.
-     */
-    panelAnswer = async (text) => {
-      const q = lastQuestion;
-      if (!q || q.resolved) return;
-      if (cardState === q && q.dom && document.body.contains(q.dom)) {
-        await submitCardAnswer(text);
-        return;
-      }
-      const session = annoSession;
-      const priorHistory = q.history.slice();
-      appendBubble('user', text, { line: q.line, endLine: q.endLine });
-      // 🎓 Accepted: the answer is being graded for the ownership rubric —
-      // the panel bubble carries the same staged evaluation theatre as the
-      // card (compact); otherwise the plain "thinking" text.
-      let panelEval = null;
-      const $wait = $('<div class="sl-msg assistant"><div class="sl-bubble"></div></div>');
-      if (q.accepted) {
-        panelEval = buildOwnershipEval();
-        panelEval.el.classList.add('sl-own-eval--panel');
-        $wait.children('.sl-bubble').append(panelEval.el);
-      } else {
-        $wait.children('.sl-bubble').html(`<em>${escapeHtml(i18n('The tutor is thinking...'))}</em>`);
-      }
-      $wait.appendTo($chat);
-      scrollChat();
-      $('#sl-panel-input, #sl-panel-send').prop('disabled', true);
-      try {
-        const res = await request.post(tutorUrl, {
-          operation: 'annotateReply',
-          rid: q.rid,
-          line: q.line,
-          endLine: q.endLine,
-          question: q.question,
-          history: JSON.stringify(priorHistory.slice(-10)),
-          text,
-          code: currentEditorCode(),
-        });
-        if (panelEval) await panelEval.complete();
-        $wait.remove();
-        if (session !== annoSession) return;
-        if (typeof res.level === 'number') {
-          const $ans = $chat.find('.sl-msg.user').last().find('.sl-bubble');
-          if ($ans.length) $ans.append(levelChipHtml(res.level, res.levelKind));
-        }
-        q.history.push({ role: 'student', content: text });
-        q.history.push({ role: 'tutor', content: res.reply });
-        absorbGate(res);
-        appendBubble('assistant', res.reply, {
-          line: q.line, endLine: q.endLine, resolved: res.resolved, accepted: q.accepted,
-        });
-        if (res.resolved) {
-          askedQuestions.push(q.question);
-          q.resolved = true;
-          appendDivider(q.accepted
-            ? i18n('Nice — on to the next question.')
-            : i18n('Great — now FIX this line in the editor.'), q.accepted);
-          // 🎓 Accepted: continue the ownership walkthrough (the next card
-          // opens at its anchor in the editor; the panel mirrors it).
-          if (q.accepted) requestNextQuestion(q.rid, q.endLine, true);
-        }
-      } catch (e) {
-        if (panelEval) panelEval.cancel();
-        $wait.remove();
-        appendBubble('assistant', `⚠️ ${e.message}`);
-      } finally {
-        refreshPanelInput();
-        scrollChat();
-      }
-    };
 
     async function trackScratchpadSubmission(rid) {
       if (rid === lastTrackedRid) return; // both hook paths may fire for one submission
@@ -2194,6 +2110,49 @@ export default new NamedPage('self_learning_solve', async () => {
     setTimeout(() => $('#sl-open-scratchpad').trigger('click'), 0);
     // The "Submitted code" panel renders from the start, IDE or not.
     refreshAttemptsPanel();
+
+    // ⏯ RESUME AFTER RELOAD: the server sends the thread's still-open
+    // question (deadline-gated). The panel is read-only, so continuation
+    // means REBUILDING THE POP-UP CARD at its code line once the editor
+    // mounts — the same card, the same endpoint, mid-dialogue. The panel
+    // history is seeded by the card itself (it mirrors its question), then
+    // topped up with the earlier turns; the round button's dot glows.
+    const oq = UiContext.slOpenQuestion;
+    if (oq && oq.question && oq.rid) {
+      const restoreSession = annoSession;
+      let tries = 0;
+      const tryRestore = () => {
+        if (annoSession !== restoreSession || cardState) return; // a live flow took over
+        const ed = findScratchpadEditor();
+        if (!ed) {
+          tries += 1;
+          if (tries < 40) setTimeout(tryRestore, 250);
+          return;
+        }
+        // The asked-question memory rides the server too: reseeding it
+        // keeps the guided flow from ever repeating a question after a
+        // reload, and the walkthrough card gets its Qn/m counter back.
+        askedQuestions = (oq.asked || []).slice(-12);
+        showQuestionCard(
+          oq.rid,
+          { question: oq.question, line: oq.line, endLine: oq.endLine },
+          !!oq.accepted,
+          { restored: true, ownership: oq.ownership || undefined },
+        );
+        const cs = cardState;
+        if (cs) {
+          for (const t of (oq.history || []).slice(-10)) {
+            const role = t.role === 'student' ? 'student' : 'tutor';
+            cs.history.push({ role, content: t.content });
+            appendCardMsg(role, t.content);
+            appendBubble(role === 'student' ? 'user' : 'assistant', t.content, {});
+          }
+          fitZone(cs.entry, 60, cardMaxPx());
+        }
+        $fabDot.show();
+      };
+      setTimeout(tryRestore, 300);
+    }
   }
 
   /* ------------------------------ wiring ---------------------------------- */
@@ -2220,26 +2179,6 @@ export default new NamedPage('self_learning_solve', async () => {
   });
   $('#sl-tutor-close').on('click', closePanel);
   $('#sl-tutor-expand').on('click', () => setExpanded(!isExpanded));
-  // Panel chat: continue the tutor's open question (the card may be closed).
-  const sendPanel = async () => {
-    const $in = $('#sl-panel-input');
-    const text = String($in.val() || '').trim();
-    if (!text) return;
-    if (!panelHasQuestion()) {
-      Notification.info(i18n('No open question right now — submit your code to get the next one.'));
-      return;
-    }
-    $in.val('');
-    autoGrowPanelInput();
-    await panelAnswer(text);
-  };
-  $('#sl-panel-send').on('click', sendPanel);
-  $('#sl-panel-input').on('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey) {
-      ev.preventDefault();
-      sendPanel();
-    }
-  });
   // The header chip mirrors the open question's anchor; clicking (or Enter /
   // Space — it is a focusable role=button span) recenters the editor on it.
   const revealFromTag = (ev) => {
@@ -2248,10 +2187,6 @@ export default new NamedPage('self_learning_solve', async () => {
     panelRevealQuestion();
   };
   $('#sl-tutor-qtag').on('click', revealFromTag).on('keydown', revealFromTag);
-  // Until a question exists the row is disabled with an explanation.
-  $('#sl-panel-input').prop('disabled', true).attr('placeholder', i18n('No open question yet — submit your code first.'));
-  $('#sl-panel-send').prop('disabled', true);
-  autoGrowPanelInput();
   $(document).on('keydown', (ev) => {
     if (ev.key === 'Escape' && panelOpen && isExpanded) setExpanded(false);
   });

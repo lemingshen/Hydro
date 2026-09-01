@@ -123,11 +123,7 @@
         and, worse, became part of the i18n key, so the zh/zh_TW
         translations never matched.
       -#}
-      <div class="sl-input-row">
-        <textarea id="sl-panel-input" class="textbox" rows="1" enterkeyhint="send" placeholder="{{ _('Answer the tutor’s open question here… (Enter to send)') }}"></textarea>
-        <button id="sl-panel-send" class="rounded primary button" type="button">{{ _('Send') }}</button>
-      </div>
-      <p class="sl-float__hint" id="sl-panel-hint">{{ _('Your line-anchored tutoring, in one place. The tutor’s open question can be answered here or in its pop-up card.') }}</p>
+      <p class="sl-float__hint" id="sl-panel-hint">{{ _('Your line-anchored tutoring, in one place — a read-only history. Answer the open question in its pop-up card at your code line.') }}</p>
     </div>
     {% elif isStudent and tutorEligible and not tutorConfigured %}
     <div class="section side">

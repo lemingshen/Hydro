@@ -124,7 +124,13 @@ export default new NamedPage('self_learning_detail', () => {
     }
     const stages = [
       ['📥', i18n('Collecting judged submissions')],
-      ['📐', i18n('Summing the task scores')],
+      ['🎓', i18n('Grading walkthrough answers')],
+      ['🔧', i18n('Grading guided fixes')],
+      ['🧩', i18n('Grading reasoning answers')],
+      ['💡', i18n('Grading first-engagement initiative')],
+      ['📈', i18n('Grading independence trajectories')],
+      ['🧠', i18n('Grading concept transfer')],
+      ['📐', i18n('Scoring each task and the blocks')],
       ['🧾', i18n('Writing the results table')],
     ];
     const $el = $(`<div class="section side sld-evalcard" role="status">
@@ -157,7 +163,19 @@ export default new NamedPage('self_learning_detail', () => {
     };
     advance();
     const t0 = Date.now();
-    const timer = setInterval(() => { if (i < rows.length - 1) advance(); }, 1100);
+    /*
+     * The stage highlight is DRIVEN BY THE REAL PHASE reported by the
+     * server (setProgress → syncStage), never by a wall clock — a long
+     * re-evaluation keeps the 🎓 stage lit for as long as walkthrough
+     * answers are actually being judged. Jumps are safe: a phase with
+     * zero work never reports, and syncStage walks straight through it,
+     * ticking it done. The ambient timer below only performs the initial
+     * 📥 → 🎓 step while the first poll is still in flight; the two
+     * closing stages (📐 scoring, 🧾 writing) animate in finishDone.
+     */
+    const PHASE_STAGE = { own: 1, fix: 2, rea: 3, ini: 4, trj: 5, trf: 6 };
+    const syncStage = (target) => { while (i < target && i < rows.length - 1) advance(); };
+    const timer = setInterval(() => { if (i < 1) advance(); }, 1100);
     const destroy = () => {
       clearInterval(timer);
       $el.remove();
@@ -170,15 +188,26 @@ export default new NamedPage('self_learning_detail', () => {
     card = {
       $el,
       destroy,
+      /** ♻️ Label the run as the from-scratch re-evaluation the button starts. */
+      markForce() {
+        $el.find('.sld-eval__title').text(`♻️ ${i18n('Re-evaluating every student from scratch…')}`);
+      },
       /** Live line: who the LLM is judging right now ("3/7 · name · P5"). */
       setProgress(p) {
         const $now = $el.find('.sld-eval__now');
+        if (p && PHASE_STAGE[p.phase] !== undefined) syncStage(PHASE_STAGE[p.phase]);
         if (!p || !p.total) {
           $now.removeClass('is-on');
           return;
         }
         const who = [p.uname, p.pid].filter(Boolean).join(' · ');
-        $now.addClass('is-on').text(`🎓 ${i18n('Now grading')} ${p.done || 0}/${p.total}${who ? ` · ${who}` : ''}`);
+        const tag = p.phase === 'fix' ? `🔧 ${i18n('Now grading fixes')}`
+          : p.phase === 'rea' ? `🧩 ${i18n('Now grading reasoning')}`
+            : p.phase === 'ini' ? `💡 ${i18n('Now grading initiative')}`
+              : p.phase === 'trj' ? `📈 ${i18n('Now grading trajectories')}`
+                : p.phase === 'trf' ? `🧠 ${i18n('Now grading concept transfer')}`
+                  : `🎓 ${i18n('Now grading')}`;
+        $now.addClass('is-on').text(`${tag} ${p.done || 0}/${p.total}${who ? ` · ${who}` : ''}`);
       },
       async finishDone(summary) {
         clearInterval(timer);
@@ -191,8 +220,21 @@ export default new NamedPage('self_learning_detail', () => {
         $el.addClass('sld-eval--done');
         $el.find('.sld-eval__title').text(`✅ ${i18n('Evaluation complete — the table below is up to date.')}`);
         const $now = $el.find('.sld-eval__now').addClass('is-on');
-        void summary; // the rollback evaluation has no grading counts
-        $now.text(`✓ ${i18n('Scores computed — the total is the sum of the per-task scores.')}`);
+        if (summary && summary.total) {
+          const failed = summary.failed ? ` · ${summary.failed} ${i18n('failed (retried next evaluation)')}` : '';
+          const scored = i18n('Scores computed — Total = 🅰 Block A + 🅱 Block B per student.');
+          const parts = [];
+          if (summary.own && summary.own.total) parts.push(`🎓 ${summary.own.graded || 0}/${summary.own.total}`);
+          if (summary.fix && summary.fix.total) parts.push(`🔧 ${summary.fix.graded || 0}/${summary.fix.total}`);
+          if (summary.rea && summary.rea.total) parts.push(`🧩 ${summary.rea.graded || 0}/${summary.rea.total}`);
+          if (summary.ini && summary.ini.total) parts.push(`💡 ${summary.ini.graded || 0}/${summary.ini.total}`);
+          if (summary.trj && summary.trj.total) parts.push(`📈 ${summary.trj.graded || 0}/${summary.trj.total}`);
+          if (summary.trf && summary.trf.total) parts.push(`🧠 ${summary.trf.graded || 0}/${summary.trf.total}`);
+          const detail = parts.length ? parts.join(' · ') : `${summary.graded || 0}/${summary.total}`;
+          $now.text(`✓ ${scored} ${detail} ${i18n('answers graded')}${failed}`);
+        } else {
+          $now.text(`✓ ${i18n('Scores computed — Total = 🅰 Block A + 🅱 Block B per student.')}`);
+        }
         settleUi();
       },
       async finishFailed(msg) {
@@ -405,7 +447,9 @@ export default new NamedPage('self_learning_detail', () => {
       }
       missCount = 0;
       if (job.state === 'running' && !job.stale) {
-        showEvalCard().setProgress(job.progress); // who is being judged now
+        const c = showEvalCard();
+        if (job.force) c.markForce();
+        c.setProgress(job.progress); // who is being judged now
         return;
       }
       await settle(job);
@@ -425,8 +469,10 @@ export default new NamedPage('self_learning_detail', () => {
     if (card) card.destroy(); // a finished card from the previous run
     ownCache.clear(); // results are about to be rewritten
     try {
-      await request.post(window.location.pathname, { operation: 'recompute' });
-      showEvalCard();
+      // ♻️ The button ALWAYS re-runs the full evaluation from scratch —
+      // every answer, fix, dialogue and concept is judged anew.
+      await request.post(window.location.pathname, { operation: 'recompute', force: true });
+      showEvalCard().markForce();
       startPoll();
     } catch (e) {
       $evalBtn.prop('disabled', false);
@@ -442,7 +488,8 @@ export default new NamedPage('self_learning_detail', () => {
       const res = await request.post(window.location.pathname, { operation: 'evalStatus' });
       if (res.job && res.job.state === 'running' && !res.job.stale) {
         $evalBtn.prop('disabled', true);
-        showEvalCard();
+        const c = showEvalCard();
+        if (res.job.force) c.markForce();
         startPoll();
       }
     } catch (e) { /* no job info — nothing to re-attach */ }
