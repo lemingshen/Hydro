@@ -74,6 +74,9 @@ function uniqCaseInsensitive(list: string[]): string[] {
 }
 
 export class KnowledgeModel {
+    /** The raw knowledge-point collection (read-only external use). */
+    static coll = coll;
+
     /**
      * Collapse whitespace, drop trailing punctuation, cap the length. Commas
      * become spaces: the problem set's tags= filter is comma-separated, so

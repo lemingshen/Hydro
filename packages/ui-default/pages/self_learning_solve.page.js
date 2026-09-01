@@ -457,6 +457,25 @@ export default new NamedPage('self_learning_solve', async () => {
    */
   let panelHasQuestion = () => false;
   let panelAnswer = async () => {};
+  /** Scrolls the editor to the open question's anchored lines (assigned by initScratchpad). */
+  let panelRevealQuestion = () => {};
+  /**
+   * One-line-by-default input that grows with its content, so neither the
+   * placeholder nor a long answer ever scrolls inside a fixed box — the
+   * scrollbar appears only past the stylesheet's max-height. Declared up
+   * here because refreshPanelInput (inside initScratchpad) calls it.
+   */
+  const PANEL_INPUT_MIN = 44; // one comfortable line at 13px / 1.45
+  const PANEL_INPUT_MAX = 120; // keep in sync with .sl-input-row textarea max-height
+  function autoGrowPanelInput() {
+    const el = $('#sl-panel-input')[0];
+    if (!el) return;
+    el.style.height = 'auto';
+    const want = el.scrollHeight + 2; // + top/bottom border (border-box)
+    el.style.height = `${Math.min(Math.max(want, PANEL_INPUT_MIN), PANEL_INPUT_MAX)}px`;
+    el.style.overflowY = want > PANEL_INPUT_MAX ? 'auto' : 'hidden';
+  }
+  $('#sl-panel-input').on('input', autoGrowPanelInput);
 
   /* ------- floating layout: body portal, drag, viewport-adaptive geometry ------- */
 
@@ -464,11 +483,13 @@ export default new NamedPage('self_learning_solve', async () => {
   // adapt naturally to any page size, window resize, or zoom level.
   const FAB_POS_KEY = 'hydro:sl-fab-pos';
   const PANEL_SIZE_KEY = 'hydro:sl-panel-size';
+  const PANEL_POS_KEY = 'hydro:sl-panel-pos';
   const FAB_SIZE = 56;
   const EDGE = 12;
   let fabDragMoved = false;
   let fabFrac = null; // {fx, fy} in [0,1]; null = untouched default (center right)
   let sizeFrac = null; // {fw, fh} as fractions of the viewport; null = default size
+  let panelFrac = null; // {fx, fy} of the window's top-left; null = hug the launcher
   let isExpanded = false;
 
   // position:fixed silently degrades to absolute positioning inside any transformed
@@ -583,9 +604,25 @@ export default new NamedPage('self_learning_solve', async () => {
   }
 
   /**
+   * The window's top-left as fractions of its MOVABLE RANGE (viewport minus
+   * window minus margins), like the launcher's — so a saved position can
+   * never resolve off-screen, whatever the next viewport or window size is.
+   */
+  function panelPosFromPixels(left, top, w, h) {
+    const minY = topBound();
+    const rangeX = Math.max(1, window.innerWidth - w - EDGE * 2);
+    const rangeY = Math.max(1, window.innerHeight - h - minY - EDGE);
+    return {
+      fx: Math.min(1, Math.max(0, (left - EDGE) / rangeX)),
+      fy: Math.min(1, Math.max(0, (top - minY) / rangeY)),
+    };
+  }
+
+  /**
    * Single source of truth for the open window's geometry. The size scales with
-   * the viewport, the window hugs the launcher, and everything stays on screen
-   * below the navbar. Called on open, on every resize, and when toggling expand.
+   * the viewport and everything stays on screen below the navbar. Until the
+   * window has been dragged, it hugs the launcher; after a drag (see
+   * initPanelDrag) the stored top-left rules, re-clamped to the viewport.
    */
   function applyPanelLayout() {
     if (!$tutor.length || !panelOpen) return;
@@ -596,17 +633,24 @@ export default new NamedPage('self_learning_solve', async () => {
       });
       return;
     }
-    // Expanded: a large reading pane — up to 760px wide, full available height —
-    // that is still a floating window anchored to the launcher.
+    // Expanded: a large reading pane — up to 760px wide, full available height.
     const size = isExpanded
       ? {
         w: Math.min(760, Math.max(300, window.innerWidth - EDGE * 2)),
         h: Math.max(360, window.innerHeight - topBound() - EDGE),
       }
       : panelSizePixels();
-    const fp = fabPixelPos();
-    const left = Math.min(Math.max(EDGE, fp.x + FAB_SIZE - size.w), window.innerWidth - size.w - EDGE);
-    const top = Math.min(Math.max(topBound(), fp.y + FAB_SIZE - size.h), window.innerHeight - size.h - EDGE);
+    let left;
+    let top;
+    if (panelFrac) {
+      const minY = topBound();
+      left = EDGE + panelFrac.fx * Math.max(0, window.innerWidth - size.w - EDGE * 2);
+      top = minY + panelFrac.fy * Math.max(0, window.innerHeight - size.h - minY - EDGE);
+    } else {
+      const fp = fabPixelPos();
+      left = Math.min(Math.max(EDGE, fp.x + FAB_SIZE - size.w), window.innerWidth - size.w - EDGE);
+      top = Math.min(Math.max(topBound(), fp.y + FAB_SIZE - size.h), window.innerHeight - size.h - EDGE);
+    }
     $tutor.css({
       width: `${size.w}px`, height: `${size.h}px`, left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', maxWidth: 'none',
     });
@@ -675,10 +719,94 @@ export default new NamedPage('self_learning_solve', async () => {
       try {
         localStorage.setItem(PANEL_SIZE_KEY, JSON.stringify(sizeFrac));
       } catch (e) { /* persistence is best-effort */ }
+      // Corner-resizing moves the top-left; a dragged window must keep the
+      // position it just resized to instead of snapping back on relayout.
+      if (panelFrac) {
+        panelFrac = panelPosFromPixels(r.left, r.top, r.width, r.height);
+        try {
+          localStorage.setItem(PANEL_POS_KEY, JSON.stringify(panelFrac));
+        } catch (e) { /* persistence is best-effort */ }
+      }
       applyPanelLayout();
     };
     handle.addEventListener('pointerup', endResize);
     handle.addEventListener('pointercancel', endResize);
+  }
+
+  /**
+   * Requested UX: the window is draggable by its upper frame. Pointer-drag
+   * any empty header area — the action buttons, the question chip and the
+   * resize corner keep their own gestures, and the narrow-viewport sheet
+   * layout is not draggable. The dropped position is stored as fractions of
+   * the movable range (PANEL_POS_KEY) so it survives reloads and viewport
+   * changes without ever resolving off-screen; double-clicking the same
+   * empty header area toggles the expanded reading pane.
+   */
+  function initPanelDrag() {
+    const header = $tutor.find('.sl-float__header')[0];
+    if (!header) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(PANEL_POS_KEY) || 'null');
+      if (saved && Number.isFinite(saved.fx) && Number.isFinite(saved.fy)) {
+        panelFrac = { fx: Math.min(1, Math.max(0, saved.fx)), fy: Math.min(1, Math.max(0, saved.fy)) };
+      }
+    } catch (e) { /* keep hugging the launcher */ }
+    const ownGesture = (ev) => !!(ev.target.closest && ev.target.closest('.sl-hbtn, .sl-float__qtag, .sl-float__resize'));
+    let dragging = false;
+    let moved = false;
+    let startX = 0;
+    let startY = 0;
+    let origL = 0;
+    let origT = 0;
+    let boxW = 0;
+    let boxH = 0;
+    header.addEventListener('pointerdown', (ev) => {
+      if (isNarrowViewport()) return;
+      if (ev.button !== undefined && ev.button !== 0) return;
+      if (ownGesture(ev)) return;
+      const r = $tutor[0].getBoundingClientRect();
+      startX = ev.clientX;
+      startY = ev.clientY;
+      origL = r.left;
+      origT = r.top;
+      boxW = r.width;
+      boxH = r.height;
+      dragging = true;
+      moved = false;
+      header.setPointerCapture?.(ev.pointerId);
+    });
+    header.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) < 4) return; // still a click
+      moved = true;
+      ev.preventDefault();
+      const minY = topBound();
+      const left = Math.min(Math.max(EDGE, origL + dx), Math.max(EDGE, window.innerWidth - boxW - EDGE));
+      const top = Math.min(Math.max(minY, origT + dy), Math.max(minY, window.innerHeight - boxH - EDGE));
+      $tutor.css({
+        left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto',
+      });
+    });
+    const endDrag = (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      header.releasePointerCapture?.(ev.pointerId);
+      if (!moved) return;
+      const r = $tutor[0].getBoundingClientRect();
+      panelFrac = panelPosFromPixels(r.left, r.top, r.width, r.height);
+      try {
+        localStorage.setItem(PANEL_POS_KEY, JSON.stringify(panelFrac));
+      } catch (e) { /* persistence is best-effort */ }
+    };
+    header.addEventListener('pointerup', endDrag);
+    header.addEventListener('pointercancel', endDrag);
+    header.addEventListener('dblclick', (ev) => {
+      if (ownGesture(ev)) return;
+      ev.preventDefault();
+      setExpanded(!isExpanded);
+    });
   }
 
   /* ------------------------------ tutor chat ------------------------------- */
@@ -691,6 +819,35 @@ export default new NamedPage('self_learning_solve', async () => {
     $chat.find('.sl-empty').remove();
     $chat.append($(`<div class="sl-divider${accepted ? ' accepted' : ''}"><span>${escapeHtml(text)}</span></div>`));
     scrollChat();
+  }
+
+  /** 🎓 The five level meanings, indexable by level (titles for chips). */
+  const LEVEL_DESCS = [
+    'no answer or evasion',
+    'restates the code in words',
+    'correct mechanical account — what and how',
+    'correct plus why it is necessary',
+    'correct plus a generalization (tradeoff, alternative, complexity)',
+  ];
+  /** 🧩 The five failure-phase REASONING levels (thinking vs guessing). */
+  const REASONING_DESCS = [
+    'no substantive answer, off-topic, or restates the question',
+    'a guess with no reasoning',
+    'relevant reasoning, but vague or partly wrong',
+    'correct, specific reasoning about their own code',
+    'correct reasoning plus predicts a consequence or generalizes',
+  ];
+  /**
+   * Per-answer grade chip — immediate student feedback on a graded answer.
+   * kind picks the rubric wording: post-acceptance 'ownership' (🎓) vs
+   * failure-phase 'reasoning' (🧩).
+   */
+  function levelChipHtml(level, kind = 'ownership') {
+    const n = Math.min(4, Math.max(0, Math.round(level)));
+    const descs = kind === 'reasoning' ? REASONING_DESCS : LEVEL_DESCS;
+    const icon = kind === 'reasoning' ? '🧩' : '🎓';
+    const title = `${i18n('Level {0} of {1}').replace('{0}', n).replace('{1}', 4)} — ${i18n(descs[n])}`;
+    return `<span class="sl-lvl sl-lvl--l${n}" title="${escapeHtml(title)}">${icon} L${n}/4</span>`;
   }
 
   function appendBubble(role, content, meta = null) {
@@ -710,6 +867,7 @@ export default new NamedPage('self_learning_solve', async () => {
       const loc = meta.endLine && meta.endLine !== meta.line ? `L${meta.line}–${meta.endLine}` : `L${meta.line}`;
       $bubble.prepend(`<div class="sl-loc">📍 ${escapeHtml(loc)}</div>`);
     }
+    if (meta && typeof meta.level === 'number') $bubble.append(levelChipHtml(meta.level, meta.levelKind || 'ownership'));
     $chat.append($msg);
     if (meta && meta.resolved) {
       const note = meta.accepted
@@ -731,7 +889,12 @@ export default new NamedPage('self_learning_solve', async () => {
       else if (m.kind === 'accepted') { underAccepted = true; appendDivider(m.content, true); } // eslint-disable-line brace-style
       else if (m.kind === 'anno') {
         appendBubble(m.role, m.content, {
-          line: m.line, endLine: m.endLine, resolved: m.resolved, accepted: underAccepted,
+          line: m.line,
+          endLine: m.endLine,
+          resolved: m.resolved,
+          accepted: underAccepted,
+          level: typeof m.level === 'number' ? m.level : m.rlevel,
+          levelKind: typeof m.level === 'number' ? 'ownership' : 'reasoning',
         });
       }
       // Any other kind is a legacy button-chat turn: retired — the pop-up
@@ -1102,12 +1265,31 @@ export default new NamedPage('self_learning_solve', async () => {
     /** Panel input: enabled only while the tutor has an unanswered question. */
     function refreshPanelInput() {
       const open = !!(lastQuestion && !lastQuestion.resolved);
+      // The disabled placeholder must FIT the one-line box (the fuller
+      // wording lives in the toast shown when a send is attempted anyway).
       $('#sl-panel-input').prop('disabled', !open).attr('placeholder', open
         ? i18n('Answer the tutor\u2019s open question here… (Enter to send)')
-        : i18n('No open question right now — submit your code to get the next one.'));
+        : i18n('No open question yet — submit your code first.'));
       $('#sl-panel-send').prop('disabled', !open);
+      // Header chip: where the open question is anchored; click jumps there.
+      const $tag = $('#sl-tutor-qtag');
+      if (open && lastQuestion.line) {
+        const loc = lastQuestion.endLine && lastQuestion.endLine !== lastQuestion.line
+          ? `L${lastQuestion.line}–${lastQuestion.endLine}` : `L${lastQuestion.line}`;
+        $tag.text(`📍 ${loc}`).attr('title', i18n('Jump to the anchored lines')).show();
+      } else $tag.hide();
+      // Chromium counts the placeholder in scrollHeight, so a wrapped
+      // placeholder gets room instead of a scrollbar; elsewhere the hidden
+      // overflow clips cleanly with no bar.
+      autoGrowPanelInput();
     }
     panelHasQuestion = () => !!(lastQuestion && !lastQuestion.resolved);
+    panelRevealQuestion = () => {
+      const ed = findScratchpadEditor();
+      if (ed && lastQuestion && lastQuestion.line) {
+        try { ed.revealLineInCenter(lastQuestion.line); } catch (e) { /* the editor may be gone */ }
+      }
+    };
 
     function clearAnnotations() {
       annoSession += 1;
@@ -1243,6 +1425,7 @@ export default new NamedPage('self_learning_solve', async () => {
       .sl-anno__input .sl-anno__skip { background: var(--pta-card); color: var(--pta-crimson-text); border: 1px solid var(--pta-crimson-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; transition: background .15s ease, color .15s ease, border-color .15s ease; }
       .sl-anno__input .sl-anno__skip:hover { background: var(--pta-crimson-soft); border-color: var(--pta-crimson); }
       .sl-anno__input .sl-anno__skip:disabled { opacity: .5; cursor: default; background: var(--pta-card); }
+      .sl-anno__qcount { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; opacity: .8; margin-right: 8px; align-self: center; }
       .sl-anno--resolved { border-left-color: var(--pta-success); animation: slResolvePulse .7s ease-out 1; }
       .sl-anno--resolved .sl-anno__head { color: var(--pta-ok-text); }
       .sl-anno--info { align-items: center; min-height: 40px; border-left-color: var(--pta-primary-2); box-shadow: 0 10px 28px -12px rgba(28, 126, 214, .4), 0 2px 6px rgba(15, 23, 42, .08); border-color: var(--pta-blue-line); }
@@ -1265,6 +1448,23 @@ export default new NamedPage('self_learning_solve', async () => {
       .pta-dark .sl-anno, .pta-dark .sl-anno-ghost { border-left-color: #e35d6a; box-shadow: 0 12px 30px -12px rgba(0, 0, 0, .65); }
       .pta-dark .sl-anno--resolved { border-left-color: #69b34c; }
       .pta-dark .sl-anno--info { border-left-color: #4dabf7; }
+      /* 🎓 ownership-evaluation theatre: shows the grading PROCESS as staged
+         steps while the LLM works. Stages only — the resulting level is
+         embargoed server-side and never rendered anywhere in the client. */
+      .sl-own-eval { margin: 8px 2px 4px; padding: 10px 12px; background: linear-gradient(135deg, var(--pta-violet-soft), var(--pta-card)); border: 1px solid var(--pta-violet-line); border-radius: 12px; animation: ptaFadeIn .25s ease both; }
+      .sl-own-eval__title { font-size: 12px; font-weight: 700; color: var(--pta-violet-text); margin-bottom: 7px; }
+      .sl-own-eval__bar { height: 3px; border-radius: 999px; background: var(--pta-violet-soft); overflow: hidden; margin-bottom: 8px; position: relative; }
+      .sl-own-eval__bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 40%; border-radius: 999px; background: linear-gradient(90deg, transparent, var(--pta-violet, #7048e8), transparent); animation: slOwnScan 1.3s ease-in-out infinite; }
+      @keyframes slOwnScan { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
+      .sl-own-eval__stage { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--pta-ink-faint); padding: 3px 0; opacity: .55; transition: color .25s ease, opacity .25s ease; }
+      .sl-own-eval__stage.is-active { color: var(--pta-ink); opacity: 1; }
+      .sl-own-eval__stage.is-done { color: var(--pta-ok-text); opacity: .9; }
+      .sl-own-eval__mark { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--pta-ok-text); flex: 0 0 auto; }
+      .sl-own-eval__stage:not(.is-active) .sl-own-eval__mark .sl-spin--sm { visibility: hidden; }
+      .sl-own-eval__icon { flex: 0 0 auto; }
+      .sl-own-eval--done .sl-own-eval__bar i { animation: none; transform: none; width: 100%; background: var(--pta-ok-line); }
+      .sl-own-eval--panel { margin: 0; }
+      @media (prefers-reduced-motion: reduce) { .sl-own-eval, .sl-own-eval__bar i { animation: none !important; } }
 `;
 
     function ensureTutorUiStyle() {
@@ -1293,13 +1493,64 @@ export default new NamedPage('self_learning_solve', async () => {
       unlockEditor();
     }
 
-    let thinkingRow = null;
-
     /**
      * Requested UX: the full-page overlay is only for the moment right after a
      * submission, before any card exists; once the pop-up card is on screen,
      * the thinking animation lives INSIDE it.
      */
+    let thinkingRow = null;
+    /** The active 🎓 evaluation theatre, so hideThinking can stop its timer. */
+    let ownEval = null;
+
+    /**
+     * 🎓 Ownership-evaluation theatre: while the LLM grades a
+     * post-acceptance explanation, demonstrate the PROCESS as three staged
+     * steps — read → cross-check → assess — with a scanning bar. The
+     * progression is purely time-driven (there is no real progress signal),
+     * and it deliberately never shows the resulting level, which is
+     * embargoed server-side.
+     */
+    function buildOwnershipEval() {
+      ensureTutorUiStyle();
+      const stages = [
+        ['📖', i18n('Reading your explanation')],
+        ['🔎', i18n('Cross-checking it against your code')],
+        ['🎓', i18n('Assessing depth of understanding')],
+      ];
+      const el = document.createElement('div');
+      el.className = 'sl-own-eval';
+      el.innerHTML = `<div class="sl-own-eval__title">🎓 ${escapeHtml(i18n('The tutor is evaluating your explanation…'))}</div>`
+        + '<div class="sl-own-eval__bar"><i></i></div>'
+        + stages.map(([icon, label]) => '<div class="sl-own-eval__stage">'
+          + '<span class="sl-own-eval__mark"><span class="sl-spin--sm"></span></span>'
+          + `<span class="sl-own-eval__icon">${icon}</span><span>${escapeHtml(label)}</span>`
+          + '</div>').join('');
+      const rows = [].slice.call(el.querySelectorAll('.sl-own-eval__stage'));
+      let i = -1;
+      const advance = () => {
+        if (i >= 0 && rows[i]) {
+          rows[i].classList.remove('is-active');
+          rows[i].classList.add('is-done');
+          rows[i].querySelector('.sl-own-eval__mark').textContent = '✓';
+        }
+        i += 1;
+        if (rows[i]) rows[i].classList.add('is-active');
+      };
+      advance(); // stage 1 starts immediately
+      const timer = setInterval(() => { if (i < rows.length - 1) advance(); }, 1500);
+      return {
+        el,
+        /** Flip everything to done; resolves after a short beat so the completion is visible. */
+        async complete() {
+          clearInterval(timer);
+          while (i < rows.length) advance();
+          el.classList.add('sl-own-eval--done');
+          await new Promise((resolve) => { setTimeout(resolve, 380); });
+        },
+        cancel() { clearInterval(timer); },
+      };
+    }
+
     function showThinking(mode) {
       ensureTutorUiStyle();
       lockEditor();
@@ -1307,8 +1558,16 @@ export default new NamedPage('self_learning_solve', async () => {
       if (cardState) {
         const $log = $(cardState.dom).find('.sl-anno__log');
         if (!thinkingRow) {
-          thinkingRow = $('<div class="sl-anno__thinking"><span class="sl-spin--sm"></span>'
-            + `<span>${escapeHtml(i18n('The tutor is thinking...'))}</span></div>`)[0];
+          if (mode === 'ownership') {
+            // 🎓 Grading an accepted-code explanation: the staged evaluation
+            // theatre replaces the plain "thinking" row (same lifecycle, so
+            // every hideThinking path — including errors — cleans it up).
+            ownEval = buildOwnershipEval();
+            thinkingRow = ownEval.el;
+          } else {
+            thinkingRow = $('<div class="sl-anno__thinking"><span class="sl-spin--sm"></span>'
+              + `<span>${escapeHtml(i18n('The tutor is thinking...'))}</span></div>`)[0];
+          }
         }
         $log.append(thinkingRow);
         $log.scrollTop($log[0].scrollHeight);
@@ -1320,6 +1579,10 @@ export default new NamedPage('self_learning_solve', async () => {
     }
 
     function hideThinking() {
+      if (ownEval) {
+        ownEval.cancel();
+        ownEval = null;
+      }
       if (thinkingRow && thinkingRow.parentNode) thinkingRow.parentNode.removeChild(thinkingRow);
       thinkingRow = null;
       hideOverlay(); // no-op when only the in-card spinner was shown; also unlocks
@@ -1388,13 +1651,17 @@ export default new NamedPage('self_learning_solve', async () => {
       if (opts.hiddenEnter) dom.style.visibility = 'hidden'; // the flight reveals it
       dom.innerHTML = '<div class="sl-anno__head">'
         + `<span>🤖 ${escapeHtml(i18n('AI Socratic Tutor'))}</span>`
-        + `<span class="sl-anno__btns"><button type="button" class="sl-anno__close" title="${escapeHtml(i18n('Dismiss'))}">×</button></span>`
+        + `<span class="sl-anno__btns">${(opts.ownership && opts.ownership.max)
+          ? `<span class="sl-anno__qcount" title="${escapeHtml(i18n('Walkthrough question {0} of up to {1}').replace('{0}', opts.ownership.asked).replace('{1}', opts.ownership.max))}">Q${opts.ownership.asked}/${opts.ownership.max}</span>`
+          : ''}<button type="button" class="sl-anno__close" title="${escapeHtml(i18n('Dismiss'))}">×</button></span>`
         + '</div>'
         + '<div class="sl-anno__log"></div>'
         + '<div class="sl-anno__input">'
         + `<input type="text" maxlength="1000" placeholder="${escapeHtml(i18n('Type your answer \u2014 it\u2019s fine to say you don\u2019t know (Enter to send)'))}">`
         + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))}">➤</button>`
-        + (accepted ? '' : `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Already fixed it? Jump straight to the next issue.'))}">${escapeHtml(i18n('Next issue'))} ➜</button>`)
+        + (accepted
+          ? `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Skip to the next question'))}">${escapeHtml(i18n('Skip this question'))} ➜</button>`
+          : `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Already fixed it? Jump straight to the next issue.'))}">${escapeHtml(i18n('Next issue'))} ➜</button>`)
         + '</div>';
       const entry = addZone(ed, endLine, 120, dom, { line, endLine });
       cardState = {
@@ -1402,8 +1669,11 @@ export default new NamedPage('self_learning_solve', async () => {
       };
       lastQuestion = cardState;
       refreshPanelInput();
-      // Combined pop-up on success: the celebration leads, the reflection follows.
-      if (accepted) appendCardNote(i18n('Accepted! Great job!'), '🎉');
+      // 🎓 Ownership walkthrough: the 🎉 celebration leads on the FIRST
+      // post-acceptance card only — follow-up questions go straight in.
+      // (The Q-counter above shows counts only; the LLM's per-answer grades
+      // never reach the client.)
+      if (accepted && (!opts.ownership || opts.ownership.asked <= 1)) appendCardNote(i18n('Accepted! Great job!'), '🎉');
       appendCardMsg('tutor', ann.question);
       // Mirror into the launcher panel: the red button replays this dialogue.
       appendBubble('assistant', ann.question, { line, endLine });
@@ -1418,10 +1688,11 @@ export default new NamedPage('self_learning_solve', async () => {
       $(dom).find('.sl-anno__skip').on('click', () => {
         const cs = cardState;
         if (!cs || cs.dom !== dom) return;
-        // Fast-student path: fixed without answering. Record the question as
-        // asked and advance immediately with the current editor code.
+        // Fast path: advance without answering. Record the question as asked
+        // and continue with the current editor code. (🎓 On an accepted
+        // walkthrough the skipped question stays in the stored sequence.)
         if (!askedQuestions.includes(cs.question)) askedQuestions.push(cs.question);
-        requestNextQuestion(cs.rid, cs.endLine);
+        requestNextQuestion(cs.rid, cs.endLine, cs.accepted);
       });
       const input = dom.querySelector('.sl-anno__input input');
       const send = () => {
@@ -1494,7 +1765,9 @@ export default new NamedPage('self_learning_solve', async () => {
     async function requestNextQuestion(rid, afterLine, accepted = false) {
       const session = annoSession;
       const prevCard = cardState;
-      const useGhost = !!prevCard && !accepted;
+      // 🎓 The ownership walkthrough chains accepted questions with the same
+      // ghost flight the failure walkthrough uses.
+      const useGhost = !!prevCard;
       let ghost = null;
       if (useGhost) {
         // The resolved card lifts off as a fixed ghost carrying a thinking
@@ -1504,7 +1777,7 @@ export default new NamedPage('self_learning_solve', async () => {
         ghost.className = 'sl-anno-ghost';
         ghost.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;`;
         ghost.innerHTML = '<div class="sl-anno-ghost__chip"><span class="sl-spin--sm"></span>'
-          + `<span>${escapeHtml(i18n('Finding the next issue...'))}</span></div>`;
+          + `<span>${escapeHtml(i18n(accepted ? 'Preparing the next question...' : 'Finding the next issue...'))}</span></div>`;
         document.body.appendChild(ghost);
         removeZoneEntry(prevCard.entry);
         if (cardState === prevCard) cardState = null;
@@ -1557,9 +1830,9 @@ export default new NamedPage('self_learning_solve', async () => {
           if (ghost) {
             const g = ghost;
             ghost = null;
-            await flyGhostToNewCard(g, () => showQuestionCard(rid, res.annotation, accepted, { hiddenEnter: true }));
+            await flyGhostToNewCard(g, () => showQuestionCard(rid, res.annotation, accepted, { hiddenEnter: true, ownership: res.ownership }));
           } else {
-            showQuestionCard(rid, res.annotation, accepted);
+            showQuestionCard(rid, res.annotation, accepted, { ownership: res.ownership });
           }
         } else {
           dropGhost();
@@ -1587,7 +1860,10 @@ export default new NamedPage('self_learning_solve', async () => {
       const priorHistory = cs.history.slice();
       appendCardMsg('student', text);
       $(cs.dom).find('.sl-anno__input input').val('');
-      showThinking(); // in-card spinner; the editor stays locked while the LLM evaluates
+      // 🎓 Accepted card: the answer is being GRADED for the ownership
+      // rubric — show the staged evaluation theatre instead of the plain
+      // spinner. (The editor stays locked either way.)
+      showThinking(cs.accepted ? 'ownership' : undefined);
       try {
         const res = await request.post(tutorUrl, {
           operation: 'annotateReply',
@@ -1602,11 +1878,21 @@ export default new NamedPage('self_learning_solve', async () => {
         if (session !== annoSession) return;
         cs.history.push({ role: 'student', content: text });
         cs.history.push({ role: 'tutor', content: res.reply });
+        // Let the theatre reach its all-done beat before the reply lands.
+        if (cs.accepted && ownEval) await ownEval.complete();
         hideThinking();
         absorbGate(res);
+        // 🎓 Immediate feedback: the LLM's grade for THIS answer lands as
+        // a chip on the student's message (card + the panel mirror below).
+        if (typeof res.level === 'number') {
+          const $ans = $(cs.dom).find('.sl-anno__msg.student').last();
+          if ($ans.length) $ans.append(` ${levelChipHtml(res.level, res.levelKind)}`);
+        }
         appendCardMsg('tutor', res.reply);
         // Mirror the exchange into the launcher panel history.
-        appendBubble('user', text, { line: cs.line, endLine: cs.endLine });
+        appendBubble('user', text, {
+          line: cs.line, endLine: cs.endLine, level: res.level, levelKind: res.levelKind,
+        });
         appendBubble('assistant', res.reply, {
           line: cs.line, endLine: cs.endLine, resolved: res.resolved, accepted: cs.accepted,
         });
@@ -1617,8 +1903,15 @@ export default new NamedPage('self_learning_solve', async () => {
           $(cs.dom).addClass('sl-anno--resolved');
           $(cs.dom).find('.sl-anno__input input, .sl-anno__send').prop('disabled', true);
           if (cs.accepted) {
-            // Post-success reflection stays terminal: close with praise.
-            appendCardNote(i18n('Great reflection — you have truly mastered this problem!'), '🎉');
+            // 🎓 Ownership walkthrough: a resolved answer chains straight
+            // into the next question. The server closes the sequence (and
+            // finishes the task) once the budget is spent or no distinct
+            // aspect remains — that final call shows the 🎉 mastery card.
+            appendCardNote(i18n('Nice — on to the next question.'), '👏');
+            fitZone(cs.entry, 60, cardMaxPx());
+            setTimeout(() => {
+              if (session === annoSession && cardState === cs) requestNextQuestion(cs.rid, cs.endLine, true);
+            }, 650);
           } else {
             // Guided session: the student FIXES this spot in the editor, then
             // clicks the (always-visible) Next-issue button — the next
@@ -1652,7 +1945,19 @@ export default new NamedPage('self_learning_solve', async () => {
       const session = annoSession;
       const priorHistory = q.history.slice();
       appendBubble('user', text, { line: q.line, endLine: q.endLine });
-      const $wait = $(`<div class="sl-msg assistant"><div class="sl-bubble"><em>${escapeHtml(i18n('The tutor is thinking...'))}</em></div></div>`).appendTo($chat);
+      // 🎓 Accepted: the answer is being graded for the ownership rubric —
+      // the panel bubble carries the same staged evaluation theatre as the
+      // card (compact); otherwise the plain "thinking" text.
+      let panelEval = null;
+      const $wait = $('<div class="sl-msg assistant"><div class="sl-bubble"></div></div>');
+      if (q.accepted) {
+        panelEval = buildOwnershipEval();
+        panelEval.el.classList.add('sl-own-eval--panel');
+        $wait.children('.sl-bubble').append(panelEval.el);
+      } else {
+        $wait.children('.sl-bubble').html(`<em>${escapeHtml(i18n('The tutor is thinking...'))}</em>`);
+      }
+      $wait.appendTo($chat);
       scrollChat();
       $('#sl-panel-input, #sl-panel-send').prop('disabled', true);
       try {
@@ -1666,8 +1971,13 @@ export default new NamedPage('self_learning_solve', async () => {
           text,
           code: currentEditorCode(),
         });
+        if (panelEval) await panelEval.complete();
         $wait.remove();
         if (session !== annoSession) return;
+        if (typeof res.level === 'number') {
+          const $ans = $chat.find('.sl-msg.user').last().find('.sl-bubble');
+          if ($ans.length) $ans.append(levelChipHtml(res.level, res.levelKind));
+        }
         q.history.push({ role: 'student', content: text });
         q.history.push({ role: 'tutor', content: res.reply });
         absorbGate(res);
@@ -1678,10 +1988,14 @@ export default new NamedPage('self_learning_solve', async () => {
           askedQuestions.push(q.question);
           q.resolved = true;
           appendDivider(q.accepted
-            ? i18n('Great reflection — you have truly mastered this problem!')
+            ? i18n('Nice — on to the next question.')
             : i18n('Great — now FIX this line in the editor.'), q.accepted);
+          // 🎓 Accepted: continue the ownership walkthrough (the next card
+          // opens at its anchor in the editor; the panel mirrors it).
+          if (q.accepted) requestNextQuestion(q.rid, q.endLine, true);
         }
       } catch (e) {
+        if (panelEval) panelEval.cancel();
         $wait.remove();
         appendBubble('assistant', `⚠️ ${e.message}`);
       } finally {
@@ -1729,13 +2043,13 @@ export default new NamedPage('self_learning_solve', async () => {
       const ed = findScratchpadEditor();
       const lastLine = (ed && ed.getModel()) ? ed.getModel().getLineCount() : 0;
       if (verdict && verdict.accepted) {
-        // Requirement: ONE combined pop-up on success — the reflection card
-        // itself opens with the 🎉 celebration row, then the single
-        // self-reflection question. If nothing is worth reflecting on, a
-        // lone celebration card shows instead (never both).
+        // 🎓 Ownership walkthrough: ONE combined pop-up on success — the
+        // first card opens with the 🎉 celebration row, then the tutor's
+        // questions about the student's OWN code chain one at a time
+        // (2–3 normally; 5–6 when accepted on the very first attempt).
         askedQuestions = [];
-        // Progression: answering that question finishes the task; keep a
-        // way to re-open it if the card was closed unanswered.
+        // Keep a way back in if a card was closed unanswered — the server
+        // resumes the same unfinished sequence, never a fresh one.
         reaskReflection = async () => {
           askedQuestions = [];
           await requestNextQuestion(rid, lastLine, true);
@@ -1916,6 +2230,7 @@ export default new NamedPage('self_learning_solve', async () => {
       return;
     }
     $in.val('');
+    autoGrowPanelInput();
     await panelAnswer(text);
   };
   $('#sl-panel-send').on('click', sendPanel);
@@ -1925,13 +2240,23 @@ export default new NamedPage('self_learning_solve', async () => {
       sendPanel();
     }
   });
+  // The header chip mirrors the open question's anchor; clicking (or Enter /
+  // Space — it is a focusable role=button span) recenters the editor on it.
+  const revealFromTag = (ev) => {
+    if (ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
+    ev.preventDefault();
+    panelRevealQuestion();
+  };
+  $('#sl-tutor-qtag').on('click', revealFromTag).on('keydown', revealFromTag);
   // Until a question exists the row is disabled with an explanation.
-  $('#sl-panel-input').prop('disabled', true).attr('placeholder', i18n('No open question right now — submit your code to get the next one.'));
+  $('#sl-panel-input').prop('disabled', true).attr('placeholder', i18n('No open question yet — submit your code first.'));
   $('#sl-panel-send').prop('disabled', true);
+  autoGrowPanelInput();
   $(document).on('keydown', (ev) => {
     if (ev.key === 'Escape' && panelOpen && isExpanded) setExpanded(false);
   });
   initPanelResize();
+  initPanelDrag();
   $(window).on('resize', () => {
     syncFab();
     applyPanelLayout();

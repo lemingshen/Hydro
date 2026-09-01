@@ -103,6 +103,9 @@
       <div id="sl-tutor-resize" class="sl-float__resize" title="{{ _('Drag to resize') }}"></div>
       <div class="sl-float__header">
         <span class="sl-float__title">🤖 {{ _('AI Socratic Tutor') }}</span>
+        {#- Filled by refreshPanelInput while a question is open: the anchor
+            lines of the live question; clicking jumps the editor there. -#}
+        <span id="sl-tutor-qtag" class="sl-float__qtag" style="display:none" role="button" tabindex="0"></span>
         <span class="sl-float__actions">
           <button id="sl-tutor-expand" type="button" class="sl-hbtn" title="{{ _('Expand') }}">⤢</button>
           <button id="sl-tutor-close" type="button" class="sl-hbtn" title="{{ _('Minimize') }}">–</button>
@@ -113,12 +116,18 @@
         The panel continues the tutor's OPEN question: close a card by
         mistake and you can still answer it here (self_learning_solve.page.js
         routes the reply through the same endpoint as the card).
+
+        Apostrophes below are the literal ’ character: nunjucks string
+        literals do NOT understand backslash-u escapes — the lexer drops the
+        backslash, so the escaped form used to render as stray literal text
+        and, worse, became part of the i18n key, so the zh/zh_TW
+        translations never matched.
       -#}
       <div class="sl-input-row">
-        <textarea id="sl-panel-input" class="textbox" placeholder="{{ _('Answer the tutor\u2019s open question here… (Enter to send)') }}"></textarea>
+        <textarea id="sl-panel-input" class="textbox" rows="1" enterkeyhint="send" placeholder="{{ _('Answer the tutor’s open question here… (Enter to send)') }}"></textarea>
         <button id="sl-panel-send" class="rounded primary button" type="button">{{ _('Send') }}</button>
       </div>
-      <p class="sl-float__hint" id="sl-panel-hint">{{ _('Your line-anchored tutoring, in one place. The tutor\u2019s open question can be answered here or in its pop-up card.') }}</p>
+      <p class="sl-float__hint" id="sl-panel-hint">{{ _('Your line-anchored tutoring, in one place. The tutor’s open question can be answered here or in its pop-up card.') }}</p>
     </div>
     {% elif isStudent and tutorEligible and not tutorConfigured %}
     <div class="section side">
