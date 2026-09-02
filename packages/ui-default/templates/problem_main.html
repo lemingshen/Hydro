@@ -123,7 +123,8 @@
           </div>
         </div>
       {% endif %}
-      <div class="section side">
+      {#- kpp-sticky: on wide screens the panel follows the viewport while the table scrolls (partials/category.html). -#}
+      <div class="section side kpp-sticky">
         <div class="section__header edit-mode-hide">
           <h1 class="section__title">{{ _('Knowledge points') }}</h1>
         </div>

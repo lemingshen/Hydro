@@ -235,8 +235,17 @@ export class ProblemMainHandler extends Handler {
          */
         const tagList = [...new Set(parseCategory(tags).filter((i) => i))].slice(0, 16);
         // AND semantics: each added tag narrows the result, which is what a
-        // teacher assembling a topic-specific activity expects.
-        if (tagList.length) query.$and = [...(query.$and || []), ...tagList.map((tag) => ({ tag }))];
+        // teacher assembling a topic-specific activity expects. 🌳 A tag
+        // that is a TOPIC in the catalog matches every point beneath it
+        // (tasks carry their most specific points), so filtering by
+        // "Loops" finds a task tagged "For loop reading n values".
+        if (tagList.length) {
+            const expanded = await KnowledgeModel.expandTags(domainId, tagList);
+            query.$and = [...(query.$and || []), ...tagList.map((tag) => {
+                const names = expanded.get(tag) || [tag];
+                return names.length > 1 ? { tag: { $in: names } } : { tag: names[0] };
+            })];
+        }
         // Difficulty is 1..10; 0 means "unset" on the problem AND "no bound"
         // as a filter parameter, so an unrated problem is only excluded once
         // a real lower bound is asked for.
@@ -357,47 +366,63 @@ export class ProblemMainHandler extends Handler {
             },
         });
         const activeLower = new Set(cur.tagList.map((t) => t.toLowerCase()));
+        const toggleHref = (name: string) => {
+            const active = activeLower.has(name.toLowerCase());
+            return href(active ? cur.tagList.filter((t) => t.toLowerCase() !== name.toLowerCase()) : [...cur.tagList, name]);
+        };
         try {
             const kindFilter = cur.kind ? PROBLEM_KIND_FILTERS[cur.kind] : null;
-            const [docs, usage] = await Promise.all([
-                KnowledgeModel.list(domainId, '', 500),
-                KnowledgeModel.tagUsage(domainId, kindFilter ? { $and: [buildQuery(this.user), kindFilter] } : buildQuery(this.user)),
-            ]);
-            const count = (name: string) => {
-                let n = 0;
-                for (const [tag, c] of usage) if (tag.toLowerCase() === name.toLowerCase()) n += c;
-                return n;
+            const match = kindFilter ? { $and: [buildQuery(this.user), kindFilter] } : buildQuery(this.user);
+            const usage = await KnowledgeModel.tagUsage(domainId, match);
+            const tree = await KnowledgeModel.tree(domainId, usage, match);
+            /*
+             * 🌳 The tree flattened into SECTIONS the partial can draw in
+             * order: a topic becomes a header (indented by depth, carrying
+             * the distinct roll-up and a filter link for the whole
+             * subtree), followed by its childless points as chips, then
+             * its sub-topics. Top-level childless points come first with
+             * no header when nothing is grouped, under "Other" otherwise.
+             */
+            const sections: any[] = [];
+            let total = 0;
+            let unused = 0;
+            const chipOf = (n: any) => {
+                total += 1;
+                if (!n.count) unused += 1;
+                return { name: n.name, count: n.count, active: activeLower.has(n.name.toLowerCase()), href: toggleHref(n.name), path: n.path };
             };
-            const groups = new Map<string, { name: string, count: number, active: boolean, href: string }[]>();
-            for (const d of docs) {
-                const key = d.category || '';
-                if (!groups.has(key)) groups.set(key, []);
-                const active = activeLower.has(d.nameLower);
-                groups.get(key)!.push({
-                    name: d.name,
-                    count: count(d.name),
-                    active,
-                    href: href(active
-                        ? cur.tagList.filter((t) => t.toLowerCase() !== d.nameLower)
-                        : [...cur.tagList, d.name]),
+            const walk = (node: any, parents: string[]) => {
+                const leaves = node.children.filter((c: any) => !c.children.length);
+                const topics = node.children.filter((c: any) => c.children.length);
+                sections.push({
+                    id: node.id,
+                    parents,
+                    header: {
+                        name: node.name, depth: node.depth, rollup: node.rollup, count: node.count, size: node.children.length,
+                        active: activeLower.has(node.name.toLowerCase()), href: toggleHref(node.name),
+                    },
+                    points: leaves.map(chipOf),
                 });
+                for (const t of topics) walk(t, [...parents, node.id]);
+            };
+            const looseTop = tree.filter((n) => !n.children.length);
+            const topTopics = tree.filter((n) => n.children.length);
+            if (looseTop.length) {
+                sections.push({ id: '', parents: [], header: topTopics.length ? { name: 'Other', depth: 0, rollup: 0, count: 0, size: looseTop.length, active: false, href: '' } : null, points: looseTop.map(chipOf) });
             }
-            const named = [...groups.entries()].filter(([k]) => k).sort(([a], [b]) => a.localeCompare(b));
-            const other = groups.get('') || [];
+            for (const t of topTopics) walk(t, []);
+            // "Other" last, as before.
+            if (looseTop.length && topTopics.length) sections.push(sections.shift());
             return {
                 mode: 'filter',
-                total: docs.length,
-                groups: [
-                    ...named.map(([name, points]) => ({ name, points })),
-                    // Uncategorized points: a plain list when nothing is
-                    // grouped, an "Other" group otherwise.
-                    ...other.length ? [{ name: named.length ? 'Other' : '', points: other }] : [],
-                ],
+                total,
+                unused,
+                sections,
                 clearHref: href([]),
                 canManage: this.user.hasPerm(PERM.PERM_CREATE_PROBLEM),
             };
         } catch (e) {
-            return { mode: 'filter', total: 0, groups: [], clearHref: href([]), canManage: this.user.hasPerm(PERM.PERM_CREATE_PROBLEM) };
+            return { mode: 'filter', total: 0, unused: 0, sections: [], clearHref: href([]), canManage: this.user.hasPerm(PERM.PERM_CREATE_PROBLEM) };
         }
     }
 
@@ -884,31 +909,35 @@ async function applyAllowLangs(pdoc: ProblemDoc, owner: number, raw: string) {
  */
 async function buildKnowledgePickPanel(h: Handler, domainId: string) {
     try {
-        const [docs, usage] = await Promise.all([
-            KnowledgeModel.list(domainId, '', 500),
-            KnowledgeModel.tagUsage(domainId, buildQuery(h.user)),
-        ]);
-        const usageLower = new Map<string, number>();
-        for (const [tag, n] of usage) usageLower.set(tag.toLowerCase(), (usageLower.get(tag.toLowerCase()) || 0) + n);
-        const groups = new Map<string, { name: string, count: number, description: string }[]>();
-        for (const d of docs) {
-            const key = d.category || '';
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key)!.push({ name: d.name, count: usageLower.get(d.nameLower) || 0, description: d.description || '' });
-        }
-        const named = [...groups.entries()].filter(([k]) => k).sort(([a], [b]) => a.localeCompare(b));
-        const other = groups.get('') || [];
-        return {
-            mode: 'pick',
-            total: docs.length,
-            groups: [
-                ...named.map(([name, points]) => ({ name, points })),
-                ...other.length ? [{ name: named.length ? 'Other' : '', points: other }] : [],
-            ],
-            canManage: h.user.hasPerm(PERM.PERM_CREATE_PROBLEM),
+        const usage = await KnowledgeModel.tagUsage(domainId, buildQuery(h.user));
+        const tree = await KnowledgeModel.tree(domainId, usage, buildQuery(h.user));
+        const sections: any[] = [];
+        let total = 0;
+        const chipOf = (n: any) => {
+            total += 1;
+            return { name: n.name, count: n.count, description: n.description, path: n.path };
         };
+        const walk = (node: any, parents: string[]) => {
+            const leaves = node.children.filter((c: any) => !c.children.length);
+            const topics = node.children.filter((c: any) => c.children.length);
+            sections.push({
+                id: node.id,
+                parents,
+                header: { name: node.name, depth: node.depth, rollup: node.rollup, count: node.count, size: node.children.length, active: false, href: '' },
+                // A topic can label a task too (a broad task), so the topic
+                // itself is offered as the first chip of its own section.
+                points: [{ name: node.name, count: node.count, description: node.description, path: node.path, topic: true }, ...leaves.map(chipOf)],
+            });
+            for (const t of topics) walk(t, [...parents, node.id]);
+        };
+        const looseTop = tree.filter((n) => !n.children.length);
+        const topTopics = tree.filter((n) => n.children.length);
+        if (looseTop.length) sections.push({ id: '', parents: [], header: topTopics.length ? { name: 'Other', depth: 0, rollup: 0, count: 0, size: looseTop.length, active: false, href: '' } : null, points: looseTop.map(chipOf) });
+        for (const t of topTopics) walk(t, []);
+        if (looseTop.length && topTopics.length) sections.push(sections.shift());
+        return { mode: 'pick', total, unused: 0, sections, canManage: h.user.hasPerm(PERM.PERM_CREATE_PROBLEM) };
     } catch (e) {
-        return { mode: 'pick', total: 0, groups: [], canManage: h.user.hasPerm(PERM.PERM_CREATE_PROBLEM) };
+        return { mode: 'pick', total: 0, unused: 0, sections: [], canManage: h.user.hasPerm(PERM.PERM_CREATE_PROBLEM) };
     }
 }
 

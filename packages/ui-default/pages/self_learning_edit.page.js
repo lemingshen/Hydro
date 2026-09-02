@@ -1,5 +1,7 @@
 import $ from 'jquery';
+import LanguageSelectAutoComplete from 'vj/components/autocomplete/LanguageSelectAutoComplete';
 import ProblemSelectAutoComplete from 'vj/components/autocomplete/ProblemSelectAutoComplete';
+import { mountComposer } from 'vj/components/chat-composer';
 import { ConfirmDialog } from 'vj/components/dialog';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
@@ -74,6 +76,8 @@ function initAdvisor(picker) {
 
   const $chat = $box.find('.sla__chat');
   const $input = $box.find('.sla__input');
+  // Proportional font + live Markdown rendering (the shared chat composer).
+  mountComposer($input, { i18n });
   const $send = $box.find('.sla__send');
   const $reset = $box.find('.sla__reset');
 
@@ -266,6 +270,9 @@ export default new NamedPage(['self_learning_create', 'self_learning_edit'], () 
   // Sessions are programming-only: the picker never lists quiz or
   // subjective tasks (the handler refuses them as well).
   const picker = ProblemSelectAutoComplete.getOrConstruct($('[name="pids"]'), { multi: true, clearDefaultValue: false, lockKind: 'programming' });
+  // 🌐 Allowed submission languages — the contest editor's picker on the
+  // same comma-joined `langs` field; empty = every judge language.
+  LanguageSelectAutoComplete.getOrConstruct($('[name="langs"]'), { multi: true });
   initAdvisor(picker);
   $(document).on('click', '[value="delete"]', (ev) => {
     ev.preventDefault();

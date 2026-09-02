@@ -1,5 +1,6 @@
 import $ from 'jquery';
 import MarkdownIt from 'markdown-it';
+import { mountComposer } from 'vj/components/chat-composer';
 import { ConfirmDialog } from 'vj/components/dialog';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
@@ -124,7 +125,11 @@ export default new NamedPage('self_learning_solve', async () => {
 
   function applyGateToRail(g) {
     if (!g) return;
-    const $chips = $('#sl-rail .sl-rail__chip[data-pid]');
+    // Session tasks only. A bonus chip carries a data-pid too (its own
+    // problem), but the gate never lists it — without this filter it fell
+    // to `locked`: a dashed grey chip with a 🚫 cursor that still opened
+    // on click, because its href was already real.
+    const $chips = $('#sl-rail .sl-rail__chip[data-pid]:not([data-bonus])');
     $chips.each(function markChip(i) {
       const pid = Number($(this).attr('data-pid'));
       if (!Number.isFinite(pid)) return;
@@ -215,12 +220,18 @@ export default new NamedPage('self_learning_solve', async () => {
   let bonuses = (window.UiContext && UiContext.slBonuses) || [];
   const bonusUrl = `${sessionBase}/bonus`;
   let bonusPoll = null;
+  /** Still being built server-side: diagnosing → drafting → building. */
+  const isBusy = (b) => !!b && (b.status === 'diagnosing' || b.status === 'drafting' || b.status === 'building');
   /*
-   * Animation state. `bonusDesigning` covers the diagnosis call (the
-   * longest silent stretch: the AI reads every attempt and tutor exchange
-   * before any draft exists); the stage text advances on a timer since the
-   * request is one round trip. While the draft is being built, the panel
-   * mirrors the pipeline's own messages instead.
+   * Animation state. The whole build is a BACKGROUND JOB: the create
+   * request returns at once with a `diagnosing` entry and the page only
+   * polls it — so a refresh at any moment lands back on the same panel.
+   * `bonusDesigning` covers only the instant before that first response.
+   * The diagnosis is the one long silent stretch with no progress signal
+   * (one LLM call reading every attempt and tutor exchange), so its stage
+   * text advances on a timer, keyed to the job so a reload resumes at a
+   * plausible point; drafting and building mirror the pipeline's own
+   * messages instead.
    */
   let bonusDesigning = false;
   let bonusStageTimer = null;
@@ -235,12 +246,17 @@ export default new NamedPage('self_learning_solve', async () => {
     drafting: i18n('Writing the statement — you will be able to open it in a moment…'),
     building: i18n('Preparing the judge: reference solution, cross-check, tests, sandbox verification…'),
   };
-  function startBonusStages($box) {
+  /** The stage text the diagnosis has plausibly reached, from its start time. */
+  function designStageAt(startedAt) {
+    const t = startedAt ? Date.now() - new Date(startedAt).getTime() : 0;
+    return Math.min(DESIGN_STAGES.length - 1, Math.max(0, Math.floor(t / 4000)));
+  }
+  function startBonusStages($box, from = 0) {
     clearInterval(bonusStageTimer);
-    let k = 0;
+    let k = from;
     bonusStageTimer = setInterval(() => {
       k = Math.min(k + 1, DESIGN_STAGES.length - 1);
-      const $st = $box.find('.sl-bonus__stage');
+      const $st = $box.find('.sl-bjob__stage');
       if (!$st.length) { clearInterval(bonusStageTimer); return; }
       $st.addClass('is-swap');
       setTimeout(() => $st.text(DESIGN_STAGES[k]).removeClass('is-swap'), 180);
@@ -249,10 +265,11 @@ export default new NamedPage('self_learning_solve', async () => {
   }
 
   function bonusChipHtml(b, i, extra = '') {
-    const cls = ` bonus${b.status === 'drafting' ? ' bonus-drafting' : b.status === 'building' ? ' bonus-building' : b.status === 'failed' ? ' bonus-failed' : ''}${b.docId && String(b.docId) === String(UiContext.slPid) ? ' current' : ''}${extra}`;
+    const designing = b.status === 'diagnosing' || b.status === 'drafting';
+    const cls = ` bonus${designing ? ' bonus-drafting' : b.status === 'building' ? ' bonus-building' : b.status === 'failed' ? ' bonus-failed' : ''}${b.docId && String(b.docId) === String(UiContext.slPid) ? ' current' : ''}${extra}`;
     const href = b.docId && b.status !== 'failed' ? `${sessionBase}/p/${b.docId}` : 'javascript:;';
-    const label = b.status === 'drafting' ? '…' : b.status === 'failed' ? '⚠' : `🎁${i + 1}`;
-    const title = b.status === 'drafting' ? i18n('Designing your bonus task…')
+    const label = designing ? '…' : b.status === 'failed' ? '⚠' : `🎁${i + 1}`;
+    const title = designing ? i18n('Designing your bonus task…')
       : b.status === 'building' ? `${b.title || i18n('Bonus task')} — ${i18n('read and code now; the judge is being prepared')}`
         : b.status === 'failed' ? `${i18n('Bonus task failed')}: ${b.message || ''}`
           : `${b.title || i18n('Bonus task')} — ${(b.weakPoints || []).join(', ')} · ${i18n('now in the Problem Set too')}`;
@@ -266,7 +283,7 @@ export default new NamedPage('self_learning_solve', async () => {
     let $cat = $body.find('.sl-rail__cat--bonus');
     let $grid = $body.find('.sl-rail__grid--bonus');
     const list = bonusDesigning
-      ? [...bonuses, { id: '__designing', status: 'drafting', title: '', weakPoints: [], docId: null }]
+      ? [...bonuses, { id: '__designing', status: 'diagnosing', title: '', weakPoints: [], docId: null }]
       : bonuses;
     if (!list.length) {
       $cat.remove();
@@ -287,48 +304,108 @@ export default new NamedPage('self_learning_solve', async () => {
     $grid.html(list.map((b, i) => bonusChipHtml(b, i, b.id === newId ? ' bonus-new' : '')).join(''));
   }
 
+  /**
+   * The BUILD CARD: one animated view of the background job, whatever
+   * phase it is in. A three-step track (diagnose → write → prepare the
+   * judge) with the live step glowing, a sweeping progress bar, a stage
+   * line that either rotates on a timer (diagnosis: no real signal) or
+   * mirrors the pipeline's message, and the weak points as chips once the
+   * diagnosis has named them. Re-rendered on every poll; the track and bar
+   * transition between phases instead of snapping.
+   */
+  const JOB_STEPS = [
+    ['🧠', i18n('Diagnose your weak points')],
+    ['✍️', i18n('Write the statement')],
+    ['🛠️', i18n('Prepare the judge')],
+  ];
+  function renderJobCard($box, b) {
+    const phase = b.status === 'diagnosing' ? 0 : b.status === 'drafting' ? 1 : 2;
+    const title = phase === 0 ? i18n('Designing your bonus task')
+      : phase === 1 ? i18n('Writing your bonus task')
+        : (b.title || i18n('Bonus task'));
+    const stageIdx = phase === 0 ? designStageAt(b.startedAt || b.createdAt) : -1;
+    const stage = phase === 0 ? DESIGN_STAGES[stageIdx]
+      : ((b.message || '').replace(/\.\.\.$/, '…') || BUILD_HINT[b.status] || '');
+    // Determinate-looking progress with an indeterminate sweep: the bar
+    // fills a little past each finished step so it never sits still.
+    const pct = [22, 55, 84][phase];
+    const steps = JOB_STEPS.map(([icon, label], i) => {
+      const st = i < phase ? 'is-done' : i === phase ? 'is-active' : '';
+      const mark = i < phase ? '✓' : i === phase ? '<span class="sl-bjob__spin"></span>' : String(i + 1);
+      return `<li class="${st}"><span class="sl-bjob__mark">${mark}</span><span class="sl-bjob__ico">${icon}</span><span>${escapeHtml(label)}</span></li>`;
+    }).join('');
+    const kps = (b.weakPoints || []).length
+      ? `<div class="sl-bjob__kps"><span class="sl-bjob__kps-ico">🎯</span>${b.weakPoints.map((w) => `<span class="sl-bjob__kp">${escapeHtml(w)}</span>`).join('')}</div>`
+      : '';
+    const note = phase === 2
+      ? `<div class="sl-bjob__note">${escapeHtml(i18n('Open it from the chip above and start reading — submissions open when the judge is ready.'))}</div>`
+      : '';
+    const $prev = $box.children('.sl-bjob');
+    const html = `<div class="sl-bjob sl-bjob--p${phase}">
+        <div class="sl-bjob__head">
+          <span class="sl-bjob__orb"><span class="sl-bjob__orb-ico">${JOB_STEPS[phase][0]}</span></span>
+          <div class="sl-bjob__titles"><b>${escapeHtml(title)}</b><span class="sl-bjob__stage">${escapeHtml(stage)}</span></div>
+        </div>
+        <ol class="sl-bjob__steps">${steps}</ol>
+        <div class="sl-bjob__track"><i style="width:${pct}%"></i></div>
+        ${kps}${note}
+      </div>`;
+    if ($prev.length && $prev.hasClass(`sl-bjob--p${phase}`)) {
+      // Same phase: patch the live bits in place so the animations keep
+      // their rhythm instead of restarting on every poll.
+      $prev.find('.sl-bjob__stage').text(stage);
+      $prev.find('.sl-bjob__titles b').text(title);
+      if (kps && !$prev.find('.sl-bjob__kps').length) $prev.find('.sl-bjob__track').after(kps);
+      return;
+    }
+    $box.html(html);
+    if (phase === 0) startBonusStages($box, stageIdx);
+    else clearInterval(bonusStageTimer);
+  }
+
   function renderBonusBox() {
     const $box = $('#sl-bonus');
     if (!$box.length || !bonusInfo) return;
-    const inProgress = bonuses.some((b) => b.status === 'drafting' || b.status === 'building');
+    const busy = bonuses.find(isBusy);
     const failed = bonuses.find((b) => b.status === 'failed');
     if (!bonusInfo.available) {
       $box.html('');
       return;
     }
+    /*
+     * 🎁 The teacher's Bonus tickbox is off for this session. Nothing is
+     * offered — no button, no "finish every task first" teaser, because
+     * finishing them would not unlock anything. A student who already owns
+     * a task from before the box was unticked keeps it, so the panel still
+     * falls through to the state view below when `bonuses` is non-empty.
+     */
+    if (bonusInfo.allowed === false && !bonuses.length) {
+      $box.html('');
+      return;
+    }
     if (bonusDesigning) {
-      // The diagnosis is running: a pulsing brain, a shimmering bar and
-      // staged status text, so the wait never looks stalled.
-      $box.html(`<div class="sl-bonus__design">
-          <div class="sl-bonus__design-head"><span class="sl-bonus__brain">🧠</span><b>${escapeHtml(i18n('Designing your bonus task'))}</b></div>
-          <div class="sl-bonus__bar"><i></i></div>
-          <div class="sl-bonus__stage">${escapeHtml(DESIGN_STAGES[0])}</div>
-        </div>`);
-      startBonusStages($box);
+      // The create request is in flight (a moment: it returns as soon as
+      // the job is recorded). Same card, diagnosis phase, clock at zero.
+      renderJobCard($box, { status: 'diagnosing', startedAt: Date.now(), weakPoints: [] });
       return;
     }
-    if (inProgress) {
-      const b = bonuses.find((x) => x.status === 'drafting' || x.status === 'building');
-      const detail = (b.message || '').replace(/\.\.\.$/, '…');
-      $box.html(`<div class="sl-bonus__design sl-bonus__design--${escapeHtml(b.status)}">
-          <div class="sl-bonus__design-head"><span class="sl-bonus__brain">${b.status === 'drafting' ? '✍️' : '🛠️'}</span><b>${escapeHtml(b.status === 'drafting' ? i18n('Writing your bonus task') : (b.title || i18n('Bonus task')))}</b></div>
-          <div class="sl-bonus__bar"><i></i></div>
-          <div class="sl-bonus__stage">${escapeHtml(detail || BUILD_HINT[b.status] || '')}</div>
-          ${b.status === 'building' ? `<div class="sl-bonus__note">${escapeHtml(i18n('Open it from the chip above and start reading — submissions open when the judge is ready.'))}</div>` : ''}
-          ${(b.weakPoints || []).length ? `<div class="sl-bonus__kps">🎯 ${b.weakPoints.map((w) => `<span class="sl-bonus__kp">${escapeHtml(w)}</span>`).join('')}</div>` : ''}
-        </div>`);
+    if (busy) {
+      renderJobCard($box, busy);
       return;
     }
-    if (!bonusInfo.eligible) {
-      $box.html(`<div class="sl-bonus__note">🎁 ${escapeHtml(i18n('Attempt every task of the session to unlock a bonus task made for your weak points.'))}</div>`);
-      return;
-    }
+    clearInterval(bonusStageTimer);
     // Exactly one bonus task per session: once it exists, only its state
     // (and a retry after a failed build) is shown — never a second button.
+    // Checked BEFORE eligibility on purpose: eligibility can flip false
+    // after a task was granted (the teacher adds a task to the session, or
+    // unticks Bonus), and an owned task must not then read as "locked".
     if (bonuses.length) {
       $box.html(failed
         ? `<div class="sl-bonus__note">⚠ ${escapeHtml(failed.message || i18n('The bonus task could not be prepared.'))} <a href="javascript:;" class="sl-bonus__retry" data-id="${escapeHtml(failed.id)}">${escapeHtml(i18n('Retry'))}</a></div>`
         : `<div class="sl-bonus__note">🎁 ${escapeHtml(i18n('Your bonus task is ready in the list above — this session offers exactly one.'))}</div>`);
+    } else if (!bonusInfo.eligible) {
+      $box.html(`<div class="sl-bonus__note">🎁 ${escapeHtml(i18n('Attempt every task of the session to unlock a bonus task made for your weak points.'))}</div>`);
+      return;
     } else {
       $box.html(`<button type="button" class="sl-bonus__btn" id="sl-bonus-btn">🎁 ${escapeHtml(i18n('Bonus Task'))}</button>
       <div class="sl-bonus__note">${escapeHtml(i18n('One new, harder task built from your attempts and tutor exchanges — aimed at your weak points. Each session offers exactly one.'))}</div>`);
@@ -373,7 +450,7 @@ export default new NamedPage('self_learning_solve', async () => {
   function startBonusPoll() {
     if (bonusPoll) return;
     bonusPoll = setInterval(async () => {
-      if (!bonuses.some((b) => b.status === 'drafting' || b.status === 'building')) {
+      if (!bonuses.some(isBusy)) {
         clearInterval(bonusPoll);
         bonusPoll = null;
         return;
@@ -382,12 +459,13 @@ export default new NamedPage('self_learning_solve', async () => {
         const res = await request.get(`${bonusUrl}?_fmt=json`);
         const before = new Map(bonuses.map((b) => [b.id, b.status]));
         bonuses = res.bonuses || bonuses;
+        if (typeof res.allowed === 'boolean') bonusInfo.allowed = res.allowed;
         bonusInfo.eligible = !!res.eligible;
         bonusInfo.inProgress = !!res.inProgress;
         let popped = null;
         for (const b of bonuses) {
           const prev = before.get(b.id);
-          if (prev === 'drafting' && b.status !== 'drafting') {
+          if ((prev === 'diagnosing' || prev === 'drafting') && b.status !== prev) {
             popped = b.id;
             if (b.status === 'building') Notification.success(i18n('Your bonus task \u201c{0}\u201d is ready to read — open it from the side panel. Submissions open once the judge is prepared.').replace('{0}', b.title || ''));
           }
@@ -414,7 +492,7 @@ export default new NamedPage('self_learning_solve', async () => {
         clearInterval(t);
         renderBonusChips();
         renderBonusBox();
-        if (bonuses.some((b) => b.status === 'drafting' || b.status === 'building')) startBonusPoll();
+        if (bonuses.some(isBusy)) startBonusPoll();
       } else if (tries > 80) clearInterval(t);
     }, 150);
   }
@@ -1015,7 +1093,21 @@ export default new NamedPage('self_learning_solve', async () => {
     // The last question asked, kept after its card is closed so the panel
     // can still answer it (cleared on a new submission — the code changed).
     let lastQuestion = null;
-    let editorLocked = false;
+    /*
+     * 🔒 Why the scratchpad editor is read-only right now. Two independent
+     * reasons can hold it:
+     *   'thinking' — the LLM is working (overlay / in-card spinner);
+     *   'question' — a tutor question from a FAILED submission is OPEN.
+     *                Requirement: no code editing for as long as the
+     *                tutor keeps asking — across every follow-up of the
+     *                mini-dialogue — until the tutor deems the question
+     *                resolved, or the student moves on to the next issue.
+     * A Set rather than a flag, because the two overlap constantly — a
+     * question card appears the instant thinking ends — and releasing one
+     * must never unlock an editor the other still holds.
+     */
+    const editorLocks = new Set();
+    let editorLocked = ''; // the reason Monaco was last told ('' = editable), diffed on apply
 
     /* --------- "Submitted code" panel at the bottom of the description --------- */
 
@@ -1235,18 +1327,64 @@ export default new NamedPage('self_learning_solve', async () => {
       }) || editors[0] || null;
     }
 
-    function lockEditor() {
+    /** The positioned wrapper around Monaco (.ScratchpadMonacoEditor), for overlays. */
+    function editorHost() {
       const ed = findScratchpadEditor();
-      if (ed && !editorLocked) {
-        ed.updateOptions({ readOnly: true });
-        editorLocked = true;
-      }
+      const dom = ed && ed.getDomNode && ed.getDomNode();
+      return (dom && dom.closest && dom.closest('.ScratchpadMonacoEditor')) || null;
     }
 
-    function unlockEditor() {
+    /**
+     * Push the lock set into Monaco. Idempotent: the editor is only told
+     * about a change of state, and the tooltip Monaco shows on a keypress
+     * in a read-only editor names the CURRENT reason, so a student who
+     * tries to type learns what to do instead of seeing the stock
+     * "cannot edit in read-only editor".
+     */
+    function applyEditorLock() {
       const ed = findScratchpadEditor();
-      if (ed && editorLocked) ed.updateOptions({ readOnly: false });
-      editorLocked = false;
+      if (!ed) return;
+      // Diffed on the REASON, not just on locked/unlocked, so the tooltip
+      // follows a hand-over between the two locks. A held lock is always
+      // re-asserted (cheap): the scratchpad may hand us a fresh Monaco
+      // instance that never heard the first one.
+      const state = editorLocks.size === 0 ? '' : (editorLocks.has('thinking') ? 'thinking' : 'question');
+      if (state || state !== editorLocked) {
+        ed.updateOptions({
+          readOnly: !!state,
+          readOnlyMessage: state ? {
+            value: state === 'thinking'
+              ? i18n('The tutor is thinking...')
+              : i18n('Editing unlocks once the tutor is satisfied with your answer — or when you move on with “Next issue”.'),
+          } : undefined,
+        });
+        editorLocked = state;
+      }
+      // The pill is for the question lock only: the thinking lock already
+      // has its overlay or in-card spinner.
+      const host = editorHost();
+      const showPill = editorLocks.has('question') && !editorLocks.has('thinking');
+      let pill = document.getElementById('sl-editlock');
+      if (showPill && host) {
+        if (!pill) {
+          ensureTutorUiStyle();
+          pill = document.createElement('div');
+          pill.id = 'sl-editlock';
+          pill.className = 'sl-editlock';
+          pill.innerHTML = `🔒 ${escapeHtml(i18n('Editing is paused while the tutor has a question for you.'))}`;
+        }
+        if (pill.parentNode !== host) host.appendChild(pill);
+      } else if (pill) pill.remove();
+    }
+
+    function lockEditor(reason = 'thinking') {
+      editorLocks.add(reason);
+      applyEditorLock();
+    }
+
+    function unlockEditor(reason = 'thinking') {
+      editorLocks.delete(reason);
+      applyEditorLock();
     }
 
     /**
@@ -1273,6 +1411,7 @@ export default new NamedPage('self_learning_solve', async () => {
     function clearAnnotations() {
       annoSession += 1;
       for (const a of annoState) {
+        disposeZoneListeners(a);
         try {
           a.editor.changeViewZones((acc) => acc.removeZone(a.zoneId));
           if (a.decoIds && a.decoIds.length) a.editor.deltaDecorations(a.decoIds, []);
@@ -1282,6 +1421,7 @@ export default new NamedPage('self_learning_solve', async () => {
       cardState = null;
       lastQuestion = null;
       refreshPanelInput();
+      unlockEditor('question'); // no card, no question to hold the editor for
       hideOverlay();
     }
     clearScratchpadAnnotations = clearAnnotations;
@@ -1295,6 +1435,56 @@ export default new NamedPage('self_learning_solve', async () => {
       for (const evt of ['mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu', 'keydown', 'keyup', 'keypress', 'wheel']) {
         dom.addEventListener(evt, (e) => e.stopPropagation());
       }
+    }
+
+    /*
+     * 📐 The card's WIDTH follows the editor, not a fixed cap. A Monaco view
+     * zone lives inside the lines layer, which is as wide as the LONGEST
+     * LINE and starts at the text column — so a fixed-width card, sized
+     * for a wide desktop pane, ran off the visible area the moment the IDE
+     * pane was narrower (a split view, a smaller window, the minimap on)
+     * and lost its send button behind the minimap.
+     *
+     * The budget comes from Monaco's own layout: the visible text area,
+     * from the text column to the minimap (or the vertical scrollbar when
+     * the minimap is off). The card takes that, less its margins, capped
+     * at a readable maximum — and is re-fitted whenever the editor lays
+     * out again (pane drag, window resize, minimap toggle). Horizontal
+     * scrolling moves the lines layer under it, so the card slides along
+     * by the scroll offset and stays where the eye left it.
+     */
+    const CARD_MAX_PX = 720;
+    const CARD_MIN_PX = 240;
+    const CARD_GUTTER_PX = 12; // left margin, matching .sl-anno's design
+
+    function zoneAvailWidth(ed) {
+      try {
+        const li = ed.getLayoutInfo();
+        const mm = li.minimap;
+        const rightEdge = (mm && mm.minimapWidth > 0 && mm.minimapLeft > li.contentLeft)
+          ? mm.minimapLeft
+          : li.width - (li.verticalScrollbarWidth || 0);
+        return Math.max(0, rightEdge - li.contentLeft);
+      } catch (e) {
+        return 0;
+      }
+    }
+
+    function fitZoneWidth(entry) {
+      if (!entry || !entry.zone || !entry.zone.domNode) return;
+      const dom = entry.zone.domNode;
+      const avail = zoneAvailWidth(entry.editor);
+      if (!avail) return;
+      const width = Math.max(CARD_MIN_PX, Math.min(avail - CARD_GUTTER_PX * 2, CARD_MAX_PX));
+      const changed = dom.style.width !== `${width}px`;
+      dom.style.width = `${width}px`;
+      dom.style.maxWidth = 'none';
+      let scrollLeft = 0;
+      try { scrollLeft = entry.editor.getScrollLeft() || 0; } catch (e) { /* keep 0 */ }
+      dom.style.marginLeft = `${CARD_GUTTER_PX + scrollLeft}px`;
+      // A new width re-wraps the text; re-fit the height the card last
+      // asked for (fitZone remembers its budget on the entry).
+      if (changed && entry.fit) fitZone(entry, entry.fit.min, entry.fit.max);
     }
 
     function addZone(ed, afterLine, heightInPx, dom, decorate) {
@@ -1313,8 +1503,15 @@ export default new NamedPage('self_learning_solve', async () => {
         }]);
       }
       const entry = {
-        zoneId, zone, decoIds, editor: ed,
+        zoneId, zone, decoIds, editor: ed, disposables: [],
       };
+      fitZoneWidth(entry);
+      try {
+        entry.disposables.push(
+          ed.onDidLayoutChange(() => fitZoneWidth(entry)),
+          ed.onDidScrollChange((e) => { if (e.scrollLeftChanged) fitZoneWidth(entry); }),
+        );
+      } catch (e) { /* an editor without these events keeps the initial fit */ }
       annoState.push(entry);
       return entry;
     }
@@ -1327,6 +1524,7 @@ export default new NamedPage('self_learning_solve', async () => {
      */
     function fitZone(entry, min = 44, max = 300) {
       if (!entry) return;
+      entry.fit = { min, max }; // so a width change can re-fit with the same budget
       try {
         const dom = entry.zone.domNode;
         const prev = dom.style.height;
@@ -1351,7 +1549,15 @@ export default new NamedPage('self_learning_solve', async () => {
     }
     $(window).on('resize.slcard', syncCardHeights);
 
+    function disposeZoneListeners(entry) {
+      for (const d of entry.disposables || []) {
+        try { d.dispose(); } catch (e) { /* already gone */ }
+      }
+      entry.disposables = [];
+    }
+
     function removeZoneEntry(entry) {
+      disposeZoneListeners(entry);
       try {
         entry.editor.changeViewZones((acc) => acc.removeZone(entry.zoneId));
         if (entry.decoIds && entry.decoIds.length) entry.editor.deltaDecorations(entry.decoIds, []);
@@ -1361,17 +1567,20 @@ export default new NamedPage('self_learning_solve', async () => {
 
     /**
      * The COMPLETE tutor-card stylesheet, injected from the bundle: the card
-     * is a compact popup (max 640px) hugging the code line, never a
-     * full-width banner, and never at the mercy of template freshness.
+     * is a popup hugging the code line — sized to the editor's visible text
+     * area by fitZoneWidth, never a fixed width that can run off a narrow
+     * pane — and never at the mercy of template freshness.
      */
     const TUTOR_UI_STYLE = `
       @keyframes slGhostPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
       @keyframes slResolvePulse { 0% { box-shadow: 0 8px 24px -10px rgba(47, 158, 68, .4), 0 0 0 0 rgba(47, 158, 68, .35); } 100% { box-shadow: 0 8px 24px -10px rgba(47, 158, 68, .4), 0 0 0 12px rgba(47, 158, 68, 0); } }
-      .sl-anno { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 8px; box-sizing: border-box; max-width: 460px; min-width: 260px; background: var(--pta-card); border: 1px solid var(--pta-crimson-line); border-left: 4px solid var(--pta-crimson); border-radius: 12px; padding: 9px 11px; margin: 0 0 0 12px; font-size: 13px; line-height: 1.45; box-shadow: 0 10px 28px -12px rgba(158, 35, 53, .4), 0 2px 6px rgba(15, 23, 42, .08); color: var(--pta-ink); user-select: text; overflow: hidden; animation: ptaScaleIn .28s var(--pta-ease) both; }
-      .sl-anno--chat { flex-direction: column; align-items: stretch; gap: 5px; padding: 7px 11px 8px; }
-      .sl-anno__head { display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 12.5px; letter-spacing: .01em; color: var(--pta-crimson-text); flex: 0 0 auto; }
-      .sl-anno__log { max-height: var(--sl-log-max, 148px); overflow-y: auto; overflow-x: hidden; background: var(--pta-card-2); border: 1px solid var(--pta-crimson-line); border-radius: 9px; padding: 5px 7px; scrollbar-width: thin; }
-      .sl-anno__msg { margin: 4px 0; padding: 5px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; width: fit-content; max-width: 95%; box-sizing: border-box; color: var(--pta-ink); word-break: break-word; animation: ptaFadeUp .22s var(--pta-ease) both; }
+      .sl-anno { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 8px; box-sizing: border-box; max-width: 720px; min-width: 240px; background: var(--pta-card); border: 1px solid var(--pta-crimson-line); border-left: 4px solid var(--pta-crimson); border-radius: 14px; padding: 9px 12px; margin: 0 0 0 12px; font-size: 13px; line-height: 1.45; box-shadow: 0 12px 30px -12px rgba(158, 35, 53, .38), 0 2px 6px rgba(15, 23, 42, .07); color: var(--pta-ink); user-select: text; overflow: hidden; animation: ptaScaleIn .28s var(--pta-ease) both; }
+      .sl-anno--chat { flex-direction: column; align-items: stretch; gap: 7px; padding: 8px 12px 10px; }
+      .sl-anno__head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: bold; font-size: 12.5px; letter-spacing: .01em; color: var(--pta-crimson-text); flex: 0 0 auto; min-height: 22px; }
+      .sl-anno__title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sl-anno__lockchip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .01em; padding: 2px 8px; border-radius: 999px; background: var(--pta-warn-soft); border: 1px solid var(--pta-warn-line); color: var(--pta-warn-text); white-space: nowrap; cursor: help; animation: ptaScaleIn .24s var(--pta-ease) both; }
+      .sl-anno__log { max-height: var(--sl-log-max, 148px); overflow-y: auto; overflow-x: hidden; background: var(--pta-card-2); border: 1px solid var(--pta-crimson-line); border-radius: 12px; padding: 6px 8px; scrollbar-width: thin; }
+      .sl-anno__msg { margin: 4px 0; padding: 6px 11px; border-radius: 12px; font-size: 12.5px; line-height: 1.5; width: fit-content; max-width: 92%; box-sizing: border-box; color: var(--pta-ink); word-break: break-word; animation: ptaFadeUp .22s var(--pta-ease) both; }
       .sl-anno__msg.tutor { background: var(--pta-crimson-soft); border: 1px solid var(--pta-crimson-line); border-bottom-left-radius: 3px; }
       .sl-anno__msg.student { background: var(--pta-card-3); border: 1px solid var(--pta-line); border-bottom-right-radius: 3px; margin-left: auto; }
       .sl-anno__msg p { margin: 0 0 4px; }
@@ -1395,18 +1604,25 @@ export default new NamedPage('self_learning_solve', async () => {
       .sl-anno__btns { display: flex; gap: 2px; flex: 0 0 auto; }
       .sl-anno button { border: none; background: transparent; cursor: pointer; font-size: 14px; padding: 0 5px; border-radius: 6px; color: var(--pta-crimson-text); line-height: 1.5; transition: background .15s ease; }
       .sl-anno button:hover { background: rgba(194, 37, 92, .1); }
-      .sl-anno__input { display: flex; gap: 6px; flex: 0 0 auto; align-items: center; }
-      .sl-anno__input textarea { flex: 1 1 auto; resize: none; height: 34px; min-height: 34px; max-height: 96px;
-        overflow-y: hidden; border: 1px solid var(--pta-crimson-line); border-radius: 14px; padding: 7px 12px;
-        font-size: 12.5px; font-family: inherit; line-height: 1.4; color: var(--pta-ink); background: var(--pta-card);
-        transition: border-color .15s ease, box-shadow .15s ease; }
-      .sl-anno__input textarea:focus { outline: none; border-color: var(--pta-crimson); box-shadow: var(--pta-ring-crimson); }
-      .sl-anno__input .sl-anno__send { width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: none; background: var(--pta-grad-crimson); color: #fff; box-shadow: 0 4px 10px -4px rgba(158, 35, 53, .6); transition: filter .12s ease, transform .12s var(--pta-ease); }
+      /* The composer: one rounded block — the answer box on its own line,
+         the actions beneath. The block, not the textarea, carries the
+         border and the focus ring. */
+      .sl-anno__input { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; padding: 7px 9px 7px 12px; border: 1px solid var(--pta-crimson-line); border-radius: 14px; background: var(--pta-card); transition: border-color .15s ease, box-shadow .15s ease; }
+      .sl-anno__input:focus-within { border-color: var(--pta-crimson); box-shadow: var(--pta-ring-crimson); }
+      .sl-anno__input textarea { display: block; width: 100%; resize: none; height: 26px; min-height: 26px; max-height: 120px; overflow-y: hidden; border: none !important; border-radius: 0; padding: 3px 0 !important; margin: 0; font-size: 13px; font-family: inherit; line-height: 1.5; color: var(--pta-ink); background: transparent !important; box-shadow: none !important; }
+      .sl-anno__input textarea:focus { outline: none; }
+      .sl-anno__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; }
+      .sl-anno__actions-left, .sl-anno__actions-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
+      .sl-anno__actions-right { margin-left: auto; }
+      .sl-anno__input .sl-anno__send { width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: none; background: var(--pta-grad-crimson); color: #fff; box-shadow: 0 4px 10px -4px rgba(158, 35, 53, .6); transition: filter .12s ease, transform .12s var(--pta-ease); flex: 0 0 auto; }
       .sl-anno__input .sl-anno__send:hover { filter: brightness(1.1); transform: translateY(-1px); background: var(--pta-grad-crimson); }
       .sl-anno__input button:disabled { opacity: .5; cursor: default; transform: none; }
-      .sl-anno__input .sl-anno__skip { background: var(--pta-card); color: var(--pta-crimson-text); border: 1px solid var(--pta-crimson-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; transition: background .15s ease, color .15s ease, border-color .15s ease; }
+      .sl-anno__input .sl-anno__skip { background: transparent; color: var(--pta-crimson-text); border: 1px solid var(--pta-crimson-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; transition: background .15s ease, color .15s ease, border-color .15s ease; }
       .sl-anno__input .sl-anno__skip:hover { background: var(--pta-crimson-soft); border-color: var(--pta-crimson); }
-      .sl-anno__input .sl-anno__skip:disabled { opacity: .5; cursor: default; background: var(--pta-card); }
+      .sl-anno__input .sl-anno__skip:disabled { opacity: .5; cursor: default; background: transparent; }
+      .sl-anno__input .sl-anno__idk { background: transparent; color: var(--pta-warn-text); border: 1px solid var(--pta-warn-line); border-radius: 999px; padding: 4px 11px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; transition: background .15s ease, border-color .15s ease; }
+      .sl-anno__input .sl-anno__idk:hover { background: var(--pta-warn-soft); border-color: var(--pta-warn); }
+      .sl-anno__input .sl-anno__idk:disabled { opacity: .5; cursor: default; background: transparent; }
       .sl-anno__qcount { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; opacity: .8; margin-right: 8px; align-self: center; }
       .sl-anno--resolved { border-left-color: var(--pta-success); animation: slResolvePulse .7s ease-out 1; }
       .sl-anno--resolved .sl-anno__head { color: var(--pta-ok-text); }
@@ -1427,6 +1643,14 @@ export default new NamedPage('self_learning_solve', async () => {
       .sl-offer__btns .sl-chlater:hover { background: var(--pta-warn-soft); }
       .sl-anno__giveup { background: var(--pta-card); color: var(--pta-warn-text); border: 1px solid var(--pta-warn-line); border-radius: 999px; padding: 1px 10px; font-size: 10.5px; cursor: pointer; margin-right: 2px; }
       .sl-anno__giveup:hover { background: var(--pta-warn-soft); }
+      /* 🔒 the pill floating over the read-only editor. Centered with auto
+         margins, not a transform: the fade-up keyframes end on
+         "transform: none", which used to cancel a translateX(-50%) and
+         leave the pill hanging off the right edge. */
+      @keyframes slLockIn { from { opacity: 0; margin-top: -6px; } to { opacity: 1; margin-top: 0; } }
+      .sl-editlock { position: absolute; top: 8px; left: 0; right: 0; width: max-content; max-width: calc(100% - 24px); margin: 0 auto; z-index: 20; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; padding: 5px 14px; border-radius: 999px; background: var(--pta-warn-soft); border: 1px solid var(--pta-warn-line); color: var(--pta-warn-text); font-size: 12px; font-weight: 600; box-shadow: 0 8px 22px -10px rgba(232, 89, 12, .55), 0 2px 6px rgba(15, 23, 42, .08); animation: slLockIn .24s var(--pta-ease) both; }
+      .pta-dark .sl-editlock { box-shadow: 0 10px 26px -10px rgba(0, 0, 0, .6); }
+      @media (prefers-reduced-motion: reduce) { .sl-editlock, .sl-anno__lockchip { animation: none !important; } }
       .pta-dark .sl-anno, .pta-dark .sl-anno-ghost { border-left-color: #e35d6a; box-shadow: 0 12px 30px -12px rgba(0, 0, 0, .65); }
       .pta-dark .sl-anno--resolved { border-left-color: #69b34c; }
       .pta-dark .sl-anno--info { border-left-color: #4dabf7; }
@@ -1553,7 +1777,7 @@ export default new NamedPage('self_learning_solve', async () => {
         }
         $log.append(thinkingRow);
         $log.scrollTop($log[0].scrollHeight);
-        $(cardState.dom).find('.sl-anno__input textarea, .sl-anno__input button').prop('disabled', true);
+        $(cardState.dom).find('.sl-anno__input textarea, .sl-anno__input button, .sl-anno__idk').prop('disabled', true);
         fitZone(cardState.entry, 60, cardMaxPx());
         return;
       }
@@ -1570,7 +1794,7 @@ export default new NamedPage('self_learning_solve', async () => {
       hideOverlay(); // no-op when only the in-card spinner was shown; also unlocks
       if (cardState) {
         if (!$(cardState.dom).hasClass('sl-anno--resolved')) {
-          $(cardState.dom).find('.sl-anno__input textarea, .sl-anno__input button').prop('disabled', false);
+          $(cardState.dom).find('.sl-anno__input textarea, .sl-anno__input button, .sl-anno__idk').prop('disabled', false);
         } else {
           $(cardState.dom).find('.sl-anno__skip').prop('disabled', false);
         }
@@ -1631,8 +1855,23 @@ export default new NamedPage('self_learning_solve', async () => {
       dom.className = 'sl-anno sl-anno--chat';
       dom.style.setProperty('--sl-log-max', `${Math.max(110, cardMaxPx() - 118)}px`);
       if (opts.hiddenEnter) dom.style.visibility = 'hidden'; // the flight reveals it
+      /*
+       * Card anatomy — head / dialogue / composer:
+       *   head      the title, then (right) the 🔒 chip while the editor is
+       *             locked and the walkthrough counter;
+       *   log       the bubbles;
+       *   composer  a Claude-style block: the answer box on its own full-
+       *             width line, and an action row beneath it — the concede
+       *             shortcut on the left (locked cards only), "Next issue"
+       *             and Send on the right. Nothing shares a line with the
+       *             text any more, so the box is never squeezed and its
+       *             placeholder never clips.
+       * The composer keeps the .sl-anno__input class: the thinking/idle
+       * toggles and the answer path address the box and its buttons
+       * through it.
+       */
       dom.innerHTML = '<div class="sl-anno__head">'
-        + `<span>🤖 ${escapeHtml(i18n('AI Socratic Tutor'))}</span>`
+        + `<span class="sl-anno__title">🤖 ${escapeHtml(i18n('AI Socratic Tutor'))}</span>`
         + `<span class="sl-anno__btns">${(opts.ownership && opts.ownership.max)
           ? `<span class="sl-anno__qcount" title="${escapeHtml(i18n('Walkthrough question {0} of up to {1}').replace('{0}', opts.ownership.asked).replace('{1}', opts.ownership.max))}">Q${opts.ownership.asked}/${opts.ownership.max}</span>`
           : ''}</span>`
@@ -1640,11 +1879,22 @@ export default new NamedPage('self_learning_solve', async () => {
         + '<div class="sl-anno__log"></div>'
         + '<div class="sl-anno__input">'
         + '<textarea rows="1" maxlength="1000" placeholder="'
-        + `${escapeHtml(i18n('Type your answer \u2014 it\u2019s fine to say you don\u2019t know (Enter to send)'))}"></textarea>`
-        + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))}">➤</button>`
+        + `${escapeHtml(accepted ? i18n('Type your answer… (Enter to send)') : i18n('Type your answer — a guess is fine (Enter to send)'))}"></textarea>`
+        + '<div class="sl-anno__actions">'
+        + '<div class="sl-anno__actions-left"></div>'
+        + '<div class="sl-anno__actions-right">'
+        /*
+         * "Next issue" stays available throughout, as it always was: it is
+         * both the "already fixed it" advance and the stuck student's way
+         * out that the tutor itself points to after repeated "I don't
+         * know"s. Taking it does not unlock anything by itself — the next
+         * question re-takes the lock. The accepted walkthrough has no skip.
+         */
         + (accepted
           ? ''
           : `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Already fixed it? Jump straight to the next issue.'))}">${escapeHtml(i18n('Next issue'))} ➜</button>`)
+        + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))} · ${escapeHtml(i18n('Enter to send · Shift+Enter for a new line'))}">➤</button>`
+        + '</div></div>'
         + '</div>';
       const entry = addZone(ed, endLine, 120, dom, { line, endLine });
       cardState = {
@@ -1658,6 +1908,29 @@ export default new NamedPage('self_learning_solve', async () => {
       // never reach the client.)
       if (accepted && !opts.restored && (!opts.ownership || opts.ownership.asked <= 1)) appendCardNote(i18n('Accepted! Great job!'), '🎉');
       appendCardMsg('tutor', ann.question);
+      /*
+       * 🔒 Requirement: after a NOT-accepted submission, no code editing for
+       * as long as the tutor keeps asking. The lock is taken the moment the
+       * card exists and is held across every follow-up of the dialogue —
+       * an answer the tutor is not satisfied with does NOT release it (see
+       * submitCardAnswer). A persistent bar between the dialogue and the
+       * answer box says so and carries the "I don't know" shortcut, which
+       * is a real answer: the tutor's STUCK-STUDENT rule makes the question
+       * smaller rather than revealing the fix, and the lock stays on.
+       */
+      if (!accepted) {
+        lockEditor('question');
+        // The state lives in the head as a compact chip (the full sentence
+        // is its tooltip); the concede shortcut sits in the action row.
+        $('<span class="sl-anno__lockchip"></span>')
+          .attr('title', i18n('Editing is paused until the tutor is satisfied with your answer — or until you move on with Next issue.'))
+          .text(`🔒 ${i18n('Editing paused')}`)
+          .prependTo($(dom).find('.sl-anno__btns'));
+        $('<button type="button" class="sl-anno__idk"></button>')
+          .attr('title', i18n('Say so — the tutor makes the question smaller.'))
+          .text(`🤷 ${i18n('I don’t know')}`)
+          .appendTo($(dom).find('.sl-anno__actions-left'));
+      }
       // Mirror into the launcher panel: the red button replays this dialogue.
       appendBubble('assistant', ann.question, { line, endLine });
       fitZone(entry, 60, cardMaxPx());
@@ -1672,15 +1945,27 @@ export default new NamedPage('self_learning_solve', async () => {
         if (!askedQuestions.includes(cs.question)) askedQuestions.push(cs.question);
         requestNextQuestion(cs.rid, cs.endLine, cs.accepted);
       });
+      $(dom).find('.sl-anno__idk').on('click', () => {
+        const cs = cardState;
+        if (!cs || cs.dom !== dom || cs.resolved) return;
+        submitCardAnswer(i18n('I don’t know.'));
+      });
       const input = dom.querySelector('.sl-anno__input textarea');
+      // The answer box is a chat composer: proportional font (the card sits
+      // inside Monaco, whose font it would otherwise inherit) and live
+      // Markdown, so `code` and **emphasis** read as such while typing.
+      mountComposer(input, { i18n });
+      // The composer's live preview appears and disappears with the text;
+      // the Monaco zone must follow its height.
+      dom.addEventListener('pta-composer-resize', () => fitZone(entry, 60, cardMaxPx()));
       // The answer box GROWS with the student's text (one line → up to
       // five), and the Monaco view-zone grows with it — long answers are
       // welcome. Enter sends; Shift+Enter makes a new line.
       const growField = () => {
         input.style.height = 'auto';
         const want = input.scrollHeight + 2;
-        input.style.height = `${Math.min(Math.max(want, 34), 96)}px`;
-        input.style.overflowY = want > 96 ? 'auto' : 'hidden';
+        input.style.height = `${Math.min(Math.max(want, 26), 120)}px`;
+        input.style.overflowY = want > 120 ? 'auto' : 'hidden';
         fitZone(entry, 60, cardMaxPx());
       };
       input.addEventListener('input', growField);
@@ -1770,6 +2055,7 @@ export default new NamedPage('self_learning_solve', async () => {
         document.body.appendChild(ghost);
         removeZoneEntry(prevCard.entry);
         if (cardState === prevCard) cardState = null;
+        unlockEditor('question'); // the card that held it is gone; the next one re-takes it
         showThinking('ghost'); // lock only — the ghost shows the spinner
         // Instant feedback: the resolved card CONDENSES into a compact
         // thinking chip right away, pulsing while the LLM works, so the
@@ -1814,6 +2100,7 @@ export default new NamedPage('self_learning_solve', async () => {
         if (prevCard && cardState === prevCard) {
           removeZoneEntry(prevCard.entry); // non-ghost path only
           cardState = null;
+          unlockEditor('question');
         }
         if (res.annotation) {
           if (ghost) {
@@ -1840,6 +2127,19 @@ export default new NamedPage('self_learning_solve', async () => {
         else if (prevCard && cardState === prevCard) appendCardMsg('tutor', `⚠️ ${e.message}`);
         else showInfoCard(`⚠️ ${e.message}`, afterLine || 0);
       }
+    }
+
+    /**
+     * 🔓 The tutor is SATISFIED — the card's question is resolved — so the
+     * editing lock is released and the lock bar goes. This is the only
+     * in-dialogue release: sending an answer, or conceding, is not one.
+     * Idempotent, and a no-op on accepted cards, which never held the lock.
+     */
+    function releaseCardLock(cs) {
+      if (!cs) return;
+      $(cs.dom).find('.sl-anno__lockchip, .sl-anno__idk').remove();
+      unlockEditor('question');
+      fitZone(cs.entry, 60, cardMaxPx());
     }
 
     async function submitCardAnswer(text) {
@@ -1904,11 +2204,13 @@ export default new NamedPage('self_learning_solve', async () => {
               if (session === annoSession && cardState === cs) requestNextQuestion(cs.rid, cs.endLine, true);
             }, 650);
           } else {
-            // Guided session: the student FIXES this spot in the editor, then
-            // clicks the (always-visible) Next-issue button — the next
-            // question is generated against the CURRENT code, so fixed flaws
-            // are skipped and anchors match the editor. One submission at the
-            // very end verifies the whole walkthrough.
+            // Guided session: the tutor is satisfied, so the editing lock
+            // comes off HERE — the student FIXES this spot in the editor,
+            // then clicks Next-issue — the next question is generated
+            // against the CURRENT code, so fixed flaws are skipped and
+            // anchors match the editor. One submission at the very end
+            // verifies the whole walkthrough.
+            releaseCardLock(cs);
             appendCardNote(i18n('Great — now FIX this line in the editor.'), '✏️');
           }
           fitZone(cs.entry, 60, cardMaxPx());
@@ -2147,6 +2449,10 @@ export default new NamedPage('self_learning_solve', async () => {
             appendCardMsg(role, t.content);
             appendBubble(role === 'student' ? 'user' : 'assistant', t.content, {});
           }
+          // 🔒 A reload is not an exit. The server only hands back a
+          // question the tutor has NOT resolved (openTutorQuestionOf), so
+          // the lock showQuestionCard took above simply stands — however
+          // many answers the replayed history already holds.
           fitZone(cs.entry, 60, cardMaxPx());
         }
         $fabDot.show();

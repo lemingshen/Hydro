@@ -71,6 +71,22 @@
             placeholder:_("Seperated with ','"),
             row:true
           }) }}
+          {#-
+            🌐 Allowed submission languages — the same field, picker and
+            wording as the self-learning session editor. A comma-joined
+            list of judge language ids (LanguageSelectAutoComplete makes it
+            a chip picker); empty = every judge language. Folded into every
+            problem's own language list on the problem pages.
+          -#}
+          {{ form.form_text({
+            columns:12,
+            label:'Allowed languages',
+            name:'langs',
+            value:tdoc.langs|join(',') if tdoc.langs else '',
+            placeholder:_('Every judge language — pick one or more to restrict'),
+            help_text:_('Once the test is created, every programming problem in it can only be submitted in the selected languages. Leave it empty to allow every judge language. A problem that already restricts its own languages accepts only those that are in both lists.'),
+            row:true
+          }) }}
           {{ form.form_textarea({
             columns:null,
             label:'Description',
@@ -132,14 +148,6 @@
           <h2 class="section__title">{{ _('Contest Settings') }}</h2>
         </div>
         <div class="section__body">
-          {{ form.form_text({
-            columns:12,
-            label:'Submission language limit',
-            name:'langs',
-            value:tdoc.langs|default(''),
-            placeholder:_("Seperated with ','"),
-            row:true
-          }) }}
           <div class="row">
             {{ form.form_checkbox({
               columns:2,

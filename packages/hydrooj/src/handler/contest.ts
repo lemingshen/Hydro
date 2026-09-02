@@ -24,11 +24,45 @@ import * as oplog from '../model/oplog';
 import problem from '../model/problem';
 import record from '../model/record';
 import ScheduleModel from '../model/schedule';
+import * as setting from '../model/setting';
 import storage from '../model/storage';
 import user from '../model/user';
 import {
     Handler, param, post, Type, Types,
 } from '../service/server';
+
+/**
+ * 🌐 The allowed submission languages of a test / homework, as saved.
+ *
+ * Shared by the test and homework editors (and mirrored by the
+ * self-learning session editor): unknown or disabled judge language ids
+ * are dropped rather than refused — the picker only offers valid ones, and
+ * a stale form may still name a language since retired — and the result
+ * is deduplicated. Empty = no restriction.
+ *
+ * Then the one check that matters: a problem with its own language list
+ * that shares NOTHING with this one would be unsubmittable inside the
+ * test (the two are intersected on the problem page), so the save is
+ * refused naming the problem and its languages, rather than letting a
+ * student discover an empty language menu.
+ */
+export function resolveAllowedLangs(raw: string[], pdict: Record<number, any>, pids: number[]): string[] {
+    const langs = [...new Set((raw || []).map((l) => String(l).trim())
+        .filter((l) => l && setting.langs[l] && !setting.langs[l].disabled))].slice(0, 64);
+    if (!langs.length) return [];
+    const dead = pids
+        .map((pid) => pdict[pid])
+        .filter((pdoc) => pdoc && pdoc.config && typeof pdoc.config === 'object'
+            && Array.isArray(pdoc.config.langs) && pdoc.config.langs.length
+            && !pdoc.config.langs.some((l: string) => langs.includes(l)))
+        .map((pdoc) => `${pdoc.pid || pdoc.docId} (${pdoc.config.langs.map((l: string) => setting.langs[l]?.display || l).join(', ')})`);
+    if (dead.length) {
+        throw new ValidationError('langs', null,
+            'These problems accept none of the selected languages, so nobody could submit them here: '
+            + `${dead.join('; ')}. Widen the language list or remove the problem.`);
+    }
+    return langs;
+}
 
 export class ContestListHandler extends Handler {
     @param('rule', Types.Range(contest.RULES), true)
@@ -435,7 +469,9 @@ export class ContestEditHandler extends Handler {
         const beginAt = beginAtMoment.toDate();
         const lockAt = lock ? moment(endAt).add(-lock, 'minutes').toDate() : null;
         if (lockAt && contestDuration) throw new ValidationError('lockAt', 'duration');
-        await problem.getList(domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true);
+        const pdict = await problem.getList(domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true);
+        // 🌐 Sanitized, and refused if it would make a listed problem unsubmittable.
+        langs = resolveAllowedLangs(langs, pdict, pids);
         if (tid) {
             await contest.edit(domainId, tid, {
                 title, content, rule, beginAt, endAt, pids, rated, duration: contestDuration,

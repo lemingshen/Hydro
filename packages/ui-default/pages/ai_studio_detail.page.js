@@ -4,7 +4,8 @@ import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { i18n, request } from 'vj/utils';
 import { aiMarkdown } from 'vj/components/ai-report/pdf';
-import { AIS_POLISH, ensureAisStyle, fmtSize, langEntries, langOptionsHtml, renderAllowLangsDd, uploadContextFile, wireAllowLangsDd } from 'vj/pages/ai_studio.page';
+import { mountComposers } from 'vj/components/chat-composer';
+import { AIS_POLISH, ensureAisStyle, fmtSize, langOptionsHtml, uploadContextFile } from 'vj/pages/ai_studio.page';
 
 /**
  * AI Studio — draft detail. Left: artifact tabs (statement / reference
@@ -729,7 +730,7 @@ function ctxPaneHtml(d) {
                 ${DIFF_SELECT(d)}</div>
               ${kind === 'subjective'
     ? '<div><div class="ais__label" style="margin-top:0;">' + esc(i18n('Language the project is written in')) + '</div><select class="aisd__brieflang" style="max-width:200px;">' + langOptionsHtml(langsMap, d.brief.language) + '</select></div>'
-    : '<div style="min-width:230px;"><div class="ais__label" style="margin-top:0;">' + esc(i18n('Allowed languages for students')) + '</div>' + renderAllowLangsDd(langEntries(langsMap), d.brief.allowLangs || [], false) + '<div class="aisd__meta">' + esc(i18n('Empty = every judge language. Saved instantly.')) + '</div></div>'}
+    : '<div style="min-width:230px;"><div class="ais__label" style="margin-top:0;">' + esc(i18n('Languages for students')) + '</div><div class="ais__langs-all">🌐 ' + esc(i18n('Every judge language')) + '</div><div class="aisd__meta">' + esc(i18n('Students may submit in any language the judge supports.')) + '</div></div>'}
               <button class="ais__btn ais__btn--sm aisd__brief-save" style="align-self:flex-end;">💾 ${esc(i18n('Save requirement'))}</button>
             </div>
             ${kind === 'programming' ? `
@@ -1373,6 +1374,10 @@ function startPolling($root) {
 }
 
 function wire($root) {
+  // Every box the teacher talks to the AI through — the requirement, the
+  // notes and the refine chat — is a chat composer. wire() runs after each
+  // re-render, and mounting is idempotent per element.
+  mountComposers($root, '.aisc__input, .aisd__topic, .aisd__notes', { i18n });
   $root.find('.aisd__tab').on('click', function onTab() {
     if ($(this).hasClass('aisd__tab--locked')) {
       // Not reachable yet: show what unlocks it, and the button that does.
@@ -1553,16 +1558,6 @@ function wire($root) {
       Notification.error(e.message);
     } finally {
       $b.prop('disabled', false);
-    }
-  });
-
-  wireAllowLangsDd($root, async (langs) => {
-    try {
-      const res = await request.post(base(), { operation: 'save', target: 'allowLangs', payload: JSON.stringify({ langs }) });
-      state = res.draft;
-      Notification.success(i18n('Allowed languages saved.'));
-    } catch (e) {
-      Notification.error(e.message);
     }
   });
 

@@ -94,6 +94,17 @@ export interface KnowledgePoint {
      * written to the problem's tags verbatim.
      */
     name: string;
+    /**
+     * 🌳 For a NEW point: the catalog topic it belongs under, by exact
+     * name — an existing topic, or a NEW one the model proposes alongside
+     * (parentIsNew, with parentDescription and, optionally, the existing
+     * topic it sits under in parentUnder). Consumed when the point is
+     * registered; ignored once it exists.
+     */
+    parent?: string;
+    parentIsNew?: boolean;
+    parentDescription?: string;
+    parentUnder?: string;
     /** One sentence naming what in the statement / solution / tests requires it. */
     evidence?: string;
     /** General one-sentence definition — used when the point is NEW to the catalog. */
@@ -121,7 +132,13 @@ export interface AuthorDraftDoc {
         crosscheck: boolean;
         /** Uploaded context (slides/notes): extracted TEXT only, originals are not stored. */
         files?: { name: string, size: number, chars: number, text: string }[];
-        /** Languages students may submit in (config.langs). Empty/absent = unrestricted. */
+        /**
+         * RETIRED. A Studio programming task accepts EVERY judge language:
+         * the pipeline never writes `langs` into config.yaml any more, and
+         * the boot sweep (stripLangsRestriction) lifts the restriction from
+         * tasks published before this policy. Kept on the type only so old
+         * drafts still deserialize; always empty for new ones.
+         */
         allowLangs?: string[];
         /** Task kind. Absent = 'programming' (legacy drafts). */
         kind?: AuthorKind;
@@ -199,9 +216,11 @@ export interface AuthorDraftDoc {
     knowledgeTags?: string[];
     /**
      * Set when the draft is a BONUS TASK generated for one student of a
-     * self-learning session (see handler/self_learning.ts): the problem stays
-     * hidden, is reachable only through that session, and the pipeline
-     * skips the teacher briefing.
+     * self-learning session (see handler/self_learning.ts). The problem is
+     * hidden while it is being built and the pipeline skips the teacher
+     * briefing; ONCE VERIFIED it is un-hidden and joins the domain's
+     * problem set like any other Studio task (ensureBonusPublished), while
+     * the student it was made for keeps reaching it through the session.
      */
     bonus?: { ssid: ObjectId, uid: number };
     docId?: number; // the hidden scratch/final problem
@@ -513,12 +532,29 @@ function sanitizeQCount(raw: any): number {
     return Math.min(30, Math.max(1, n));
 }
 
-function sanitizeAllowLangs(raw: any): string[] {
-    let arr: any = raw;
-    if (typeof raw === 'string') { try { arr = JSON.parse(raw); } catch (e) { arr = []; } }
-    if (!Array.isArray(arr)) return [];
-    const valid = judgeLangs();
-    return [...new Set(arr.map(String).filter((x) => valid[x]))].slice(0, 32);
+/**
+ * 🌐 Lift a language restriction from a published Studio task, keeping
+ * everything else in its config.yaml.
+ *
+ * Reads the RAW config (not the parsed one), drops only the `langs` key
+ * and writes the rest back untouched — a teacher may have added a checker,
+ * subtasks or limits by hand since the pipeline wrote the file, and
+ * regenerating it from the calibrated limits would silently discard that.
+ * A config without `langs` is left alone. Returns whether a write happened.
+ */
+async function stripLangsRestriction(domainId: string, docId: number, operator: number): Promise<boolean> {
+    const pdoc = await problem.get(domainId, docId, ['docId', 'config'], true);
+    if (!pdoc || typeof pdoc.config !== 'string' || !pdoc.config.trim()) return false;
+    let cfg: any;
+    try {
+        cfg = yamlLoad(pdoc.config);
+    } catch (e) {
+        return false; // not ours to repair
+    }
+    if (!cfg || typeof cfg !== 'object' || !('langs' in cfg)) return false;
+    delete cfg.langs;
+    await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump(cfg)), operator);
+    return true;
 }
 
 /**
@@ -682,9 +718,13 @@ const SYS_COMMON = 'You are an assistant that helps a university teacher author 
 const P_SPEC = `Draft the problem STATEMENT for a programming exercise based on the brief.
 Schema: {"title": string, "body": string}
 Rules for "body" (markdown):
-- Sections in this order: problem description; input format; output format; constraints (explicit bounds for EVERY variable).
+- EXACTLY these five sections, in this order, with these exact headings:
+  # Problem Description — the story and the task, self-contained; say precisely what to compute.
+  # Input Format — line by line, token by token: what is read, in what order, how values are separated, what ends the input.
+  # Output Format — exactly what to print, formatting (spacing, line breaks, precision, order); say if trailing whitespace matters.
+  # Samples — one or two worked examples, each as a PAIR of fenced blocks named input1/output1 (then input2/output2): the block \`\`\`input1 holding the exact stdin text and the block \`\`\`output1 holding the exact stdout text (these names are how the judge renders sample boxes; never label them differently, never put both in one block). Sample 1 is the smallest meaningful case; sample 2 (if any) shows an edge case or a second scenario. Compute each sample's output BY HAND, carefully — it will be checked against the reference solution. A one-sentence explanation may follow the first sample.
+  # Constraints — explicit bounds for EVERY variable (and the guarantees the input satisfies).
 - Standard input/output only. Deterministic single correct output per input.
-- Do NOT include any sample section — samples are generated by running the reference solution later.
 - SIZE BUDGET: any single test INPUT must fit in under 90,000 characters (the judge pipe truncates beyond ~100KB). Choose maximum constraints that FIT this budget for your input format: n up to 1e5 only for compact formats (e.g. one line of space-separated small numbers); for line-per-record or multi-token formats, cap n so n x bytes-per-record stays under the budget (typically n <= 5,000-8,000). Large graded inputs are produced by generator programs, not typed literally. Keep every OUTPUT small (aggregate answers such as one number or a short line; never echo the whole input), well under 50KB.
 - Title: short, descriptive, no numbering.
 - If the brief lists TARGET KNOWLEDGE POINTS, design the task around them: a correct solution must genuinely require EVERY listed point (choose the scenario, the input format and the constraints so that none of them can be sidestepped), and do not center the task on techniques outside the list. Never name the knowledge points in the statement — the student must recognise them.`;
@@ -708,7 +748,7 @@ Rules:
 const P_TESTS = `Design the TEST CASES for the problem below (inputs only — outputs are produced by running the reference solution).
 Schema: {"cases": [{"name": string, "input": string, "gen": string, "sample": boolean, "purpose": string}]}
 Rules:
-- 6 to 10 cases. The FIRST 1-2 are the public samples (sample=true): small, human-readable, LITERAL "input" text.
+- 6 to 10 cases. The FIRST 1-2 are the public samples (sample=true): the statement's own Samples, with their \`\`\`input1 / \`\`\`input2 text copied VERBATIM as "input" (the judge runs the reference solution on them and shows the computed outputs in the statement — so the statement's samples and the sample tests must be the same inputs). If the statement has no samples, invent 1-2 small human-readable ones.
 - Cover: minimum bounds, typical cases, tricky edge cases, and 1-2 cases near the MAXIMUM stated constraints.
 - Small cases: give the LITERAL stdin text in "input" (match the input format exactly, end with a newline, at most 4000 characters) and leave "gen" as "".
 - Large cases (near max constraints): leave "input" as "" and put a SELF-CONTAINED Python 3 program in "gen" that PRINTS the test input to stdout. Use a FIXED random seed, no command-line arguments. The PRINTED input must stay under 90,000 characters — if the statement's stated maximum cannot fit that budget for this input format, use the LARGEST size that fits instead of the stated maximum.
@@ -726,9 +766,10 @@ Rules:
 - "pitfalls": 2-4 likely student mistakes or misconceptions this task will surface.`;
 
 const P_KNOWLEDGE = `Label the programming task below with its KNOWLEDGE POINTS — the concrete skills, techniques, constructs and pitfalls a student must handle to solve it. The labels become the problem's tags: teachers filter tasks by them and the class analytics name what students struggle with in the same vocabulary.
-Schema: {"points": [{"name": string, "evidence": string, "isNew": boolean, "description": string}]}
+Schema: {"points": [{"name": string, "evidence": string, "isNew": boolean, "description": string, "parent": string, "parentIsNew": boolean, "parentDescription": string, "parentUnder": string}]}
 Rules:
-- The DOMAIN CATALOG below lists the knowledge points this course already uses. Whenever an existing entry fits, output its name EXACTLY as listed (never a paraphrase or a synonym — that would split the vocabulary) and set "isNew": false. Add a new point only when nothing in the catalog captures what the task exercises; then set "isNew": true and give a "description": ONE general sentence defining the skill for the catalog (about the skill in general, not about this task).
+- The DOMAIN CATALOG below lists the knowledge points this course already uses, as a TREE: indented points sit under the topic above them (topic → subtopic → point). Whenever an existing entry fits, output its name EXACTLY as listed (never a paraphrase or a synonym — that would split the vocabulary) and set "isNew": false. Add a new point only when nothing in the catalog captures what the task exercises; then set "isNew": true, give a "description": ONE general sentence defining the skill for the catalog (about the skill in general, not about this task), and set "parent" to the EXACT name of the catalog topic it belongs under (the most specific topic that fits). Label with the most SPECIFIC points; never output a topic's own name as a label when one of its points fits.
+- A NEW TOPIC, when the task opens an area the tree does not cover: if NO existing topic fits a new point, name a new topic in "parent" (2-4 words, a broad theme such as "String processing", never a single task's trick), set "parentIsNew": true, give "parentDescription" (one sentence) and, in "parentUnder", the EXACT name of the existing topic the new topic belongs under ("" for the top level). Reuse the same new topic name for every new point of this task that belongs to it. For an existing topic, "parentIsNew" is false and the other two are "".
 - 4 to 8 points, most central first. No duplicates or near-duplicates.
 - DETAILED, never high-level. Each point must name the SPECIFIC technique, construct, property or pitfall this task actually exercises. GOOD: "Off-by-one in loop bounds", "Prefix-sum array for range sums", "Integer overflow beyond 32-bit", "Two-pointer sweep on a sorted array", "Reading input until EOF", "Modulo of negative numbers", "Memoization keyed on two indices", "Sorting with a custom comparator", "Fixed-precision decimal output". BAD — too coarse, never output these on their own: "Arrays", "Loops", "Strings", "Math", "Dynamic programming", "Basic programming", "Problem solving".
 - Every point must be grounded in the statement, the reference solution or the test design; "evidence" says where, in one short sentence. Do not invent points the task does not require.
@@ -1218,7 +1259,23 @@ function sanitizeKnowledgePoints(raw: any, max = KNOWLEDGE_MAX): KnowledgePoint[
             ? item.evidence.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
         const description = (item && typeof item === 'object' && typeof item.description === 'string')
             ? item.description.replace(/\s+/g, ' ').trim().slice(0, 400) : '';
-        out.push({ name, ...(evidence ? { evidence } : {}), ...(description ? { description } : {}) });
+        const parent = (item && typeof item === 'object' && typeof item.parent === 'string')
+            ? KnowledgeModel.normalizeName(item.parent) : '';
+        // 🌳 A NEW topic proposed alongside the point: kept only when the
+        // model says so explicitly, with a description and an (optional)
+        // existing topic to sit under.
+        const parentIsNew = !!(parent && item && typeof item === 'object' && item.parentIsNew === true);
+        const parentDescription = (parentIsNew && typeof item.parentDescription === 'string')
+            ? item.parentDescription.replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+        const parentUnder = (parentIsNew && typeof item.parentUnder === 'string')
+            ? KnowledgeModel.normalizeName(item.parentUnder) : '';
+        out.push({
+            name,
+            ...(evidence ? { evidence } : {}),
+            ...(description ? { description } : {}),
+            ...(parent ? { parent } : {}),
+            ...(parentIsNew ? { parentIsNew, ...(parentDescription ? { parentDescription } : {}), ...(parentUnder ? { parentUnder } : {}) } : {}),
+        });
         if (out.length >= max) break;
     }
     return out;
@@ -1241,7 +1298,17 @@ async function snapshotTargetKnowledge(domainId: string, raw: string | string[])
         const k = final.toLowerCase();
         if (seen.has(k)) continue;
         seen.add(k);
-        out.push(doc?.description ? { name: final, description: doc.description } : { name: final });
+        // 🌳 Where the point sits, and — for a topic — that the task may
+        // exercise any of the points beneath it. Both ride the description
+        // so the (synchronous) prompt builders can cite them verbatim.
+        let description = doc?.description || '';
+        if (doc) {
+            const kids = await KnowledgeModel.children(domainId, doc._id).project<{ name: string }>({ name: 1 }).limit(12).toArray();
+            const where = doc.path?.length ? `under ${doc.path.join(' › ')}` : 'a top-level topic';
+            const below = kids.length ? `; a TOPIC covering: ${kids.map((x) => x.name).join(', ')} — exercise one or more of these` : '';
+            description = `${description}${description ? ' ' : ''}(${where}${below})`;
+        }
+        out.push(description ? { name: final, description } : { name: final });
     }
     return out;
 }
@@ -1253,20 +1320,9 @@ async function snapshotTargetKnowledge(domainId: string, raw: string | string[])
  * very large catalog is truncated with a note.
  */
 async function catalogBlock(domainId: string): Promise<string> {
-    const docs = await KnowledgeModel.list(domainId, '', 400);
-    if (!docs.length) return '=== DOMAIN KNOWLEDGE-POINT CATALOG ===\n(empty — every point you output becomes its first entry)\n=== END CATALOG ===';
-    const lines: string[] = [];
-    let total = 0;
-    for (const d of docs) {
-        const line = `- ${d.name}${d.description ? ` — ${d.description.slice(0, 120)}` : ''}${d.aliases?.length ? ` (aliases: ${d.aliases.join(', ')})` : ''}`;
-        if (total + line.length > 7000) {
-            lines.push(`... (${docs.length - lines.length} more entries omitted)`);
-            break;
-        }
-        lines.push(line);
-        total += line.length + 1;
-    }
-    return `=== DOMAIN KNOWLEDGE-POINT CATALOG (${docs.length} entries; reuse these names EXACTLY when they fit) ===\n${lines.join('\n')}\n=== END CATALOG ===`;
+    // 🌳 Indented by level, so the model sees the topics and can place a
+    // new point under the right one (its "parent").
+    return await KnowledgeModel.promptCatalog(domainId, { budget: 7000 });
 }
 
 /**
@@ -1287,7 +1343,14 @@ async function canonicalizePoints(
         if (!name) continue;
         let canonical = await KnowledgeModel.resolve(domainId, name);
         if (!canonical && create) {
-            canonical = (await KnowledgeModel.ensure(domainId, [{ name, description: p.description || '' }], create))[0] || name;
+            canonical = (await KnowledgeModel.ensure(domainId, [{
+                name,
+                description: p.description || '',
+                parent: p.parent || '',
+                parentIsNew: !!p.parentIsNew,
+                parentDescription: p.parentDescription || '',
+                parentUnder: p.parentUnder || '',
+            }], create))[0] || name;
         }
         const final = canonical || name;
         const k = final.toLowerCase();
@@ -1367,7 +1430,25 @@ async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any>
     const brief = briefBlock(d);
     if (target === 'questions') target = 'statement'; // review phase alias
     if (target === 'statement') {
-        const j = await aiTitleBody(`${P_SPEC}\n\n${brief}`);
+        let j = await aiTitleBody(`${P_SPEC}\n\n${brief}`);
+        // The five-section contract is what teachers review and students
+        // read; one cheap repair round fixes most first-pass slips (a
+        // missing Samples section, an unnamed sample fence).
+        let issues = statementIssues(j.body);
+        if (issues.length) {
+            const j2 = await aiTitleBody([
+                'Revise the problem statement below so that it satisfies EVERY rule — keep the task, the story and the numbers; only fix the structure. Problems found:',
+                `- ${issues.join('\n- ')}`,
+                `Current title: ${j.title}`, `Current body:\n${j.body}`,
+                P_SPEC.split('\n').slice(2).join('\n'), brief,
+            ].join('\n\n'));
+            const issues2 = statementIssues(j2.body);
+            if (issues2.length < issues.length) {
+                j = { title: j2.title || j.title, body: j2.body };
+                issues = issues2;
+            }
+            if (issues.length) logger.warn('[ai-studio] statement of %s/%s kept structural issues: %s', d.domainId, d._id.toHexString(), issues.join('; '));
+        }
         return { statement: { title: j.title, body: j.body.slice(0, 30000) } };
     }
     if (target === 'solution' || target === 'alt') {
@@ -1404,13 +1485,12 @@ async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any>
         // of what the task really exercises; before Continue only the
         // statement exists, and the labels are drafted from that alone.
         const testsDigest = (d.artifacts.tests || []).map((c, i) => `${i + 1}. ${c.name}${c.sample ? ' [sample]' : ''}${c.gen ? ' [generated]' : ''}: ${c.purpose || ''}`).join('\n');
-        const allow = sanitizeAllowLangs(d.brief.allowLangs || []);
         const catalog = await catalogBlock(d.domainId);
         const j = await aiJSON(SYS_COMMON, [
             P_KNOWLEDGE, catalog, brief, statementContext(d),
             d.artifacts.solution ? `=== REFERENCE SOLUTION (${d.artifacts.solution.language}) ===\n${d.artifacts.solution.code.slice(0, 8000)}\n=== END ===` : '',
             testsDigest ? `=== TEST CASES ===\n${testsDigest}\n=== END ===` : '',
-            `Allowed submission languages: ${allow.length ? allow.map((l) => judgeLangs()[l] || l).join(', ') : 'any'}`,
+            'Allowed submission languages: any',
         ].filter((x) => x).join('\n\n'));
         const points = await canonicalizePoints(d.domainId, sanitizeKnowledgePoints(j, 8), null);
         if (points.length < 2) throw new BadRequestError('The AI did not return usable knowledge points.');
@@ -1898,20 +1978,85 @@ async function materializeInputs(domainId: string, docId: number, uid: number, c
 
 const normOut = (s: string) => s.split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n').replace(/\n+$/, '');
 
+/*
+ * The statement CONTRACT (P_SPEC): five sections under these headings,
+ * samples as Hydro's paired input/output fences — which the site renders
+ * as side-by-side sample boxes with a copy-to-scratchpad button.
+ */
+const STATEMENT_SECTIONS = ['Problem Description', 'Input Format', 'Output Format', 'Samples', 'Constraints'];
+const SECTION_RE = (name: string) => new RegExp(`^#{1,3}\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'im');
+
+/** What a drafted statement is missing against the contract (empty = fine). */
+function statementIssues(body: string): string[] {
+    const issues: string[] = [];
+    const b = String(body || '');
+    for (const name of STATEMENT_SECTIONS) if (!SECTION_RE(name).test(b)) issues.push(`missing section "# ${name}"`);
+    const samples = parseStatementSamples(b);
+    if (!samples.length && SECTION_RE('Samples').test(b)) issues.push('the Samples section has no ```input1 / ```output1 fence pair');
+    for (const smp of samples) if (!smp.output.trim()) issues.push(`sample ${smp.n} has an empty output block`);
+    return issues;
+}
+
+/** The input/output pairs of a statement (```inputN … ``` / ```outputN … ```), by N. */
+function parseStatementSamples(body: string): { n: number, input: string, output: string }[] {
+    const grab = (kind: 'input' | 'output') => {
+        const map = new Map<number, string>();
+        const fence = '```';
+        const re = new RegExp(`${fence}${kind}(\\d+)[^\\n]*\\n([\\s\\S]*?)\\n?${fence}`, 'g');
+        for (let m = re.exec(body); m; m = re.exec(body)) map.set(Number(m[1]), m[2]);
+        return map;
+    };
+    const ins = grab('input');
+    const outs = grab('output');
+    return [...ins.keys()].sort((a, b) => a - b).map((n) => ({ n, input: ins.get(n)!, output: outs.get(n) || '' }));
+}
+
+/** The verified samples as Hydro's fence pairs (the judge renders each pair as sample boxes). */
 function samplesSection(cases: AuthorCase[], outputs: string[]): string {
     const parts: string[] = [];
     let k = 0;
     for (let i = 0; i < cases.length; i++) {
         if (!cases[i].sample) continue;
         k++;
-        parts.push(`\n#### Sample ${k}\n\n**Input**\n\n\`\`\`\n${cases[i].input.replace(/\n$/, '')}\n\`\`\`\n\n**Output**\n\n\`\`\`\n${outputs[i]}\n\`\`\``);
+        parts.push(`\`\`\`input${k}\n${cases[i].input.replace(/\n$/, '')}\n\`\`\`\n\n\`\`\`output${k}\n${String(outputs[i] ?? '').replace(/\n$/, '')}\n\`\`\``);
     }
-    return parts.length ? `\n\n---\n${parts.join('\n')}\n` : '';
+    return parts.join('\n\n');
 }
 
-function fullContent(d: AuthorDraftDoc, samples: string): string {
+/**
+ * The published statement: the drafted body with its Samples section
+ * REPLACED by the verified samples (the reference solution's outputs on
+ * the sample tests) — a model's hand-computed sample output is never what
+ * students see. A body without a Samples section gets one before its
+ * Constraints (or at the end). Empty `samples` leaves the body as drafted.
+ */
+function withSamples(body: string, samples: string, keepProse = true): string {
+    const b = String(body || '').replace(/\s+$/, '');
+    if (!samples) return b;
+    const head = SECTION_RE('Samples').exec(b);
+    if (head) {
+        const start = head.index;
+        const after = b.slice(start + head[0].length);
+        const next = /^#{1,3}\s+\S/m.exec(after);
+        const end = next ? start + head[0].length + next.index : b.length;
+        // The drafted section's PROSE (an explanation under a sample) is
+        // worth keeping when the samples it explains did not change; it
+        // follows the verified pairs.
+        const prose = keepProse
+            ? b.slice(start + head[0].length, end).replace(/```[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n').trim()
+            : '';
+        const block = `# Samples\n\n${samples}${prose ? `\n\n${prose}` : ''}`;
+        return `${b.slice(0, start)}${block}\n\n${b.slice(end)}`.replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+    }
+    const block = `# Samples\n\n${samples}`;
+    const cons = SECTION_RE('Constraints').exec(b);
+    if (cons) return `${b.slice(0, cons.index)}${block}\n\n${b.slice(cons.index)}`;
+    return `${b}\n\n${block}`;
+}
+
+function fullContent(d: AuthorDraftDoc, samples: string, keepProse = true): string {
     const s = d.artifacts.statement;
-    return `${s?.body || ''}${samples}`;
+    return withSamples(s?.body || '', samples, keepProse);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1935,6 +2080,41 @@ if (!(global as any).__aiStudioStaleSweepDone) {
         ).then((r) => { if (r.modifiedCount) logger.info('[ai-studio] marked %d orphaned running draft(s) as interrupted', r.modifiedCount); })
             .catch((e) => logger.warn('[ai-studio] stale-run sweep failed: %s', e.message));
     }, 3000);
+}
+
+/*
+ * 🌐 Every Studio programming task accepts every judge language. Tasks
+ * published before this policy carried the teacher's picker choice as
+ * `langs` in config.yaml; this one-off sweep lifts it from each of them —
+ * preserving the rest of the file (stripLangsRestriction) — and clears the
+ * retired field on the draft, so the sweep finds nothing on the next boot.
+ * Only drafts are consulted: a manually created problem with a deliberate
+ * restriction is never touched. Idempotent, so several workers booting at
+ * once do no harm; guarded like the sweep above against HMR re-runs.
+ */
+if (!(global as any).__aiStudioLangsSweepDone) {
+    (global as any).__aiStudioLangsSweepDone = true;
+    setTimeout(async () => {
+        try {
+            const cursor = coll.find({ 'brief.allowLangs.0': { $exists: true } })
+                .project<{ _id: ObjectId, domainId: string, docId?: number, owner: number }>({ _id: 1, domainId: 1, docId: 1, owner: 1 });
+            let lifted = 0;
+            for await (const d of cursor) {
+                try {
+                    if (d.docId && await stripLangsRestriction(d.domainId, d.docId, d.owner)) lifted += 1;
+                    await coll.updateOne({ _id: d._id }, {
+                        $set: { 'brief.allowLangs': [] },
+                        $push: { log: { at: new Date(), actor: 'system', action: 'allowLangs', detail: 'all — language restrictions retired' } },
+                    });
+                } catch (e) {
+                    logger.warn('[ai-studio] could not lift the language restriction of draft %s: %s', d._id.toHexString(), e.message);
+                }
+            }
+            if (lifted) logger.info('[ai-studio] lifted the language restriction from %d published task(s)', lifted);
+        } catch (e) {
+            logger.warn('[ai-studio] language-restriction sweep failed: %s', e.message);
+        }
+    }, 5000);
 }
 
 async function repairArtifact(d: AuthorDraftDoc, target: 'solution' | 'alt' | 'tests', err: any): Promise<AuthorDraftDoc> {
@@ -2608,13 +2788,31 @@ async function runPipeline(domainId: string, id: ObjectId) {
         const memMiB = Math.min(512, Math.max(128, maxMiB * 2));
         const time = fmtTimeMs(timeMs);
         const memory = `${memMiB}m`;
-        const freshAllow = sanitizeAllowLangs((await getDraft(domainId, id)).brief.allowLangs || []);
-        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({
-            time, memory, ...(freshAllow.length ? { langs: freshAllow } : {}),
-        })), d.owner);
+        // Deliberately no `langs`: a Studio task is submittable in every
+        // judge language. (Omitting the key is what makes it unrestricted —
+        // an empty list would intersect to ZERO in Hydro's resolution.)
+        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ time, memory })), d.owner);
 
-        // Stage 6: fold the COMPUTED samples into the statement.
-        const content = fullContent(d, samplesSection(d.artifacts.tests, refOuts));
+        // Stage 6: the COMPUTED samples replace the drafted ones in the
+        // statement. A drafted output that disagrees with the reference
+        // solution is worth a log line: the teacher sees it in the draft's
+        // activity, and it is exactly the kind of slip the pipeline exists
+        // to catch.
+        const drafted = parseStatementSamples(d.artifacts.statement.body);
+        const norm = (t: string) => String(t || '').replace(/\r/g, '').replace(/[ \t]+$/gm, '').replace(/\n+$/, '');
+        const corrected: string[] = [];
+        const draftedByInput = new Map(drafted.map((x) => [norm(x.input), x.output]));
+        let k = 0;
+        for (let i = 0; i < d.artifacts.tests.length; i++) {
+            if (!d.artifacts.tests[i].sample) continue;
+            k++;
+            const draftedOut = draftedByInput.get(norm(d.artifacts.tests[i].input));
+            if (draftedOut !== undefined && norm(draftedOut) !== norm(refOuts[i])) corrected.push(`sample ${k}`);
+        }
+        if (corrected.length) await patchDraft(id, {}, { actor: 'system', action: 'samples', detail: `${corrected.join(', ')}: the drafted output disagreed with the reference solution; the statement now shows the computed output` });
+        // A drafted explanation survives only when no sample output changed
+        // — it might otherwise explain a number that is no longer there.
+        const content = fullContent(d, samplesSection(d.artifacts.tests, refOuts), !corrected.length);
         await problem.edit(domainId, docId, { content });
 
         // Stage 7: the teacher briefing — key idea, knowledge points,
@@ -2686,12 +2884,13 @@ async function runPipeline(domainId: string, id: ObjectId) {
         // it is a real, judge-verified programming task — labeled and rated
         // like any Studio task — so every student and teacher can use it,
         // and the student it was made for keeps reaching it via the session.
+        // ONE implementation, shared with the reconciliation every reader
+        // performs (ensureBonusPublished) — so a publish missed here, by a
+        // crash between `passed` and this line or by a transient mongo
+        // error, is repaired the next time anyone looks at the task.
         if (d.bonus) {
             try {
-                await problem.edit(domainId, docId, { hidden: false });
-                const pubPid = d.pid || String((await problem.get(domainId, docId))?.pid || docId);
-                await patchDraft(id, { published: true, publishedHidden: false, pid: pubPid, pids: [pubPid] },
-                    { actor: 'system', action: 'publish', detail: `${pubPid} — bonus task added to the problem set` });
+                await ensureBonusPublished(domainId, id);
             } catch (e) {
                 logger.warn('[ai-studio] bonus task %s could not be added to the problem set: %s', key, e.message);
             }
@@ -2797,14 +2996,11 @@ class AiStudioHandler extends AiStudioBaseHandler {
         if (!['programming', 'objective', 'subjective'].includes(kind)) kind = 'programming';
         const isObj = kind === 'objective';
         const isProg = kind === 'programming';
-        // Allowed submission languages (programming only). The client sends a
-        // comma-joined list from the picker (empty string = every language,
-        // matching the manual creation page). When the field is absent
-        // entirely — older clients — keep the historical policy of pinning
-        // to the solution language.
-        const allow = !isProg ? []
-            : allowLangs === undefined ? [language]
-                : sanitizeAllowLangs(String(allowLangs).split(',').map((x) => x.trim()).filter((x) => x));
+        // A Studio programming task accepts EVERY judge language — the
+        // solution language only says what the AI writes the reference
+        // solution in. `allowLangs` is still accepted so a stale client's
+        // form does not fail validation, but it is deliberately ignored.
+        void allowLangs;
         const qt = isObj
             ? [...new Set(String(qtypes).split(',').map((x) => x.trim()).filter((x) => (QTYPES as readonly string[]).includes(x)))]
             : [];
@@ -2823,7 +3019,6 @@ class AiStudioHandler extends AiStudioBaseHandler {
             updateAt: now,
             brief: {
                 topic, notes: String(notes || '').slice(0, 20000), language, difficulty, crosscheck: isProg && !!crosscheck,
-                ...(allow.length ? { allowLangs: allow } : {}),
                 ...(isProg ? {} : { kind: kind as AuthorKind }),
                 ...(qt.length ? { qtypes: qt } : {}),
                 ...(qn ? { qcount: qn } : {}),
@@ -2841,7 +3036,7 @@ class AiStudioHandler extends AiStudioBaseHandler {
                     ? `objective${qt.length ? ` [${qt.join(',')}]` : ''}`
                     : kind === 'subjective'
                         ? 'subjective'
-                        : `programming [langs:${allow.length ? allow.join(',') : 'all'}]${targets.length ? ` targets: ${targets.map((t) => t.name).join(', ')}` : ''}`,
+                        : `programming${targets.length ? ` targets: ${targets.map((t) => t.name).join(', ')}` : ''}`,
             }],
         };
         await coll.insertOne(doc);
@@ -3104,20 +3299,10 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             return;
         }
         if (target === 'allowLangs') {
-            const langs = sanitizeAllowLangs(j?.langs);
-            await patchDraft(this.ddoc._id, { 'brief.allowLangs': langs }, { actor: 'teacher', action: 'allowLangs', detail: langs.join(',') || 'all' });
-            // Language restriction never invalidates the testdata, so a
-            // verified (even published) problem updates live: rewrite the
-            // config with the calibrated limits. CRITICAL: omit the key
-            // entirely when empty — langs:[] would intersect to ZERO
-            // allowed languages in Hydro's resolution chain.
-            if (this.ddoc.docId && this.ddoc.measured?.time) {
-                await problem.addTestdata(this.ddoc.domainId, this.ddoc.docId, 'config.yaml', Buffer.from(yamlDump({
-                    time: this.ddoc.measured.time,
-                    memory: this.ddoc.measured.memory,
-                    ...(langs.length ? { langs } : {}),
-                })), this.ddoc.owner);
-            }
+            // Retired control. A stale client may still post it; whatever it
+            // sends, the outcome is the current policy — every language.
+            await patchDraft(this.ddoc._id, { 'brief.allowLangs': [] }, { actor: 'teacher', action: 'allowLangs', detail: 'all' });
+            if (this.ddoc.docId) await stripLangsRestriction(this.ddoc.domainId, this.ddoc.docId, this.ddoc.owner);
             this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
             return;
         }
@@ -3160,7 +3345,7 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
                 'brief.kind': next,
                 'brief.crosscheck': next === 'programming' ? !!this.ddoc.brief.crosscheck : false,
                 'brief.qtypes': next === 'objective' ? (this.ddoc.brief.qtypes || []) : [],
-                'brief.allowLangs': next === 'programming' ? (this.ddoc.brief.allowLangs || []) : [],
+                'brief.allowLangs': [],
                 artifacts: {},
                 knowledgeTags: [],
                 approved: false,
@@ -3380,11 +3565,20 @@ export interface BonusBrief {
     knowledge: { name: string, description?: string }[];
 }
 
-export async function createBonusDraft(domainId: string, owner: number, brief: BonusBrief, bonus: { ssid: ObjectId, uid: number }): Promise<ObjectId> {
+/**
+ * Create the AI Studio draft behind a bonus task. The optional trailing
+ * `id` is a pre-generated draft _id: the session records its bonus entry
+ * under it BEFORE the diagnosis runs (so a refresh finds the job at once),
+ * and the draft is then created under the same id when the diagnosis
+ * completes.
+ */
+export async function createBonusDraft(
+    domainId: string, owner: number, brief: BonusBrief, bonus: { ssid: ObjectId, uid: number }, id?: ObjectId,
+): Promise<ObjectId> {
     const now = new Date();
     const difficulty = DIFF_HINT[brief.difficulty] ? brief.difficulty : 'challenge';
     const doc: AuthorDraftDoc = {
-        _id: new ObjectId(),
+        _id: id || new ObjectId(),
         domainId,
         owner,
         createdAt: now,
@@ -3425,6 +3619,11 @@ export async function materializeBonus(domainId: string, id: ObjectId): Promise<
     return { docId, pid, title: d.artifacts.statement.title };
 }
 
+/** Does the draft behind a bonus entry exist yet? (False while, or after a failed, diagnosis.) */
+export async function hasBonusDraft(domainId: string, id: ObjectId): Promise<boolean> {
+    return (await coll.countDocuments({ _id: id, domainId }, { limit: 1 })) > 0;
+}
+
 /** Where a bonus draft stands, for the session's rail. */
 export async function bonusState(domainId: string, id: ObjectId): Promise<{
     status: 'drafting' | 'building' | 'ready' | 'failed', message: string, title: string, docId: number | null, pid: string | null, score: number,
@@ -3437,6 +3636,49 @@ export async function bonusState(domainId: string, id: ObjectId): Promise<{
     if (d.pipeline.status === 'failed') return { status: 'failed', message: d.pipeline.message || 'Generation failed.', ...base };
     if (!d.artifacts.statement || !d.docId) return { status: 'drafting', message: d.pipeline.message || 'Drafting the statement…', ...base };
     return { status: 'building', message: d.pipeline.message || 'Preparing the judge…', ...base };
+}
+
+/**
+ * 📚 Make sure a VERIFIED bonus task sits in the domain's problem set.
+ *
+ * The pipeline publishes it the moment verification passes, but that is a
+ * single write at the very end of a long background job: a crash between
+ * `passed` and the edit, a transient mongo error (the pipeline only logs
+ * it), or a draft built by an older revision all leave a finished task
+ * stranded as hidden — visible to staff, a permission error for the
+ * student whose session links to it. So this is the idempotent
+ * reconciliation instead: every surface that reads a bonus's state calls
+ * it, and a task that verified but stayed hidden is repaired on sight.
+ *
+ * Deliberately gated on `passed`. An unverified draft has no testdata, so
+ * publishing it early would put an unjudgeable task in front of the whole
+ * course; a hidden one merely waits.
+ *
+ * Cheap on the happy path: one projected read, and no write once the task
+ * is already visible and the draft already records it.
+ *
+ * @returns true when the task is now visible in the problem set.
+ */
+export async function ensureBonusPublished(domainId: string, id: ObjectId): Promise<boolean> {
+    const d = await coll.findOne({ _id: id, domainId });
+    if (!d?.bonus || !d.docId || d.pipeline.status !== 'passed') return false;
+    // PROJECTION_LIST carries pid/hidden without pulling (and parsing) the
+    // judge config, which this check has no use for.
+    const pdoc = await problem.get(domainId, d.docId, problem.PROJECTION_LIST);
+    if (!pdoc) return false;
+    const pubPid = d.pid || String(pdoc.pid || d.docId);
+    if (pdoc.hidden) {
+        await problem.edit(domainId, d.docId, { hidden: false });
+        logger.info('[ai-studio] bonus task %s (%s) added to the problem set of %s', id.toHexString(), pubPid, domainId);
+    }
+    // Keep the draft's own bookkeeping in step, so the Studio and the
+    // session agree on what happened. Only logged when something changed.
+    if (!d.published || d.publishedHidden || d.pid !== pubPid) {
+        await patchDraft(id, {
+            published: true, publishedHidden: false, pid: pubPid, pids: [pubPid],
+        }, { actor: 'system', action: 'publish', detail: `${pubPid} — bonus task added to the problem set` });
+    }
+    return true;
 }
 
 /** Retry a failed bonus build (statement kept). */

@@ -1,5 +1,6 @@
 import $ from 'jquery';
 import KnowledgePointSelectAutoComplete from 'vj/components/autocomplete/KnowledgePointSelectAutoComplete';
+import { mountComposers } from 'vj/components/chat-composer';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { getAvailableLangs, getTheme, i18n, request } from 'vj/utils';
@@ -139,7 +140,11 @@ export const AIS_STYLE = [
   '.ais__btn--danger { background: #fff; color: #c2255c; border: 1px solid #f3c1d3; box-shadow: none; }',
   '.ais__btn--danger:hover { background: #fff0f4; filter: none; }',
   '.ais textarea, .ais input[type=text], .ais select { width: 100%; border: 1px solid #d5dbe7; border-radius: 10px; padding: 8px 10px; font-size: 13px; box-sizing: border-box; background: #fff; }',
-  '.ais textarea { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; line-height: 1.5; resize: vertical; }',
+  '.ais textarea { font-size: 13px; line-height: 1.5; resize: vertical; }',
+  // Code, tests and answer keys stay monospaced; prose that the AI reads does not (see chat-composer).
+  '.ais textarea.aisd__sol-code, .ais textarea.aisd__alt-code, .ais textarea.aisd__tests, .ais textarea.aisd__answers, .ais textarea.aisd__body-md { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }',
+  // Claude-style composers inside the Studio: roomy, rounded, calm.
+  '.ais textarea.ais__topic, .ais textarea.ais__notes, .ais textarea.aisc__input, .ais textarea.aisd__topic, .ais textarea.aisd__notes { border-radius: 14px; padding: 10px 14px; font-size: 13.5px; line-height: 1.55; min-height: 44px; }',
   '.ais__row { display: flex; gap: 14px; flex-wrap: wrap; }',
   '.ais__row > div { flex: 1 1 180px; }',
   '.ais__chip { display: inline-block; border-radius: 10px; padding: 2px 10px; font-size: 11.5px; background: #f1ecff; color: #7048e8; }',
@@ -248,6 +253,7 @@ export const AIS_STYLE = [
   '.ais__pill button { border: none; background: transparent; color: #c2255c; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }',
   '.ais__pill span { color: #8a94a6; font-size: 11px; }',
   '.ais__dd { position: relative; display: inline-block; }',
+  '.ais__langs-all { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: #5f3dc4; background: #f3f0ff; border: 1px solid #d9cdff; }',
   '.ais__dd-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; background: #fff; border: 1px solid #e3dcf5; border-radius: 12px; padding: 10px 12px; max-height: 280px; overflow: auto; min-width: 300px; box-shadow: 0 10px 28px rgba(80,60,140,.2); display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; }',
   '.ais__dd-panel[hidden] { display: none; }',
   '.ais__dd-panel label { font-size: 12px; white-space: nowrap; cursor: pointer; display: flex; align-items: center; gap: 5px; }',
@@ -305,6 +311,7 @@ export const AIS_STYLE = [
   '.pta-dark .ais__drop-sub { color: #7f75a8; }',
   '.pta-dark .ais__pill { background: #262b31; border-color: #37313f; }',
   '.pta-dark .ais__dd-panel { background: #23202c; border-color: #4d4070; box-shadow: 0 10px 28px rgba(0,0,0,.5); }',
+  '.pta-dark .ais__langs-all { color: #d0bdfb; background: #2c2440; border-color: #4d3f7d; }',
   '.pta-dark .ais__progress { background: rgba(151, 117, 250, .14); }',
   '.pta-dark .ais__msg--live { background: linear-gradient(90deg, #a99ed0 35%, #d0bfff 50%, #a99ed0 65%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; }',
   '.pta-dark .ais__row-hover:hover, .pta-dark .ais tbody tr:hover { background: rgba(151, 117, 250, .09); }',
@@ -658,9 +665,9 @@ function renderList($root, data) {
             <select class="ais__diff"><option value="intro">${esc(i18n('intro'))}</option><option value="medium">${esc(i18n('medium'))}</option><option value="challenge">${esc(i18n('challenge'))}</option></select></div>
           <div class="ais__prog-only"><div class="ais__label">${esc(i18n('Cross-check'))}</div>
             <select class="ais__cross"><option value="1">${esc(i18n('On (recommended)'))}</option><option value="0">${esc(i18n('Off'))}</option></select></div>
-          <div class="ais__prog-only" style="min-width:230px;"><div class="ais__label">${esc(i18n('Allowed languages for students'))}</div>
-            ${renderAllowLangsDd(langEntries(data.langs), [], false)}
-            <div class="aisd__meta">${esc(i18n('Empty = every judge language.'))}</div></div>
+          <div class="ais__prog-only" style="min-width:230px;"><div class="ais__label">${esc(i18n('Languages for students'))}</div>
+            <div class="ais__langs-all">🌐 ${esc(i18n('Every judge language'))}</div>
+            <div class="aisd__meta">${esc(i18n('The solution language above only says what the AI writes the reference solution in; students may submit in any language.'))}</div></div>
         </div>
         <div class="ais__prog-only">
           <div class="ais__label">🎯 ${esc(i18n('Target knowledge points (optional)'))}</div>
@@ -693,8 +700,9 @@ function renderList($root, data) {
       </div>
     </div>`);
   renderDrafts($root.find('.ais__drafts'), data.drafts || []);
-  let allowSel = [];
-  wireAllowLangsDd($root, (langs) => { allowSel = langs; });
+  // The brief and the extra requirements are what the AI reads: chat
+  // composers (proportional font, live Markdown) rather than code boxes.
+  mountComposers($root, '.ais__topic, .ais__notes', { i18n });
   const LANG_LABEL = {
     programming: i18n('Solution language'),
     objective: i18n('Language the questions are about'),
@@ -776,7 +784,7 @@ function renderList($root, data) {
         crosscheck: $root.find('.ais__cross').val() === '1',
         notes: String($root.find('.ais__notes').val() || ''),
         ...(kind === 'programming'
-          ? { allowLangs: allowSel.join(','), knowledge: kpPicker.names().join(',') }
+          ? { knowledge: kpPicker.names().join(',') }
           : kind === 'objective'
             ? { qtypes: qtypes.join(','), qcount: String($root.find('.ais__qcount').val() || '0') }
             : {}),

@@ -133,6 +133,21 @@
               value:pids,
               help_text:_('Search and pick programming problems from the problem set; entries are separated with ",". Only programming tasks can be added to a self-learning session — quiz and subjective tasks are not offered here. Students work through the tasks in this order, so put the simplest first; the AI advisor above can propose and apply a progression.')
           }) }}
+          {#-
+            🌐 Session-wide submission languages. The same field and picker
+            as the contest editor's "Submission language limit": a
+            comma-joined list of judge language ids, made friendly by
+            LanguageSelectAutoComplete in self_learning_edit.page.js. Empty
+            = no restriction. Enforced on every task the session opens.
+          -#}
+          {{ form.form_text({
+              columns:null,
+              label:'Allowed languages',
+              name:'langs',
+              value:langs|default(''),
+              placeholder:_('Every judge language — pick one or more to restrict'),
+              help_text:_('Once the session is created, every programming task in it — the listed tasks and each student’s bonus task — can only be submitted in the selected languages. Leave it empty to allow every judge language. A task that already restricts its own languages accepts only those that are in both lists.')
+          }) }}
           <div class="row">
             {{ form.form_text({ columns:2, label:'Begin Date', name:'beginAtDate', placeholder:'YYYY-mm-dd', value:dateBeginText, date:true, row:false }) }}
             {{ form.form_text({ columns:2, label:'Begin Time', name:'beginAtTime', placeholder:'HH:MM', value:timeBeginText, time:true, row:false }) }}
@@ -146,6 +161,24 @@
               <textarea name="penaltyRules" class="monospace textbox" data-yaml>{% if sdoc and sdoc.penaltyRules %}{{ penaltyRules }}{% else %}{% include 'partials/homework_default_penalty_rules.yaml' %}{% endif %}</textarea>
             </label>
           </div></div>
+          {#-
+            🎁 Bonus tickbox. An unchecked checkbox posts NO field, which
+            postUpdate reads as false — so this box is the only thing that
+            decides whether students of this session may request a bonus
+            task. A task a student already owns is never revoked by
+            unticking it; see SelfLearningDoc.bonusEnabled.
+          -#}
+          <div class="row">
+            {{ form.form_checkbox({
+                columns:12,
+                label:'Bonus',
+                name:'bonusEnabled',
+                placeholder:_('Offer a bonus task in this session'),
+                value:bonusEnabled,
+                help_text:_('When ticked, a student who has attempted every task of this session may request ONE bonus task — a new, harder problem the AI designs from their own attempts and tutor exchanges to drill the weak points it found, which then joins this domain’s problem set. Untick it and no new bonus task is offered; bonus tasks students already have stay open to them.'),
+                row:false
+            }) }}
+          </div>
           <p class="help-text sle-sched-help">{{ _('Students can enter from the begin time. Late work inside the extension is penalized by the tiered rules above: each line is "hours: coefficient", and the STUDENT’S TOTAL is multiplied by the tier of their last counted submission — once it is more than N hours late, that tier’s coefficient applies (lateness before the first tier rides free). After the extension, submissions close while review and the AI tutor stay open.') }}</p>
           {{ form.form_textarea({
               columns:null,

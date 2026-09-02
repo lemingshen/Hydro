@@ -90,20 +90,27 @@
               name:'pids',
               value:pids
           }) }}
+          {#-
+            🌐 Allowed submission languages — the same field, picker and
+            wording as the self-learning session editor. A comma-joined
+            list of judge language ids (LanguageSelectAutoComplete makes it
+            a chip picker); empty = every judge language. Folded into every
+            problem's own language list on the problem pages.
+          -#}
+          {{ form.form_text({
+              columns:null,
+              label:'Allowed languages',
+              name:'langs',
+              value:tdoc.langs|join(',') if tdoc.langs else '',
+              placeholder:_('Every judge language — pick one or more to restrict'),
+              help_text:_('Once the homework is created, every programming problem in it can only be submitted in the selected languages. Leave it empty to allow every judge language. A problem that already restricts its own languages accepts only those that are in both lists.')
+          }) }}
           {{ form.form_textarea({
               columns:null,
               label:'Content',
               name:'content',
               value:tdoc['content']|default(''),
               markdown:true
-          }) }}
-          {{ form.form_text({
-              columns:12,
-              label:'Submission language limit',
-              name:'langs',
-              value:tdoc.langs|default(''),
-              placeholder:_("Seperated with ','"),
-              row:true
           }) }}
           <div class="row"><div class="columns">
           {% if page_name == 'homework_edit' %}

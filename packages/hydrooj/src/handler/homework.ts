@@ -18,7 +18,9 @@ import user from '../model/user';
 import {
     Handler, param, post, Types,
 } from '../service/server';
-import { ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler } from './contest';
+import {
+    ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, resolveAllowedLangs,
+} from './contest';
 
 export const validatePenaltyRules = (input: string) => {
     try {
@@ -208,11 +210,16 @@ class HomeworkEditHandler extends Handler {
         const endAt = penaltySince.clone().add(extensionDays, 'days');
         if (beginAt.isSameOrAfter(penaltySince)) throw new ValidationError('endAtDate', 'endAtTime');
         if (penaltySince.isAfter(endAt)) throw new ValidationError('extensionDays');
-        await problem.getList(domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true);
+        const pdict = await problem.getList(domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true);
+        // 🌐 Sanitized, and refused if it would make a listed problem unsubmittable.
+        langs = resolveAllowedLangs(langs, pdict, pids);
         if (!tid) {
+            // `langs` (and `maintainer`) used to be dropped on CREATE and only
+            // stored on a later edit — the picker on the creation page had no
+            // effect until the homework was saved a second time.
             tid = await contest.add(domainId, title, content, this.user._id,
                 'homework', beginAt.toDate(), endAt.toDate(), pids, rated,
-                { penaltySince: penaltySince.toDate(), penaltyRules, assign });
+                { penaltySince: penaltySince.toDate(), penaltyRules, assign, maintainer, langs });
         } else {
             await contest.edit(domainId, tid, {
                 title,

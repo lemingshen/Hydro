@@ -2,6 +2,7 @@
   PTA fork: the KNOWLEDGE POINTS panel (model/knowledge.ts) — tags and
   knowledge points are one concept, so this replaces Hydro's site-wide
   category setting on every page that used it.
+
   Two modes, decided by knowledgePanel.mode:
     'filter' (problem set): each chip is a plain toggle link on the tags=
       filter — comma-separated, so multi-word names are safe, unlike the
@@ -9,40 +10,116 @@
       current tab and the viewer's visibility.
     'pick' (problem create / edit): chips carry data-kp and the page script
       toggles them into the tag input ("click to add").
+
+  A catalog can hold hundreds of points, and a bare chip cloud that long
+  makes the page a scroll of tags. So the panel is BOUNDED and SEARCHABLE
+  (pages/knowledge_panel.page.js drives it):
+    · a filter box at the top narrows the cloud as you type;
+    · the points you are filtering by are pinned in their own row;
+    · collapsed by default to the most-used dozen (the server sorts by
+      usage), with "Show all N" opening a scrolling area that never grows
+      past the viewport; unused points (0 on this tab) hide behind a link;
+    · groups fold; the panel sticks to the viewport on wide screens.
+  Without the script it degrades to the plain, complete list.
+
+  🌳 The catalog is a TREE (model/knowledge.ts): the panel draws it as
+  SECTIONS — a topic header (indented by depth, with the distinct roll-up
+  of tasks beneath it and, in filter mode, a link that filters by the
+  whole subtree) followed by the topic's own points as chips, then its
+  sub-topics. Folding a topic folds everything under it.
 -#}
 <style>
-  .kpp__group { margin: 8px 0 4px; font-size: 11px; font-weight: bold; letter-spacing: .06em; text-transform: uppercase; color: var(--pta-ink-faint); }
-  .kpp__chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .kpp__chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 10px; border-radius: 999px; font-size: 12px; line-height: 1.5; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-soft); text-decoration: none; transition: background .12s ease, border-color .12s ease, transform .12s var(--pta-ease); }
+  .kpp { --kpp-top: 76px; }
+  .kpp__tools { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .kpp__search { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0 10px 0 30px; border: 1px solid var(--pta-line); border-radius: 999px; background: var(--pta-card-2) no-repeat 10px center / 14px 14px; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2398a2ac' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/></svg>"); font-size: 12.5px; color: var(--pta-ink); outline: none; transition: border-color .12s ease, box-shadow .12s ease; }
+  .kpp__search:focus { border-color: var(--pta-violet); box-shadow: 0 0 0 3px var(--pta-violet-soft); }
+  .kpp__search::placeholder { color: var(--pta-ink-faint); }
+  .kpp__total { flex: 0 0 auto; font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--pta-ink-faint); background: var(--pta-card-3); border-radius: 999px; padding: 2px 8px; }
+  .kpp__active { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--pta-violet-soft); border: 1px solid var(--pta-violet-line); }
+  .kpp__active-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--pta-violet-text); margin-right: 2px; }
+  .kpp__active .kpp__clear { margin-left: auto; font-size: 12px; color: var(--pta-violet-text); text-decoration: none; white-space: nowrap; }
+  .kpp__active .kpp__clear:hover { text-decoration: underline; }
+  .kpp__scroll { position: relative; }
+  .kpp--expanded .kpp__scroll { max-height: calc(100vh - var(--kpp-top) - 210px); min-height: 160px; overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
+  .kpp__head { display: flex; align-items: center; gap: 6px; margin: 10px 0 5px; padding-left: calc(var(--kpp-depth, 0) * 12px); }
+  .kpp__head:first-child { margin-top: 2px; }
+  .kpp__group { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 11px; font-weight: bold; letter-spacing: .06em; text-transform: uppercase; color: var(--pta-ink-faint); cursor: pointer; text-align: left; }
+  .kpp__group::before { content: '▾'; font-size: 10px; transition: transform .15s var(--pta-ease); flex: 0 0 auto; }
+  .kpp__group[aria-expanded="false"]::before { transform: rotate(-90deg); }
+  .kpp__group-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kpp__group-n { font-weight: normal; opacity: .8; flex: 0 0 auto; }
+  .kpp__gfilter { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; text-transform: none; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-soft); text-decoration: none; white-space: nowrap; }
+  .kpp__gfilter:hover { border-color: var(--pta-violet-line); background: var(--pta-violet-soft); color: var(--pta-violet-text); }
+  .kpp__gfilter--on { border-color: var(--pta-violet); background: var(--pta-violet); color: #fff; }
+  .kpp__head[hidden], .kpp__chips[hidden], .kpp__chip[hidden] { display: none; }
+  .kpp__chips { display: flex; flex-wrap: wrap; gap: 5px; padding-left: calc(var(--kpp-depth, 0) * 12px); }
+  .kpp__chip--topic { border-style: dashed; font-weight: 600; }
+  .kpp__chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 9px; border-radius: 999px; font-size: 12px; line-height: 1.5; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-soft); text-decoration: none; transition: background .12s ease, border-color .12s ease, transform .12s var(--pta-ease); }
   .kpp__chip:hover { border-color: var(--pta-violet-line); background: var(--pta-violet-soft); color: var(--pta-violet-text); transform: translateY(-1px); }
   .kpp__chip--on { border-color: var(--pta-violet); background: var(--pta-violet); color: #fff; }
   .kpp__chip--on:hover { background: var(--pta-violet); color: #fff; }
   .kpp__chip--on::after { content: '\00d7'; opacity: .8; }
+  .kpp__chip--zero { opacity: .55; }
+  .kpp__chip mark { background: none; color: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
   .kpp__n { font-size: 10.5px; opacity: .75; }
-  .kpp__foot { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
-  .kpp__foot a { color: var(--pta-ink-faint); }
+  .kpp__foot { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 12px; }
+  .kpp__foot a, .kpp__foot button { color: var(--pta-ink-faint); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-decoration: none; }
+  .kpp__foot a:hover, .kpp__foot button:hover { color: var(--pta-violet-text); text-decoration: underline; }
+  .kpp__foot .kpp__more { color: var(--pta-violet-text); font-weight: 600; }
+  .kpp__foot .kpp__manage { margin-left: auto; }
+  .kpp__none { display: none; font-size: 12.5px; color: var(--pta-ink-faint); margin: 6px 0; }
+  .kpp--nomatch .kpp__none { display: block; }
   .kpp__empty { font-size: 12.5px; color: var(--pta-ink-faint); margin: 0; }
   .kpp__hint { color: var(--pta-ink-faint); }
+  /* Wide screens: the panel rides along while the table scrolls. */
+  @media (min-width: 1024px) { .section.side.kpp-sticky { position: sticky; top: var(--kpp-top, 76px); } }
+  .pta-dark .kpp__search { background-color: var(--pta-card-2); }
 </style>
 {%- set kp = knowledgePanel -%}
-{% if kp and kp.groups.length %}
-<div class="kpp">
-  {%- for g in kp.groups -%}
-    {% if g.name %}<div class="kpp__group">{% if g.name == 'Other' %}{{ _('Other') }}{% else %}{{ g.name }}{% endif %}</div>{% endif %}
-    <div class="kpp__chips">
-    {%- for p in g.points -%}
+{% if kp and kp.sections.length %}
+{%- set activePoints = [] -%}
+{%- for sec in kp.sections -%}{%- if sec.header and sec.header.active and sec.id -%}{% set activePoints = (activePoints.push(sec.header), activePoints) %}{%- endif -%}{%- for p in sec.points -%}{%- if p.active -%}{% set activePoints = (activePoints.push(p), activePoints) %}{%- endif -%}{%- endfor -%}{%- endfor -%}
+<div class="kpp" data-mode="{{ kp.mode }}" data-total="{{ kp.total }}" data-unused="{{ kp.unused or 0 }}">
+  <div class="kpp__tools">
+    <input type="search" class="kpp__search" placeholder="{{ _('Filter knowledge points…') }}" aria-label="{{ _('Filter knowledge points') }}" autocomplete="off">
+    <span class="kpp__total" title="{{ _('Knowledge points in this domain') }}">{{ kp.total }}</span>
+  </div>
+  {% if kp.mode != 'pick' and activePoints.length %}
+  <div class="kpp__active">
+    <span class="kpp__active-label">{{ _('Filtering by') }}</span>
+    {%- for p in activePoints -%}
+    <a class="kpp__chip kpp__chip--on" href="{{ p.href }}" title="{{ _('Remove this knowledge point from the filter') }}">{{ p.name }}</a>
+    {%- endfor -%}
+    <a class="kpp__clear" href="{{ kp.clearHref }}">&times; {{ _('Clear filter') }}</a>
+  </div>
+  {% endif %}
+  <div class="kpp__scroll">
+  {%- for sec in kp.sections -%}
+    {%- set h = sec.header -%}
+    {% if h %}
+    <div class="kpp__head" data-group="{{ sec.id }}" data-parents="{{ sec.parents|join(' ') }}" style="--kpp-depth: {{ h.depth }}">
+      <button type="button" class="kpp__group" data-group="{{ sec.id }}" aria-expanded="true" title="{{ _('Fold or unfold this topic') }}"><span class="kpp__group-t">{% if h.name == 'Other' and not sec.id %}{{ _('Other') }}{% else %}{{ h.name }}{% endif %}</span> <span class="kpp__group-n" title="{{ _('Tasks under this topic') }}">{{ h.rollup if sec.id else h.size }}</span></button>
+      {%- if kp.mode != 'pick' and sec.id and h.href -%}
+      <a class="kpp__gfilter{% if h.active %} kpp__gfilter--on{% endif %}" href="{{ h.href }}" data-name="{{ h.name }}" title="{% if h.active %}{{ _('Remove this topic from the filter') }}{% else %}{{ _('Show every task under this topic') }}{% endif %}">{% if h.active %}&times; {{ _('Topic') }}{% else %}{{ _('Topic') }} ⌕{% endif %}</a>
+      {%- endif -%}
+    </div>
+    {% endif %}
+    <div class="kpp__chips" data-group="{{ sec.id }}" data-parents="{{ sec.parents|join(' ') }}" style="--kpp-depth: {{ h.depth if h else 0 }}">
+    {%- for p in sec.points -%}
       {%- if kp.mode == 'pick' -%}
-      <a class="kpp__chip" href="javascript:;" data-kp="{{ p.name }}" title="{{ p.description or _('Click to add or remove this knowledge point') }}">{{ p.name }}{% if p.count %}<span class="kpp__n">{{ p.count }}</span>{% endif %}</a>
+      <a class="kpp__chip{% if not p.count %} kpp__chip--zero{% endif %}{% if p.topic %} kpp__chip--topic{% endif %}" href="javascript:;" data-kp="{{ p.name }}" data-name="{{ p.name }}" data-count="{{ p.count }}" title="{{ p.description or _('Click to add or remove this knowledge point') }}{% if p.path and p.path.length %} · {{ p.path|join(' › ') }}{% endif %}"><span class="kpp__t">{{ p.name }}</span>{% if p.count %}<span class="kpp__n">{{ p.count }}</span>{% endif %}</a>
       {%- else -%}
-      <a class="kpp__chip{% if p.active %} kpp__chip--on{% endif %}" href="{{ p.href }}" title="{% if p.active %}{{ _('Remove this knowledge point from the filter') }}{% else %}{{ _('Show the tasks with this knowledge point') }}{% endif %}">{{ p.name }}{% if p.count %}<span class="kpp__n">{{ p.count }}</span>{% endif %}</a>
+      <a class="kpp__chip{% if p.active %} kpp__chip--on{% endif %}{% if not p.count %} kpp__chip--zero{% endif %}" href="{{ p.href }}" data-name="{{ p.name }}" data-count="{{ p.count }}"{% if p.active %} data-active="1"{% endif %} title="{% if p.active %}{{ _('Remove this knowledge point from the filter') }}{% else %}{{ _('Show the tasks with this knowledge point') }}{% endif %}{% if p.path and p.path.length %} · {{ p.path|join(' › ') }}{% endif %}"><span class="kpp__t">{{ p.name }}</span>{% if p.count %}<span class="kpp__n">{{ p.count }}</span>{% endif %}</a>
       {%- endif -%}
     {%- endfor -%}
     </div>
   {%- endfor -%}
+    <p class="kpp__none">{{ _('No knowledge point matches.') }}</p>
+  </div>
   <div class="kpp__foot">
-    {% if kp.mode != 'pick' and activeTags and activeTags.length %}<a href="{{ kp.clearHref }}">&times; {{ _('Clear filter') }}</a>{% endif %}
+    {#- The page script adds Show all / Show less, the unused toggle and the sort toggle here. -#}
     {% if kp.mode == 'pick' %}<span class="kpp__hint">{{ _('Type a new name in the field to create a knowledge point.') }}</span>{% endif %}
-    {% if kp.canManage %}<a href="{{ url('knowledge_points') }}" target="_blank" rel="noopener">{{ _('Manage') }} &nearr;</a>{% endif %}
+    {% if kp.canManage %}<a class="kpp__manage" href="{{ url('knowledge_points') }}" target="_blank" rel="noopener">{{ _('Manage') }} &nearr;</a>{% endif %}
   </div>
 </div>
 {% else %}

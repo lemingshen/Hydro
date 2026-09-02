@@ -1,4 +1,5 @@
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
+import { createHash } from 'crypto';
 import { escapeRegExp } from 'lodash';
 import moment from 'moment-timezone';
 import { ObjectId } from 'mongodb';
@@ -17,7 +18,9 @@ import { PROBLEM_KIND_FILTERS } from './problem';
 // Bonus tasks reuse the AI Studio's draft + verification pipeline. (Cross-file
 // function import: under dev-mode hot reload an edit to ai_author.ts keeps
 // these references on the previous module instance until a restart.)
-import { bonusState, createBonusDraft, materializeBonus, retryBonus } from './ai_author';
+import {
+    bonusState, createBonusDraft, ensureBonusPublished, hasBonusDraft, materializeBonus, retryBonus,
+} from './ai_author';
 import KnowledgeModel from '../model/knowledge';
 import * as document from '../model/document';
 import { PERM, PRIV } from '../model/builtin';
@@ -26,7 +29,7 @@ import domain from '../model/domain';
 import problem from '../model/problem';
 import record from '../model/record';
 import storage from '../model/storage';
-import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, collProgress, getClassReport, getSubjective, getSuggestionReportsIn, getTutorThreadsIn, listSubjective, removeSubjectiveFile, setClassReport, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads } from '../model/selflearning';
+import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, collProgress, getClassReport, getClassReportMapCache, getSubjective, getSuggestionReportsIn, getTutorThreadsIn, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
@@ -2574,8 +2577,8 @@ const ADVISOR_SYSTEM = `You are a course assistant helping a programming teacher
 
 const ADVISOR_PROMPT = `From the CANDIDATE TASKS below (the domain's programming tasks with their knowledge-point labels), suggest 3 to 8 tasks for the teacher's goal.
 Selection rules:
-1. RELEVANCE — every task must exercise the knowledge points the goal is about. Interpret the goal with the CATALOG: it may be phrased loosely ("for-loop" covers labels such as "For loop reading n values" or "Loop boundary off-by-one").
-2. MUTUAL RELEVANCE — the set must interlock: each suggested task shares at least one goal-relevant knowledge point with at least one other suggested task, and the goal's core points should each be carried by two or more suggested tasks, so a mistake in one task can recur in another.
+1. RELEVANCE — every task must exercise the knowledge points the goal is about. Interpret the goal with the CATALOG, which is a TREE (topic › subtopic › point): a goal phrased at topic level ("for-loop", "loops") covers every point beneath that topic, and candidate labels are shown with their topic ("Loops › For loop reading n values").
+2. MUTUAL RELEVANCE — the set must interlock: each suggested task shares at least one goal-relevant knowledge point — the same point, or two points under the same goal-relevant topic — with at least one other suggested task, and the goal's core points should each be carried by two or more suggested tasks, so a mistake in one task can recur in another. Name shared points by their exact label (the part after the last "›").
 3. PROGRESSION — the tasks form a LEARNING PATH that students work through in order, from simple to hard. Order primarily by knowledge-point load: step 1 needs only the goal's most basic point(s) in their plainest form; every later step keeps what came before and adds at most one or two new points, or a harder application of the same points (bigger constraints, a pitfall, a combination). Difficulty (1-10) and acceptance rates are hints, not the rule. Prefer varied scenarios over near-duplicates. Say what each step adds and what it builds on.
 4. Use pids from the candidate list ONLY, exactly as written. If fewer than 3 candidates fit, return what fits and say in "notes" what is missing (e.g. a knowledge point no task carries yet — the teacher can create one in the AI Studio).
 Reply with ONLY JSON:
@@ -2616,11 +2619,15 @@ interface AdvisorCandidate {
     nAccept: number;
     hidden: boolean;
     tags: string[];
+    /** 🌳 The ancestor paths of the task's labels ("Control flow › Loops"), for goal matching. */
+    paths?: string[];
 }
 
 /** Crude lexical relevance of a task to the goal — only used to bound the candidate list. */
 function goalScore(goalWords: string[], c: AdvisorCandidate): number {
-    const hay = `${c.title} ${c.tags.join(' ')}`.toLowerCase();
+    // 🌳 A goal said at topic level ("loops") should reach a task whose
+    // label lives under that topic even when the label's own words differ.
+    const hay = `${c.title} ${c.tags.join(' ')} ${(c.paths || []).join(' ')}`.toLowerCase();
     let score = 0;
     for (const w of goalWords) if (w.length >= 3 && hay.includes(w)) score += 1;
     return score * 10 + Math.min(c.tags.length, 8); // richer labeling breaks ties
@@ -2676,6 +2683,12 @@ class SelfLearningEditHandler extends Handler {
             dateEndText: endAt.format('YYYY-M-D'),
             timeEndText: endAt.format('H:mm'),
             extensionDays: this.sdoc?.extensionDays ?? 1,
+            // 🎁 undefined (new session, or one saved before the tickbox
+            // existed) prefills as ticked — see SelfLearningDoc.bonusEnabled.
+            bonusEnabled: this.sdoc?.bonusEnabled ?? true,
+            // 🌐 The picker reads a comma-joined id list (same convention as
+            // contest_edit's `langs`).
+            langs: (this.sdoc?.langs || []).join(','),
             penaltyRules: this.sdoc?.penaltyRules ? yamlDump(this.sdoc.penaltyRules) : null,
             page_name: this.sdoc ? 'self_learning_edit' : 'self_learning_create',
         };
@@ -2716,16 +2729,38 @@ class SelfLearningEditHandler extends Handler {
         // about; unlabeled ones join only when labeled ones are scarce.
         const labeled = all.filter((c) => c.tags.length);
         const pool = labeled.length >= 30 ? labeled : all;
+        // 🌳 Ancestor paths per label, once per distinct tag, for the goal match.
+        const ancestorsOf = new Map<string, string>();
+        for (const c of pool) {
+            for (const t of c.tags) {
+                const k = t.toLowerCase();
+                if (ancestorsOf.has(k)) continue;
+                const doc = await KnowledgeModel.getByName(domainId, t);
+                ancestorsOf.set(k, doc && doc.path?.length ? doc.path.join(' ') : '');
+            }
+            c.paths = c.tags.map((t) => ancestorsOf.get(t.toLowerCase()) || '').filter((x) => x);
+        }
         const goalWords = [...new Set(goal.toLowerCase().split(/[^\p{L}\p{N}+#-]+/u).filter((w) => w))];
         const candidates = [...pool].sort((a, b) => goalScore(goalWords, b) - goalScore(goalWords, a)).slice(0, 120);
         const byPid = new Map<string, AdvisorCandidate>();
         for (const c of candidates) byPid.set(c.pid.toLowerCase(), c);
 
-        const catalog = await KnowledgeModel.list(domainId, '', 400);
-        const catalogBlock = catalog.length
-            ? `=== CATALOG: the domain's knowledge points (name — description) ===\n${catalog.map((k) => `- ${k.name}${k.description ? ` — ${k.description.slice(0, 100)}` : ''}`).join('\n').slice(0, 7000)}\n=== END CATALOG ===`
-            : '=== CATALOG: (empty — rely on the task labels) ===';
-        const candidateBlock = `=== CANDIDATE TASKS (${candidates.length}) — pid | title | difficulty 1-10 | accepted/submissions | knowledge points ===\n${candidates.map((c) => `${c.pid} | ${c.title} | ${c.difficulty || '?'} | ${c.nAccept}/${c.nSubmit} | ${c.tags.length ? c.tags.join('; ') : '(unlabeled)'}`).join('\n')}\n=== END CANDIDATES ===`;
+        /*
+         * 🌳 The catalog as a TREE, and each candidate's labels with their
+         * topic ("Loops › For loop reading n values"): two tasks whose leaf
+         * points differ but share a topic still interlock, and a goal
+         * phrased at topic level ("loops") reaches every point beneath it.
+         */
+        const catalogBlock = await KnowledgeModel.promptCatalog(domainId, { title: 'CATALOG: the domain\'s knowledge points', budget: 7000 });
+        const pathOf = new Map<string, string>();
+        for (const c of candidates) {
+            for (const t of c.tags) {
+                if (pathOf.has(t.toLowerCase())) continue;
+                const doc = await KnowledgeModel.getByName(domainId, t);
+                pathOf.set(t.toLowerCase(), doc ? KnowledgeModel.describe(doc) : t);
+            }
+        }
+        const candidateBlock = `=== CANDIDATE TASKS (${candidates.length}) — pid | title | difficulty 1-10 | accepted/submissions | knowledge points (topic › point) ===\n${candidates.map((c) => `${c.pid} | ${c.title} | ${c.difficulty || '?'} | ${c.nAccept}/${c.nSubmit} | ${c.tags.length ? c.tags.map((t) => pathOf.get(t.toLowerCase()) || t).join('; ') : '(unlabeled)'}`).join('\n')}\n=== END CANDIDATES ===`;
 
         // Conversation: the big context rides in the first user turn; the
         // client's prior turns follow verbatim; the new message closes.
@@ -2837,10 +2872,12 @@ class SelfLearningEditHandler extends Handler {
     @param('endAtTime', Types.Time)
     @param('extensionDays', Types.Float)
     @param('penaltyRules', Types.Content, validatePenaltyRules, convertPenaltyRules)
+    @param('bonusEnabled', Types.Boolean)
+    @param('langs', Types.CommaSeperatedArray, true)
     async postUpdate(
         { domainId }, title: string, content: string, _pids: string,
         beginAtDate: string, beginAtTime: string, endAtDate: string, endAtTime: string,
-        extensionDays: number, penaltyRules: PenaltyRules,
+        extensionDays: number, penaltyRules: PenaltyRules, bonusEnabled = false, rawLangs: string[] = [],
     ) {
         const pids = _pids.replace(/，/g, ',').split(',').map((i) => +i).filter((i) => i);
         if (!pids.length) throw new ValidationError('pids');
@@ -2852,8 +2889,23 @@ class SelfLearningEditHandler extends Handler {
         if (!endAt.isValid()) throw new ValidationError('endAtDate', 'endAtTime');
         if (beginAt.isSameOrAfter(endAt)) throw new ValidationError('endAtDate', 'endAtTime');
         if (!(extensionDays >= 0)) throw new ValidationError('extensionDays');
+        /*
+         * 🎁 An UNCHECKED checkbox sends no field at all, so `false` here
+         * means both "the teacher unticked it" and "an old client posted a
+         * form without the field". Writing it explicitly on every save is
+         * what keeps SelfLearningDoc.bonusEnabled's tri-state meaningful:
+         * `undefined` then only ever means a session saved before the
+         * tickbox existed, which reads as enabled.
+         */
+        /*
+         * 🌐 Allowed submission languages. Unknown or disabled ids are
+         * dropped rather than refused (the picker only offers valid ones;
+         * a stale form may name a language since retired). Empty = no
+         * restriction — stored as [] so a cleared picker really clears.
+         */
+        const langs = [...new Set(rawLangs.map((l) => l.trim()).filter((l) => l && setting.langs[l] && !setting.langs[l].disabled))].slice(0, 64);
         const schedule = {
-            beginAt: beginAt.toDate(), endAt: endAt.toDate(), extensionDays, penaltyRules,
+            beginAt: beginAt.toDate(), endAt: endAt.toDate(), extensionDays, penaltyRules, bonusEnabled, langs,
         };
         const pdict = await problem.getList(
             domainId, pids, this.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || this.user._id, true,
@@ -2869,6 +2921,23 @@ class SelfLearningEditHandler extends Handler {
             .map((pdoc) => `${pdoc.pid || pdoc.docId} (${sessionKindOf(pdoc)})`);
         if (rejected.length) {
             throw new ValidationError('pids', null, `Only programming tasks can be added to a self-learning session. Remove: ${rejected.join(', ')}`);
+        }
+        /*
+         * A task with its own language list that shares NOTHING with the
+         * session's would be unsubmittable inside the session (the two are
+         * intersected on every session surface). Refuse now, naming the
+         * task and its languages, rather than let a student discover an
+         * empty language menu.
+         */
+        if (langs.length) {
+            const dead = pids
+                .map((pid) => pdict[pid])
+                .filter((pdoc) => pdoc && typeof pdoc.config === 'object' && Array.isArray((pdoc.config as any).langs) && (pdoc.config as any).langs.length
+                    && !(pdoc.config as any).langs.some((l: string) => langs.includes(l)))
+                .map((pdoc) => `${pdoc.pid || pdoc.docId} (${(pdoc.config as any).langs.map((l: string) => setting.langs[l]?.display || l).join(', ')})`);
+            if (dead.length) {
+                throw new ValidationError('langs', null, `These tasks accept none of the selected languages, so nobody could submit them in this session: ${dead.join('; ')}. Widen the language list or remove the task.`);
+            }
         }
         if (this.sdoc) {
             const patch: any = { title, content, pids, ...schedule };
@@ -3661,6 +3730,29 @@ class SelfLearningDetailHandler extends Handler {
             bonuses = await refreshBonuses(domainId, sdoc, this.user._id);
             bonusEligibleNow = await bonusEligible(domainId, sdoc, this.user._id);
         }
+        /*
+         * 🎁 The teacher's counterpart: every student's bonus task, live.
+         * Never fatal — the board is an extra panel below the task list, so
+         * a failure here (a deleted draft, an unreachable provider) must
+         * still leave the session page renderable.
+         */
+        let bonusRows: any[] = [];
+        let bonusStats: any = null;
+        if (!isStudentView) {
+            try {
+                bonusRows = await staffBonusRows(domainId, sdoc);
+                bonusStats = {
+                    total: bonusRows.length,
+                    ready: bonusRows.filter((b) => b.status === 'ready').length,
+                    building: bonusRows.filter(isBonusBusy).length,
+                    failed: bonusRows.filter((b) => b.status === 'failed').length,
+                    accepted: bonusRows.filter((b) => b.accepted).length,
+                    inProblemSet: bonusRows.filter((b) => b.inProblemSet).length,
+                };
+            } catch (e) {
+                logger.warn('[self-learning] bonus board for %s/%s failed: %s', domainId, sdoc.docId, e.message);
+            }
+        }
 
         // Before the begin time students see the schedule, not the problems.
         const hideProblems = isStudentView && schedule.phase === 'notStarted';
@@ -3991,6 +4083,12 @@ class SelfLearningDetailHandler extends Handler {
             gateInfo,
             bonuses,
             bonusEligibleNow,
+            bonusRows,
+            bonusStats,
+            // 🎁 The teacher's tickbox, for both views: the student's page
+            // stops advertising a bonus task the session does not offer, and
+            // the teacher's board says so plainly.
+            bonusAllowed: bonusAllowed(sdoc),
             canEdit: sdoc.owner === this.user._id
                 || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)
                 || this.user.hasPriv(PRIV.PRIV_EDIT_SYSTEM),
@@ -4016,6 +4114,22 @@ class SelfLearningProblemBaseHandler extends Handler {
         if (!this.sdoc.pids.includes(pid) && !this.bonus) throw new NotFoundError(domainId, pid);
         this.pdoc = await problem.get(domainId, pid);
         if (!this.pdoc) throw new NotFoundError(domainId, pid);
+        /*
+         * 🌐 The session's language restriction, folded into the task's own
+         * config exactly as a contest's `langs` is upstream: the solve page
+         * (langRange), the scratchpad menu (UiContext.pdoc.config.langs)
+         * and the submit check all read `config.langs`, so intersecting it
+         * here — for listed tasks and bonus tasks alike — restricts every
+         * one of them at once. A task without its own list simply takes
+         * the session's; disabled languages are dropped either way.
+         */
+        const sessionLangs = (this.sdoc.langs || []).filter((l) => setting.langs[l] && !setting.langs[l].disabled);
+        const cfg: any = this.pdoc.config;
+        if (sessionLangs.length && cfg && typeof cfg === 'object' && !['objective', 'submit_answer'].includes(cfg.type)) {
+            cfg.langs = Array.isArray(cfg.langs) && cfg.langs.length
+                ? cfg.langs.filter((l: string) => sessionLangs.includes(l))
+                : sessionLangs;
+        }
         // Homework-style schedule: before beginAt the session is closed to
         // students on every surface this base serves (solve, record, tutor).
         // After the end everything stays OPEN for review and tutoring; only
@@ -4235,8 +4349,12 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
                 const bonuses = await refreshBonuses(domainId, this.sdoc, this.user._id);
                 this.UiContext.slBonuses = bonuses;
                 this.UiContext.slBonus = {
+                    // 🎁 The teacher's tickbox. The panel hides the button
+                    // entirely when a session offers no bonus task, so the
+                    // student is never shown a door that cannot open.
+                    allowed: bonusAllowed(this.sdoc),
                     eligible: await bonusEligible(domainId, this.sdoc, this.user._id),
-                    inProgress: bonuses.some((b) => b.status === 'drafting' || b.status === 'building'),
+                    inProgress: bonuses.some(isBonusBusy),
                     available: aiTutor.tutorEnabled() && aiTutor.tutorConfigured(),
                     count: bonuses.length,
                 };
@@ -4345,8 +4463,24 @@ Rules:
 - "difficulty": "challenge" when the student solved most tasks quickly, "medium" when they struggled a lot.
 - "brief": 4 to 8 sentences describing ONE self-contained programming task (standard input / output, deterministic answer) whose correct solution REQUIRES every weak point, in a FRESH scenario — never a rephrasing of a session task — and harder than the session's tasks. Describe the scenario, the input and output, and which weak points it forces; do not write the full statement or any solution. Write everything in English only.`;
 
+/**
+ * 🎁 Does this session offer bonus tasks at all?
+ *
+ * See SelfLearningDoc.bonusEnabled for the tri-state: only an explicit
+ * `false` — the teacher unticking the box — turns the feature off, so
+ * sessions saved before the tickbox existed keep behaving exactly as they
+ * did. This governs REQUESTING a task; a task a student already owns is
+ * deliberately not revoked (see SelfLearningBonusHandler).
+ */
+export function bonusAllowed(sdoc: Pick<SelfLearningDoc, 'bonusEnabled'>): boolean {
+    return sdoc?.bonusEnabled !== false;
+}
+
 /** Every session task has at least one judged, non-pretest attempt by the student. */
 async function bonusEligible(domainId: string, sdoc: SelfLearningDoc, uid: number): Promise<boolean> {
+    // The teacher's tickbox is the first gate: when the session offers no
+    // bonus task, nothing else about the student's work matters.
+    if (!bonusAllowed(sdoc)) return false;
     if (!sdoc.pids.length) return false;
     const rows = await record.getMulti(domainId, {
         pid: { $in: sdoc.pids }, uid, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
@@ -4355,83 +4489,219 @@ async function bonusEligible(domainId: string, sdoc: SelfLearningDoc, uid: numbe
     return sdoc.pids.every((pid) => tried.has(pid));
 }
 
+/** The statuses in which a bonus task is still being built (the page polls). */
+const BONUS_BUSY: ReadonlySet<string> = new Set(['diagnosing', 'drafting', 'building']);
+export function isBonusBusy(b: Pick<SelfLearningBonusEntry, 'status'> | null | undefined): boolean {
+    return !!b && BONUS_BUSY.has(b.status);
+}
+/**
+ * A diagnosis is one or two LLM calls plus a handful of reads: minutes at
+ * the very most. An entry still `diagnosing` after this long has lost its
+ * job — the worker that ran it restarted — and, unlike the studio drafts
+ * (whose boot sweep marks orphaned runs failed), it has no draft yet for
+ * any sweep to find. The reader repairs it instead, so the student sees a
+ * retry rather than an eternal spinner. Process-agnostic on purpose: with
+ * several workers, a boot-time sweep would misfire on jobs still live
+ * elsewhere.
+ */
+const BONUS_DIAGNOSIS_STALE_MS = 12 * 60 * 1000;
+
+/**
+ * Bring ONE stored bonus entry up to date with its draft, and — once the
+ * task is verified — make sure it is in the domain's problem set.
+ *
+ * Shared by the student's own view (refreshBonuses) and the teacher's
+ * session-wide board (staffBonusRows), so the two can never disagree about
+ * a task's state, and either of them repairs a stranded publication.
+ */
+async function refreshBonusEntry(
+    domainId: string, ssid: ObjectId, uid: number, b: SelfLearningBonusEntry,
+): Promise<SelfLearningBonusEntry> {
+    let entry = b;
+    if (b.status === 'diagnosing') {
+        // No draft exists yet — the job writes this entry directly, and
+        // bonusState would read the missing draft as "no longer exists".
+        const since = new Date(b.startedAt || b.createdAt).getTime();
+        if (Number.isFinite(since) && Date.now() - since > BONUS_DIAGNOSIS_STALE_MS) {
+            const patch = { status: 'failed' as const, message: 'The diagnosis was interrupted (the server restarted) — retry from the side panel.' };
+            try {
+                await SelfLearningModel.updateBonus(domainId, ssid, uid, b.id, patch);
+                entry = { ...b, ...patch };
+            } catch (e) { /* keep the stored state */ }
+        }
+        return entry;
+    }
+    if (b.status !== 'ready' && b.status !== 'failed') {
+        try {
+            const st = await bonusState(domainId, b.id);
+            const patch: any = { status: st.status, message: st.message.slice(0, 300) };
+            if (st.docId && !b.docId) { patch.docId = st.docId; patch.pid = st.pid; }
+            if (st.title && !b.title) patch.title = st.title;
+            if (st.status === 'ready' && !b.readyAt) patch.readyAt = new Date();
+            await SelfLearningModel.updateBonus(domainId, ssid, uid, b.id, patch);
+            entry = { ...b, ...patch };
+        } catch (e) { /* keep the stored state */ }
+    }
+    // 📚 Idempotent and near-free once the task is already visible; see
+    // ensureBonusPublished for why this runs on every read instead of
+    // trusting the pipeline's single publish write.
+    if (entry.status === 'ready') {
+        try {
+            await ensureBonusPublished(domainId, entry.id);
+        } catch (e) { /* the listing must render even if the repair fails */ }
+    }
+    return entry;
+}
+
+/** The client shape of one bonus entry (student panel and teacher board). */
+function bonusToClient(entry: SelfLearningBonusEntry) {
+    return {
+        id: entry.id.toHexString(),
+        docId: entry.docId || null,
+        pid: entry.pid || null,
+        title: entry.title || '',
+        status: entry.status,
+        message: entry.message || '',
+        weakPoints: entry.weakPoints || [],
+        createdAt: entry.createdAt,
+        startedAt: entry.startedAt || null,
+        readyAt: entry.readyAt || null,
+    };
+}
+
 /** Refresh the student's bonus entries from their drafts and return the client shape. */
 async function refreshBonuses(domainId: string, sdoc: SelfLearningDoc, uid: number) {
     const progress = await SelfLearningModel.getProgress(domainId, sdoc.docId, uid);
     const out: any[] = [];
     for (const b of progress?.bonuses || []) {
-        let entry = b;
-        if (b.status !== 'ready' && b.status !== 'failed') {
-            try {
-                const st = await bonusState(domainId, b.id);
-                const patch: any = { status: st.status, message: st.message.slice(0, 300) };
-                if (st.docId && !b.docId) { patch.docId = st.docId; patch.pid = st.pid; }
-                if (st.title && !b.title) patch.title = st.title;
-                if (st.status === 'ready' && !b.readyAt) patch.readyAt = new Date();
-                await SelfLearningModel.updateBonus(domainId, sdoc.docId, uid, b.id, patch);
-                entry = { ...b, ...patch };
-            } catch (e) { /* keep the stored state */ }
-        }
-        out.push({
-            id: entry.id.toHexString(),
-            docId: entry.docId || null,
-            pid: entry.pid || null,
-            title: entry.title || '',
-            status: entry.status,
-            message: entry.message || '',
-            weakPoints: entry.weakPoints || [],
-            createdAt: entry.createdAt,
-        });
+        out.push(bonusToClient(await refreshBonusEntry(domainId, sdoc.docId, uid, b)));
     }
     return out;
 }
 
-class SelfLearningBonusHandler extends Handler {
-    sdoc: SelfLearningDoc;
+/** Teacher board: how many rows one session's bonus listing may hold. */
+const STAFF_BONUS_LIMIT = 500;
 
-    @param('ssid', Types.ObjectId)
-    async prepare({ domainId }, ssid: ObjectId) {
-        this.sdoc = await loadSession(domainId, ssid);
-        if (!this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) throw new ForbiddenError('Please sign in.');
-        // Same student test as the task surfaces: staff have the Studio.
-        const staff = this.user.own(this.sdoc) || this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK) || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
-        if (staff) throw new ForbiddenError('Bonus tasks are generated for students of the session.');
-        if (sessionSchedule(this.sdoc).phase === 'notStarted') throw new ForbiddenError('This session has not started yet.');
-    }
-
-    async get({ domainId }) {
-        const bonuses = await refreshBonuses(domainId, this.sdoc, this.user._id);
-        this.response.body = {
-            bonuses,
-            eligible: await bonusEligible(domainId, this.sdoc, this.user._id),
-            inProgress: bonuses.some((b) => b.status === 'drafting' || b.status === 'building'),
-            available: aiTutor.tutorEnabled() && aiTutor.tutorConfigured(),
-        };
-    }
-
-    /** Diagnose the student's weak points and start a new bonus task. */
-    async postCreate({ domainId }) {
-        if (!(aiTutor.tutorEnabled() && aiTutor.tutorConfigured())) throw new ForbiddenError('The AI assistant is not configured. Please ask the administrator to set an API key.');
-        if (!await bonusEligible(domainId, this.sdoc, this.user._id)) throw new BadRequestError('Attempt every task of the session first — then a bonus task can be made for you.');
-        // ONE bonus task per student per session: it is the session's
-        // capstone, built from the whole body of work. A failed build can be
-        // retried (postRetry); a second task is never created.
-        const existing = await refreshBonuses(domainId, this.sdoc, this.user._id);
-        if (existing.length) {
-            const b = existing[0];
-            throw new BadRequestError(b.status === 'failed'
-                ? 'Your bonus task could not be prepared — retry it from the side panel instead of creating another.'
-                : 'This session already has your bonus task; each session offers exactly one.');
+/**
+ * 🎁 TEACHER VIEW — every student's bonus task in this session.
+ *
+ * A bonus task is generated per student from their own attempts and tutor
+ * exchanges, so it is invisible to the teacher everywhere else: it is not
+ * one of `sdoc.pids`, and the score board only carries a one-word status
+ * per student, and only after an evaluation has been run. This assembles
+ * the live picture instead — who has one, what it targets, whether it
+ * built, whether it reached the problem set, and how the student did on
+ * it — with no dependency on the evaluation having run.
+ *
+ * Batched by design: one progress query, one user lookup, one problem
+ * lookup and one record scan for the whole session, plus a per-entry draft
+ * read for the few tasks still building.
+ */
+async function staffBonusRows(domainId: string, sdoc: SelfLearningDoc) {
+    const progresses = await collProgress
+        .find({ domainId, ssid: sdoc.docId, 'bonuses.0': { $exists: true } })
+        .limit(STAFF_BONUS_LIMIT).toArray();
+    if (!progresses.length) return [];
+    const entries: { uid: number, entry: SelfLearningBonusEntry }[] = [];
+    for (const p of progresses) {
+        for (const b of p.bonuses || []) {
+            entries.push({ uid: p.uid, entry: await refreshBonusEntry(domainId, sdoc.docId, p.uid, b) });
         }
-        await this.limitRate('ai_tutor', 60, 3, '{{user}}');
-        const uid = this.user._id;
+    }
+    if (!entries.length) return [];
+    const uids = [...new Set(entries.map((e) => e.uid))];
+    const docIds = [...new Set(entries.map((e) => e.entry.docId).filter((x): x is number => !!x))];
+    const [udict, pdict] = await Promise.all([
+        user.getList(domainId, uids),
+        // canViewHidden: true — a task still building is legitimately
+        // hidden, and the teacher's board must still name it.
+        docIds.length
+            ? problem.getList(domainId, docIds, true, false, problem.PROJECTION_LIST, true)
+            : Promise.resolve({} as any),
+    ]);
+    /*
+     * The owning student's work on their own bonus task. Same filters the
+     * session uses everywhere else (no pretests, nothing still judging),
+     * and keyed by uid AND pid: now that finished bonus tasks live in the
+     * problem set, other people's submissions on them must not leak into
+     * a row.
+     */
+    const byKey = new Map<string, { attempts: number, best: number, accepted: boolean, lastAt: Date | null }>();
+    if (docIds.length) {
+        const rdocs = await record.getMulti(domainId, {
+            pid: { $in: docIds },
+            uid: { $in: uids },
+            contest: { $ne: record.RECORD_PRETEST },
+            status: { $nin: JUDGING },
+        }).project({ pid: 1, uid: 1, score: 1, status: 1 }).limit(20000).toArray();
+        for (const r of rdocs as any[]) {
+            const key = `${r.uid}/${r.pid}`;
+            const cur = byKey.get(key) || { attempts: 0, best: 0, accepted: false, lastAt: null };
+            const at = r._id.getTimestamp();
+            cur.attempts += 1;
+            cur.best = Math.max(cur.best, r.score || 0);
+            cur.accepted ||= r.status === STATUS.STATUS_ACCEPTED;
+            if (!cur.lastAt || at > cur.lastAt) cur.lastAt = at;
+            byKey.set(key, cur);
+        }
+    }
+    const rows = entries.map(({ uid, entry }) => {
+        const udoc: any = udict[uid];
+        const pdoc: any = entry.docId ? pdict[entry.docId] : null;
+        const stat = entry.docId ? byKey.get(`${uid}/${entry.docId}`) : null;
+        return {
+            ...bonusToClient(entry),
+            uid,
+            uname: udoc?.uname || String(uid),
+            name: `${udoc?.firstName || ''} ${udoc?.lastName || ''}`.trim(),
+            // The problem may have been deleted by hand; `null` then, and
+            // the row renders as unavailable rather than linking nowhere.
+            problemPid: pdoc ? (pdoc.pid || String(pdoc.docId)) : null,
+            problemTitle: pdoc?.title || '',
+            // 📚 The point of the reconciliation above, made visible: a
+            // verified task should always read as in the problem set.
+            inProblemSet: !!pdoc && !pdoc.hidden,
+            difficulty: pdoc?.difficulty || 0,
+            tag: pdoc?.tag || [],
+            attempts: stat?.attempts || 0,
+            best: stat?.best || 0,
+            accepted: !!stat?.accepted,
+            lastAt: stat?.lastAt || null,
+        };
+    });
+    // Roster order: the teacher scans this against a class list, so sort by
+    // the name they know, falling back to the login id.
+    rows.sort((a, b) => (a.name || a.uname).localeCompare(b.name || b.uname) || a.uid - b.uid);
+    return rows;
+}
 
+/**
+ * 🎁 The bonus task's BACKGROUND JOB — detached from the request that
+ * started it, so a page refresh (or the student simply leaving) at any
+ * moment disturbs nothing: the entry was written under `id` before this
+ * runs, every step updates it, and the page only ever watches.
+ *
+ *   1. read the student's whole body of work in the session;
+ *   2. DIAGNOSE — one LLM call (one retry on malformed JSON) names the
+ *      weak points and briefs the task; the weak points land on the entry
+ *      at once, so the rail can show what the task will target;
+ *   3. create the AI Studio draft UNDER THE PRE-GENERATED ID, then hand
+ *      over to materializeBonus (statement → problem) which itself chains
+ *      the verification pipeline (solution, tests, sandbox) — each phase
+ *      as much a background job as this one.
+ * Any failure lands on the entry as `failed` with its reason; postRetry
+ * re-runs whichever phase failed.
+ */
+async function runBonusDiagnosis(domainId: string, sdoc: SelfLearningDoc, uid: number, id: ObjectId): Promise<void> {
+    const ssid = sdoc.docId;
+    const setEntry = (patch: Partial<SelfLearningBonusEntry>) => SelfLearningModel.updateBonus(domainId, ssid, uid, id, patch);
+    try {
         // ---- the student's work, task by task ----
-        const pdict = await problem.getList(domainId, this.sdoc.pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
-        const progress = await SelfLearningModel.getProgress(domainId, this.sdoc.docId, uid);
+        const pdict = await problem.getList(domainId, sdoc.pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
+        const progress = await SelfLearningModel.getProgress(domainId, sdoc.docId, uid);
         const langCount = new Map<string, number>();
         const blocks: string[] = [];
-        for (const pid of this.sdoc.pids) {
+        for (const pid of sdoc.pids) {
             const pdoc = pdict[pid];
             if (!pdoc) continue;
             const recs = await record.getMulti(domainId, { pid, uid, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING } })
@@ -4439,21 +4709,22 @@ class SelfLearningBonusHandler extends Handler {
             for (const r of recs as any[]) if (r.lang) langCount.set(r.lang, (langCount.get(r.lang) || 0) + 1);
             const trajectory = (recs as any[]).map((r, i) => `${i + 1}:${STATUS_SHORT_TEXTS[r.status] || STATUS_TEXTS[r.status] || r.status}${r.score ? `(${r.score})` : ''}`).join(' → ');
             const last = (recs as any[])[recs.length - 1];
-            const thread = await SelfLearningModel.getThread(domainId, this.sdoc.docId, pid, uid);
+            const thread = await SelfLearningModel.getThread(domainId, sdoc.docId, pid, uid);
             const exchanges = (thread?.messages || []).filter((m: any) => m.kind === 'anno').slice(-10)
                 .map((m: any) => `${m.role === 'user' ? 'STUDENT' : 'TUTOR'}${m.line ? ` [line ${m.line}]` : ''}: ${String(m.content).replace(/\s+/g, ' ').slice(0, 220)}`).join('\n');
             const state = progress?.done?.includes(pid) ? 'finished' : progress?.skipped?.includes(pid) ? 'SKIPPED' : 'in progress';
             blocks.push([
                 `=== TASK ${pdoc.pid || pid}: ${pdoc.title} [${state}] ===`,
-                `Knowledge points: ${(pdoc.tag || []).join('; ') || '(none)'}`,
+                `Knowledge points: ${(await KnowledgeModel.describeTags(domainId, (pdoc.tag || []).map((t: any) => String(t)))).join('; ') || '(none)'}`,
                 `Attempts: ${trajectory || '(none)'}`,
                 last?.code ? `Latest code (${last.lang}):\n${String(last.code).slice(0, 1200)}` : '',
                 exchanges ? `Tutor exchanges:\n${exchanges}` : 'Tutor exchanges: (none)',
             ].filter((x) => x).join('\n'));
         }
-        const language = [...langCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || this.sdoc.pids.length && (pdict[this.sdoc.pids[0]]?.config as any)?.langs?.[0] || 'cc.cc17';
-        const catalog = await KnowledgeModel.list(domainId, '', 300);
-        const catalogBlock = catalog.length ? `Knowledge-point list of this course (use exact names): ${catalog.map((k) => k.name).join('; ')}` : '';
+        const language = [...langCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || sdoc.pids.length && (pdict[sdoc.pids[0]]?.config as any)?.langs?.[0] || 'cc.cc17';
+        // 🌳 The tree, so a weak point can be named at the right grain and
+        // a NEW one placed under the topic it belongs to.
+        const catalogBlock = await KnowledgeModel.promptCatalog(domainId, { title: 'KNOWLEDGE-POINT CATALOG of this course (use exact names)', budget: 6000, descriptions: false });
         const raw = await aiTutor.callProvider(BONUS_SYSTEM, [{
             role: 'user',
             content: [BONUS_PROMPT, catalogBlock, blocks.join('\n\n').slice(0, 24000)].filter((x) => x).join('\n\n'),
@@ -4478,10 +4749,10 @@ class SelfLearningBonusHandler extends Handler {
             weak.push(doc?.description ? { name: doc.name, description: doc.description } : { name: canonical || name });
         }
         const brief = String(j?.brief || '').trim();
-        if (!brief) throw new BadRequestError('The AI could not design a bonus task from your work yet. Please try again.');
+        if (!brief) throw new Error('The AI could not design a bonus task from your work yet. Please retry.');
         const evidence = (Array.isArray(j?.weakPoints) ? j.weakPoints : []).map((w: any) => `- ${w?.name}: ${w?.evidence || ''}`).join('\n');
-        const titles = this.sdoc.pids.map((pid) => pdict[pid]?.title).filter((x) => x).join('; ');
-        const id = await createBonusDraft(domainId, this.sdoc.owner, {
+        const titles = sdoc.pids.map((pid) => pdict[pid]?.title).filter((x) => x).join('; ');
+        await createBonusDraft(domainId, sdoc.owner, {
             topic: brief,
             notes: [
                 'This is a BONUS TASK generated for ONE student who has attempted every task of a self-learning session. It exists to make them practise their weak points.',
@@ -4493,27 +4764,83 @@ class SelfLearningBonusHandler extends Handler {
             language,
             difficulty: j?.difficulty === 'medium' ? 'medium' : 'challenge',
             knowledge: weak,
-        }, { ssid: this.sdoc.docId, uid });
-        const entry: SelfLearningBonusEntry = {
-            id, status: 'drafting', message: 'Drafting the statement…', weakPoints: weak.map((w) => w.name), createdAt: new Date(),
-        };
-        await SelfLearningModel.addBonus(domainId, this.sdoc.docId, uid, entry);
-        // Phase 1 in the background: the statement, then the hidden problem;
-        // phase 2 (solution, tests, verification) follows on its own.
-        const ssid = this.sdoc.docId;
-        materializeBonus(domainId, id).then(async (m) => {
-            await SelfLearningModel.updateBonus(domainId, ssid, uid, id, { docId: m.docId, pid: m.pid, title: m.title, status: 'building', message: 'Preparing the judge…' });
-        }).catch(async (e) => {
-            await SelfLearningModel.updateBonus(domainId, ssid, uid, id, { status: 'failed', message: String(e.message || e).slice(0, 300) });
-        });
+        }, { ssid: sdoc.docId, uid }, id);
+        await setEntry({ status: 'drafting', message: 'Drafting the statement…', weakPoints: weak.map((w) => w.name) });
+        // Phase 1: the statement, then the problem; phase 2 (solution,
+        // tests, verification) follows on its own inside materializeBonus.
+        const m = await materializeBonus(domainId, id);
+        await setEntry({ docId: m.docId, pid: m.pid, title: m.title, status: 'building', message: 'Preparing the judge…' });
+    } catch (e) {
+        logger.warn('[self-learning] bonus job %s for user %d failed: %s', id.toHexString(), uid, e.message);
+        await setEntry({ status: 'failed', message: String(e.message || e).slice(0, 300) }).catch(() => { /* nothing left to record on */ });
+    }
+}
+
+class SelfLearningBonusHandler extends Handler {
+    sdoc: SelfLearningDoc;
+
+    @param('ssid', Types.ObjectId)
+    async prepare({ domainId }, ssid: ObjectId) {
+        this.sdoc = await loadSession(domainId, ssid);
+        if (!this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) throw new ForbiddenError('Please sign in.');
+        // Same student test as the task surfaces: staff have the Studio.
+        const staff = this.user.own(this.sdoc) || this.user.hasPerm(PERM.PERM_CREATE_HOMEWORK) || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
+        if (staff) throw new ForbiddenError('Bonus tasks are generated for students of the session.');
+        if (sessionSchedule(this.sdoc).phase === 'notStarted') throw new ForbiddenError('This session has not started yet.');
+    }
+
+    async get({ domainId }) {
+        const bonuses = await refreshBonuses(domainId, this.sdoc, this.user._id);
         this.response.body = {
-            bonus: {
-                id: id.toHexString(), docId: null, pid: null, title: '', status: 'drafting', message: entry.message, weakPoints: entry.weakPoints, createdAt: entry.createdAt,
-            },
+            bonuses,
+            // The teacher's tickbox, so the side panel can say "this session
+            // offers none" instead of "finish every task first".
+            allowed: bonusAllowed(this.sdoc),
+            eligible: await bonusEligible(domainId, this.sdoc, this.user._id),
+            inProgress: bonuses.some(isBonusBusy),
+            available: aiTutor.tutorEnabled() && aiTutor.tutorConfigured(),
         };
     }
 
-    /** Retry a failed bonus build. */
+    /** Diagnose the student's weak points and start a new bonus task. */
+    async postCreate({ domainId }) {
+        // Explicit gate ahead of bonusEligible, which also checks it: this
+        // is the one that produces a message naming the real reason, so a
+        // crafted POST cannot look like "you have not finished the tasks".
+        if (!bonusAllowed(this.sdoc)) throw new ForbiddenError('This session does not offer a bonus task.');
+        if (!(aiTutor.tutorEnabled() && aiTutor.tutorConfigured())) throw new ForbiddenError('The AI assistant is not configured. Please ask the administrator to set an API key.');
+        if (!await bonusEligible(domainId, this.sdoc, this.user._id)) throw new BadRequestError('Attempt every task of the session first — then a bonus task can be made for you.');
+        // ONE bonus task per student per session: it is the session's
+        // capstone, built from the whole body of work. A failed build can be
+        // retried (postRetry); a second task is never created.
+        const existing = await refreshBonuses(domainId, this.sdoc, this.user._id);
+        if (existing.length) {
+            const b = existing[0];
+            throw new BadRequestError(b.status === 'failed'
+                ? 'Your bonus task could not be prepared — retry it from the side panel instead of creating another.'
+                : 'This session already has your bonus task; each session offers exactly one.');
+        }
+        await this.limitRate('ai_tutor', 60, 3, '{{user}}');
+        const uid = this.user._id;
+        /*
+         * The entry is recorded FIRST, under the draft id the job will
+         * create, and the response leaves at once: from here on the build
+         * is runBonusDiagnosis's business, and this page — or any reload
+         * of it — just polls the entry. It also closes the old race in
+         * which a refresh during the (long, silent) diagnosis showed the
+         * button again and a second click started a second diagnosis.
+         */
+        const id = new ObjectId();
+        const now = new Date();
+        const entry: SelfLearningBonusEntry = {
+            id, status: 'diagnosing', message: 'Reading your attempts and tutor exchanges…', weakPoints: [], createdAt: now, startedAt: now,
+        };
+        await SelfLearningModel.addBonus(domainId, this.sdoc.docId, uid, entry);
+        runBonusDiagnosis(domainId, this.sdoc, uid, id); // detached on purpose — never awaited
+        this.response.body = { bonus: bonusToClient(entry) };
+    }
+
+    /** Retry a failed bonus build — whichever phase failed. */
     @param('id', Types.ObjectId)
     async postRetry({ domainId }, id: ObjectId) {
         const progress = await SelfLearningModel.getProgress(domainId, this.sdoc.docId, this.user._id);
@@ -4521,9 +4848,21 @@ class SelfLearningBonusHandler extends Handler {
         if (!b) throw new NotFoundError(id);
         if (b.status !== 'failed') throw new BadRequestError('Only a failed bonus task can be retried.');
         await this.limitRate('ai_tutor', 60, 3, '{{user}}');
-        await SelfLearningModel.updateBonus(domainId, this.sdoc.docId, this.user._id, id, { status: b.docId ? 'building' : 'drafting', message: 'Retrying…' });
         const ssid = this.sdoc.docId;
         const uid = this.user._id;
+        // A failure BEFORE the draft existed (the diagnosis itself, or an
+        // interrupted one) is retried by running the diagnosis again —
+        // there is nothing in the studio to resume yet.
+        if (!await hasBonusDraft(domainId, id)) {
+            const now = new Date();
+            await SelfLearningModel.updateBonus(domainId, ssid, uid, id, {
+                status: 'diagnosing', message: 'Reading your attempts and tutor exchanges…', startedAt: now,
+            });
+            runBonusDiagnosis(domainId, this.sdoc, uid, id); // detached, like postCreate
+            this.response.body = { ok: 1 };
+            return;
+        }
+        await SelfLearningModel.updateBonus(domainId, ssid, uid, id, { status: b.docId ? 'building' : 'drafting', message: 'Retrying…' });
         retryBonus(domainId, id).catch(async (e) => {
             await SelfLearningModel.updateBonus(domainId, ssid, uid, id, { status: 'failed', message: String(e.message || e).slice(0, 300) });
         });
@@ -5729,6 +6068,644 @@ function classContextBlock(stats: any, agg: any = null): string {
     return lines.join('\n');
 }
 
+/* ------------- self-learning SESSION report: the whole corpus, in batches ------------- */
+
+/*
+ * 📏 SCALE. A class may hold 200+ students, each with dozens of attempts
+ * and long tutor dialogues; the model's context is finite. The map stage
+ * therefore packs students into batches by SIZE, not by count (a budget
+ * of characters per call, overridable by the ai_tutor.report_batch_chars
+ * setting), renders a student's transcript at one of three compaction
+ * LEVELS (full → tight → tightest) to fit, splits a student who does not
+ * fit even then across two calls by task, bisects a failed batch until
+ * the failing student is found and retried tighter — and only after all
+ * of that marks a student unanalyzed, by name, in the report. A per-
+ * student CACHE keyed by the transcript's hash makes a re-run send only
+ * students whose data changed.
+ */
+const SESSION_REPORT_MAX_STUDENTS = 600;
+const SESSION_BATCH_CHARS = () => Math.max(12000, +system.get('ai_tutor.report_batch_chars') || 48000);
+const SESSION_REDUCE_CHARS = () => Math.max(30000, +system.get('ai_tutor.report_reduce_chars') || 110000);
+const SESSION_MAP_CONCURRENCY = () => Math.min(8, Math.max(1, +system.get('ai_tutor.report_concurrency') || 3));
+/** Wall-clock guard: above this many map calls the whole class is rendered one level tighter (every student still read). */
+const SESSION_MAX_CALLS = () => Math.max(8, +system.get('ai_tutor.report_max_calls') || 40);
+const SESSION_CODE_AC_CAP = 1200;
+const SESSION_CODE_FAIL_CAP = 900;
+const SESSION_MSG_CAP = 320; // characters per tutor message in the corpus
+const SESSION_JOB_STALE_MS = 30 * 60 * 1000;
+/** Compaction levels: [dialogue messages per task, chars per message, code chars, collapse attempt runs]. */
+const SESSION_LEVELS: { msgs: number, msgChars: number, code: number, collapse: boolean }[] = [
+    { msgs: 24, msgChars: SESSION_MSG_CAP, code: SESSION_CODE_AC_CAP, collapse: false },
+    { msgs: 14, msgChars: 200, code: 600, collapse: true },
+    { msgs: 8, msgChars: 140, code: 300, collapse: true },
+];
+
+const median = (xs: number[]) => {
+    if (!xs.length) return 0;
+    const a = [...xs].sort((x, y) => x - y);
+    const m = Math.floor(a.length / 2);
+    return a.length % 2 ? a[m] : Math.round(((a[m - 1] + a[m]) / 2) * 10) / 10;
+};
+const mean1 = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null);
+const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
+const IDK_RE = /^(?:i\s*(?:don'?t|do not)\s*know|不知道|我不知道|no idea|idk)\b/i;
+
+/**
+ * 📊 EVERYTHING the session report reasons from, collected deterministically:
+ *   - the tasks with their knowledge points (tree paths);
+ *   - every student's every judged submission on them, in order, with the
+ *     code of the last failing and the accepted attempt (capped);
+ *   - every tutor exchange, verbatim (capped per message), with its grades;
+ *   - the rubric scores when the session has been evaluated;
+ *   - and the STATISTICS the report may quote: per task, per knowledge
+ *     point, tutor engagement, results.
+ * `light` skips the code and the transcripts: enough for the page's live
+ * strip and charts, cheap enough for every GET.
+ */
+async function buildSessionCorpus(domainId: string, sdoc: SelfLearningDoc, light: boolean) {
+    const pids: number[] = (sdoc.pids || []).filter((x: any) => typeof x === 'number');
+    const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'pid', 'title', 'difficulty', 'tag', 'config'] as any, true);
+    const tasks: any[] = [];
+    for (const pid of pids) {
+        const pd: any = pdict[pid];
+        if (!pd) continue;
+        const points = (pd.tag || []).map((t: any) => String(t)).filter((t: string) => t);
+        tasks.push({ pid, label: String(pd.pid || `P${pid}`), title: pd.title, difficulty: pd.difficulty || 0, points, pointPaths: await KnowledgeModel.describeTags(domainId, points) });
+    }
+    const labelOf = new Map(tasks.map((t) => [t.pid, t.label]));
+
+    // Every judged, non-pretest submission on the session's tasks.
+    const recs = await record.getMulti(domainId, { pid: { $in: pids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: NONFINAL_STATUS } })
+        .project({ uid: 1, pid: 1, status: 1, score: 1, lang: 1 }).sort({ _id: 1 }).limit(CLASS_MAX_RECORDS).toArray() as any[];
+    const uids = [...new Set(recs.map((r) => r.uid as number))].slice(0, SESSION_REPORT_MAX_STUDENTS);
+    const uidSet = new Set(uids);
+    const [udict, threads, progresses] = await Promise.all([
+        user.getList(domainId, uids),
+        getSessionThreads(domainId, sdoc.docId),
+        collProgress.find({ domainId, ssid: sdoc.docId }).limit(SESSION_REPORT_MAX_STUDENTS).toArray(),
+    ]);
+    const sOf = new Map<number, string>();
+    uids.forEach((uid, i) => sOf.set(uid, `S${i + 1}`));
+    const progOf = new Map(progresses.map((p) => [p.uid, p]));
+    const rowOf = new Map((sdoc.results?.rows || []).map((r: any) => [r.uid, r]));
+
+    // ---- per (student, task) ----
+    interface Cell { attempts: any[], firstAt: Date | null, acAt: Date | null, lastFailRid: any, acRid: any, lastFailStatus: number }
+    const cells = new Map<string, Cell>();
+    const cellKey = (uid: number, pid: number) => `${uid}:${pid}`;
+    for (const r of recs) {
+        if (!uidSet.has(r.uid)) continue;
+        const k = cellKey(r.uid, r.pid);
+        if (!cells.has(k)) cells.set(k, { attempts: [], firstAt: null, acAt: null, lastFailRid: null, acRid: null, lastFailStatus: 0 });
+        const c = cells.get(k)!;
+        const at = r._id.getTimestamp();
+        if (!c.firstAt) c.firstAt = at;
+        c.attempts.push({ status: r.status, score: r.score || 0, at, rid: r._id });
+        if (r.status === STATUS.STATUS_ACCEPTED) {
+            if (!c.acAt) {
+                c.acAt = at;
+                c.acRid = r._id;
+            }
+        } else if (!c.acAt) {
+            c.lastFailRid = r._id;
+            c.lastFailStatus = r.status;
+        }
+    }
+    const threadOf = new Map<string, TutorThreadDoc>();
+    for (const th of threads) if (uidSet.has(th.uid)) threadOf.set(cellKey(th.uid, th.pid), th);
+
+    // Code excerpts (the ONLY code the model may quote): the accepted
+    // attempt and, for students who never got there, the last failing one.
+    const codeOf = new Map<string, string>();
+    if (!light) {
+        const wanted: { rid: any, cap: number }[] = [];
+        for (const c of cells.values()) {
+            if (c.acRid) wanted.push({ rid: c.acRid, cap: SESSION_CODE_AC_CAP });
+            else if (c.lastFailRid) wanted.push({ rid: c.lastFailRid, cap: SESSION_CODE_FAIL_CAP });
+        }
+        const rdocs = await record.getMulti(domainId, { _id: { $in: wanted.map((w) => w.rid) } }).project({ code: 1 }).limit(wanted.length + 1).toArray() as any[];
+        const capOf = new Map(wanted.map((w) => [String(w.rid), w.cap]));
+        for (const rd of rdocs) codeOf.set(String(rd._id), String(rd.code || '').slice(0, capOf.get(String(rd._id)) || 900));
+    }
+
+    // ---- statistics ----
+    const perTask = tasks.map((t) => {
+        const own = uids.map((uid) => cells.get(cellKey(uid, t.pid))).filter((c): c is Cell => !!c);
+        const verdicts: Record<string, number> = {};
+        const firstFail: Record<string, number> = {};
+        const minutesToAc: number[] = [];
+        for (const c of own) {
+            for (const a of c.attempts) if (a.status !== STATUS.STATUS_ACCEPTED) verdicts[STATUS_SHORT_TEXTS[a.status] || STATUS_TEXTS[a.status] || String(a.status)] = (verdicts[STATUS_SHORT_TEXTS[a.status] || STATUS_TEXTS[a.status] || String(a.status)] || 0) + 1;
+            const f = c.attempts[0];
+            if (f && f.status !== STATUS.STATUS_ACCEPTED) firstFail[STATUS_SHORT_TEXTS[f.status] || STATUS_TEXTS[f.status] || String(f.status)] = (firstFail[STATUS_SHORT_TEXTS[f.status] || STATUS_TEXTS[f.status] || String(f.status)] || 0) + 1;
+            if (c.acAt && c.firstAt) minutesToAc.push(Math.round((c.acAt.getTime() - c.firstAt.getTime()) / 60000));
+        }
+        const tutor = { threads: 0, questions: 0, replies: 0, idk: 0, unanswered: 0, resolved: 0, rlevels: [] as number[], olevels: [] as number[] };
+        for (const uid of uids) {
+            const th = threadOf.get(cellKey(uid, t.pid));
+            if (!th) continue;
+            tutor.threads += 1;
+            const msgs = (th.messages || []).filter((m) => m.kind === 'anno');
+            for (let i = 0; i < msgs.length; i++) {
+                const m = msgs[i];
+                if (m.role === 'assistant') {
+                    tutor.questions += 1;
+                    if (m.resolved) tutor.resolved += 1;
+                    if (!msgs.slice(i + 1).some((x) => x.role === 'user')) tutor.unanswered += 1;
+                } else {
+                    tutor.replies += 1;
+                    if (IDK_RE.test(String(m.content || '').trim())) tutor.idk += 1;
+                    if (typeof m.rlevel === 'number') tutor.rlevels.push(m.rlevel);
+                    if (typeof m.level === 'number') tutor.olevels.push(m.level);
+                }
+            }
+        }
+        const skipped = progresses.filter((p) => uidSet.has(p.uid) && (p.skipped || []).includes(t.pid)).length;
+        return {
+            label: t.label, title: t.title, pid: t.pid, points: t.points,
+            attempted: own.length, solved: own.filter((c) => !!c.acAt).length,
+            medianAttempts: median(own.map((c) => c.attempts.length)), maxAttempts: Math.max(0, ...own.map((c) => c.attempts.length)),
+            medianMinutesToAc: median(minutesToAc), verdicts, firstFail, skipped,
+            tutor: {
+                threads: tutor.threads, questions: tutor.questions, replies: tutor.replies, idk: tutor.idk, unanswered: tutor.unanswered,
+                resolvedRate: pct(tutor.resolved, tutor.questions), meanReasoning: mean1(tutor.rlevels), meanOwnership: mean1(tutor.olevels),
+            },
+        };
+    });
+    // Per knowledge point, across the tasks that carry it.
+    const perPoint = new Map<string, any>();
+    for (const t of tasks) {
+        const pt = perTask.find((x) => x.pid === t.pid)!;
+        t.points.forEach((name: string, i: number) => {
+            const k = name.toLowerCase();
+            if (!perPoint.has(k)) perPoint.set(k, { name, path: t.pointPaths[i] || name, tasks: [], attempted: 0, solved: 0, surfaced: new Set<string>(), idk: 0 });
+            const e = perPoint.get(k);
+            e.tasks.push(t.label);
+            e.attempted += pt.attempted;
+            e.solved += pt.solved;
+            e.idk += pt.tutor.idk;
+        });
+    }
+    for (const th of threads) {
+        if (!uidSet.has(th.uid)) continue;
+        for (const n of th.surfacedKp?.names || []) {
+            const e = perPoint.get(String(n).toLowerCase());
+            if (e) e.surfaced.add(sOf.get(th.uid)!);
+        }
+    }
+    const perPointRows = [...perPoint.values()].map((e) => ({ ...e, surfaced: e.surfaced.size, surfacedStudents: [...e.surfaced].slice(0, 12), solvedRate: pct(e.solved, e.attempted) }))
+        .sort((a, b) => b.surfaced - a.surfaced || a.solvedRate - b.solvedRate);
+    const engagement = { students: uids.length, active: 0, partial: 0, silent: 0, questions: 0, replies: 0, idk: 0 };
+    for (const uid of uids) {
+        let q = 0;
+        let r = 0;
+        let idk = 0;
+        for (const t of tasks) {
+            const th = threadOf.get(cellKey(uid, t.pid));
+            for (const m of (th?.messages || []).filter((x) => x.kind === 'anno')) {
+                if (m.role === 'assistant') q += 1;
+                else {
+                    r += 1;
+                    if (IDK_RE.test(String(m.content || '').trim())) idk += 1;
+                }
+            }
+        }
+        engagement.questions += q;
+        engagement.replies += r;
+        engagement.idk += idk;
+        if (!q) continue;
+        if (r >= Math.max(1, Math.ceil(q * 0.6))) engagement.active += 1;
+        else if (r > 0) engagement.partial += 1;
+        else engagement.silent += 1;
+    }
+    const rows = uids.map((uid) => rowOf.get(uid)).filter((r): r is any => !!r);
+    const results = sdoc.results ? {
+        evaluated: true, computedAt: sdoc.results.computedAt, final: !!sdoc.results.final, students: rows.length,
+        meanTotal: mean1(rows.map((r) => r.total || 0)), medianTotal: median(rows.map((r) => r.total || 0)),
+        meanAchievement: mean1(rows.map((r) => r.achievement).filter((x) => typeof x === 'number')),
+        meanOwnership: mean1(rows.map((r) => r.ownership).filter((x) => typeof x === 'number')),
+        meanFixconv: mean1(rows.map((r) => r.fixconv).filter((x) => typeof x === 'number')),
+        meanReasoning: mean1(rows.map((r) => r.reasoning).filter((x) => typeof x === 'number')),
+        meanInitiative: mean1(rows.map((r) => r.initiative).filter((x) => typeof x === 'number')),
+    } : { evaluated: false };
+    const light_ = {
+        activity: sdoc.title, kind: 'self-learning', participants: uids.length,
+        problems: perTask.map((p) => ({ label: p.label, title: p.title, attempted: p.attempted, solved: p.solved, tutorQuestions: p.tutor.questions, tutorReplies: p.tutor.replies, tutorSkipped: p.tutor.unanswered, idk: p.tutor.idk, skipped: p.skipped })),
+        engagement, results, points: perPointRows.slice(0, 12).map((e) => ({ name: e.name, tasks: e.tasks, solvedRate: e.solvedRate, surfaced: e.surfaced })),
+    };
+
+    // ---- the per-student corpus (full mode) ----
+    const students: any[] = [];
+    if (!light) {
+        for (const uid of uids) {
+            const prog = progOf.get(uid);
+            const row = rowOf.get(uid);
+            const st: any = {
+                uid, s: sOf.get(uid), uname: udict[uid]?.uname || `user#${uid}`,
+                done: (prog?.done || []).map((p: number) => labelOf.get(p)).filter((x: any) => x),
+                skipped: (prog?.skipped || []).map((p: number) => labelOf.get(p)).filter((x: any) => x),
+                bonus: (prog?.bonuses || []).map((b: any) => ({ title: b.title || '', status: b.status, weakPoints: b.weakPoints || [] })),
+                results: row ? { total: row.total, achievement: row.achievement, ownership: row.ownership, fixconv: row.fixconv, reasoning: row.reasoning, initiative: row.initiative } : null,
+                tasks: [] as any[],
+            };
+            for (const t of tasks) {
+                const c = cells.get(cellKey(uid, t.pid));
+                const th = threadOf.get(cellKey(uid, t.pid));
+                if (!c && !th) continue;
+                const t0 = c?.firstAt ? c.firstAt.getTime() : 0;
+                const attempts = (c?.attempts || []).map((a: any, i: number) => `#${i + 1} ${STATUS_SHORT_TEXTS[a.status] || STATUS_TEXTS[a.status] || a.status}${a.score ? `(${a.score})` : ''}@+${Math.round((a.at.getTime() - t0) / 60000)}m`);
+                // The dialogue rides RAW (role, text, grades); it is rendered
+                // per compaction level when the batch is packed.
+                const dialogue = (th?.messages || []).filter((m) => m.kind === 'anno' || m.kind === 'attempt' || m.kind === 'accepted').map((m) => ({
+                    kind: m.kind, role: m.role, line: m.line, resolved: !!m.resolved, level: m.level, rlevel: m.rlevel,
+                    text: m.kind === 'anno' ? String(m.content || '').replace(/\s+/g, ' ') : '',
+                }));
+                st.tasks.push({
+                    label: t.label, attempts, solved: !!c?.acAt, minutesToAc: c?.acAt && c.firstAt ? Math.round((c.acAt.getTime() - c.firstAt.getTime()) / 60000) : null,
+                    code: c?.acRid ? { kind: 'accepted', text: codeOf.get(String(c.acRid)) || '' } : c?.lastFailRid ? { kind: `last failing (${STATUS_SHORT_TEXTS[c.lastFailStatus] || c.lastFailStatus})`, text: codeOf.get(String(c.lastFailRid)) || '' } : null,
+                    surfaced: th?.surfacedKp?.names || [],
+                    dialogue,
+                });
+            }
+            students.push(st);
+        }
+    }
+    return { sdoc, tasks, uids, sOf, udict, perTask, perPoint: perPointRows, engagement, results, light: light_, students };
+}
+
+/** The task list as the model reads it (shared by both stages). */
+function sessionTaskBlock(corpus: any): string {
+    return [`=== TASKS OF THE SESSION "${corpus.sdoc.title}" (in learning order) ===`,
+        ...corpus.tasks.map((t: any) => `${t.label} "${t.title}" — difficulty ${t.difficulty || '?'}/10 — knowledge points: ${t.pointPaths.length ? t.pointPaths.join('; ') : '(unlabeled)'}`),
+        '=== END TASKS ==='].join('\n');
+}
+
+/** "#1 WA(0)@+0m → #2 WA(0)@+3m → …": long runs of the same verdict collapse at the tighter levels. */
+function renderAttempts(attempts: string[], collapse: boolean): string {
+    if (!collapse || attempts.length <= 8) return attempts.join(' → ');
+    const verdictOf = (a: string) => a.replace(/^#\d+\s*/, '').replace(/@\+\d+m$/, '');
+    const out: string[] = [];
+    let i = 0;
+    while (i < attempts.length) {
+        let j = i;
+        while (j + 1 < attempts.length && verdictOf(attempts[j + 1]) === verdictOf(attempts[i])) j++;
+        if (j - i >= 2) out.push(`${attempts[i]} … ${attempts[j]} (${j - i + 1}× ${verdictOf(attempts[i])})`);
+        else for (let k = i; k <= j; k++) out.push(attempts[k]);
+        i = j + 1;
+    }
+    return out.join(' → ');
+}
+
+/** One task of one student at a compaction level. */
+function renderTask(t: any, lv: typeof SESSION_LEVELS[number]): string[] {
+    const lines: string[] = [];
+    lines.push(`${t.label}: ${t.attempts.length ? renderAttempts(t.attempts, lv.collapse) : '(no submissions)'}${t.solved ? ` — solved after ${t.minutesToAc} min` : ' — NOT solved'}${t.surfaced.length ? ` | surfaced misconceptions: ${t.surfaced.join('; ')}` : ''}`);
+    if (t.code && t.code.text) {
+        // Comments and blank lines carry little for the analysis at the tight levels.
+        let code = t.code.text.slice(0, lv.code);
+        if (lv.collapse) code = code.split('\n').filter((l: string) => l.trim() && !/^\s*(?:\/\/|#)/.test(l)).join('\n');
+        lines.push(`  code (${t.code.kind}):`, ...code.split('\n').map((l: string) => `    ${l.replace(/^ {4,}/, '    ').replace(/^\t+/, '    ')}`));
+    }
+    const msgs = (t.dialogue || []).slice(-lv.msgs);
+    if (msgs.length) {
+        lines.push('  tutor dialogue:');
+        for (const m of msgs) {
+            if (m.kind === 'attempt') lines.push('    [new failed attempt]');
+            else if (m.kind === 'accepted') lines.push('    [accepted — ownership walkthrough begins]');
+            else {
+                const grade = typeof m.level === 'number' ? ` (ownership L${m.level})` : typeof m.rlevel === 'number' ? ` (reasoning L${m.rlevel})` : '';
+                // The student's words are the evidence: they keep the full cap; the tutor's question shrinks first.
+                const cap = m.role === 'assistant' ? Math.round(lv.msgChars * 0.6) : lv.msgChars;
+                lines.push(`    ${m.role === 'assistant' ? 'TUTOR' : 'STUDENT'}${m.line ? ` [line ${m.line}]` : ''}${m.role === 'assistant' && m.resolved ? ' [resolved]' : ''}: ${m.text.slice(0, cap)}${grade}`);
+            }
+        }
+    }
+    return lines;
+}
+
+/**
+ * One student's transcript at a compaction level, optionally restricted
+ * to some of their tasks (a student too big for one call is split by
+ * task; every part carries the same S-token and says which part it is).
+ */
+function renderStudent(st: any, level: number, taskLabels?: string[], part?: { i: number, n: number }): string {
+    const lv = SESSION_LEVELS[Math.min(level, SESSION_LEVELS.length - 1)];
+    const lines: string[] = ['', `--- ${st.s}${part ? ` (part ${part.i}/${part.n}: tasks ${taskLabels!.join(', ')})` : ''} ---`,
+        `finished: ${st.done.join(', ') || '-'} | skipped: ${st.skipped.join(', ') || '-'}${st.bonus.length ? ` | bonus task: ${st.bonus.map((b: any) => `${b.title || '(building)'} [${b.status}]`).join('; ')}` : ''}${st.results ? ` | rubric total ${st.results.total}/100` : ''}`];
+    for (const t of st.tasks) {
+        if (taskLabels && !taskLabels.includes(t.label)) continue;
+        lines.push(...renderTask(t, lv));
+    }
+    return lines.join('\n');
+}
+
+/** A unit of map work: one student, or one part of a student. */
+interface MapItem { st: any, level: number, tasks?: string[], part?: { i: number, n: number }, text: string }
+
+/**
+ * 📦 Pack students into batches by SIZE. Each student is rendered at the
+ * fullest level that fits the budget; a student who does not fit even at
+ * the tightest level is split by task into parts that do. Then items are
+ * packed greedily, largest first, so every batch stays under the budget
+ * and the number of calls stays small.
+ */
+function packSessionBatches(students: any[], budget: number, maxCalls = SESSION_MAX_CALLS()): { batches: MapItem[][], parts: number, startLevel: number } {
+    const headroom = Math.floor(budget * 0.85); // the task list + framing take the rest
+    // ⏱ A 200-student class at full detail can mean a hundred calls. When
+    // the class would exceed the call ceiling, everyone starts one level
+    // tighter (then two): every student is still read, in fewer calls.
+    let startLevel = 0;
+    for (; startLevel < SESSION_LEVELS.length - 1; startLevel++) {
+        const total = students.reduce((n, st) => n + renderStudent(st, startLevel).length, 0);
+        if (Math.ceil(total / headroom) <= maxCalls) break;
+    }
+    const items: MapItem[] = [];
+    let parts = 0;
+    for (const st of students) {
+        let placed = false;
+        for (let level = startLevel; level < SESSION_LEVELS.length; level++) {
+            const text = renderStudent(st, level);
+            if (text.length <= headroom) {
+                items.push({ st, level, text });
+                placed = true;
+                break;
+            }
+        }
+        if (placed) continue;
+        // Split by task at the tightest level: consecutive tasks, each part under the budget.
+        const level = SESSION_LEVELS.length - 1;
+        const groups: string[][] = [];
+        let cur: string[] = [];
+        for (const t of st.tasks) {
+            const trial = renderStudent(st, level, [...cur, t.label]);
+            if (cur.length && trial.length > headroom) {
+                groups.push(cur);
+                cur = [t.label];
+            } else cur.push(t.label);
+        }
+        if (cur.length) groups.push(cur);
+        groups.forEach((g, i) => {
+            const part = { i: i + 1, n: groups.length };
+            let text = renderStudent(st, level, g, part);
+            if (text.length > headroom) text = `${text.slice(0, headroom - 40)}\n    … (truncated to fit the analysis budget)`;
+            items.push({ st, level, tasks: g, part, text });
+        });
+        parts += groups.length;
+    }
+    // First-fit-decreasing: biggest items first into the batch with room.
+    items.sort((a, b) => b.text.length - a.text.length);
+    const batches: { items: MapItem[], size: number }[] = [];
+    for (const it of items) {
+        const home = batches.find((b) => b.size + it.text.length <= headroom);
+        if (home) {
+            home.items.push(it);
+            home.size += it.text.length;
+        } else batches.push({ items: [it], size: it.text.length });
+    }
+    return { batches: batches.map((b) => b.items), parts, startLevel };
+}
+
+/** MAP context: the tasks + ONE batch of rendered student blocks. */
+function sessionBatchContext(corpus: any, items: MapItem[]): string {
+    return [sessionTaskBlock(corpus), '', `=== STUDENTS IN THIS BATCH (${items.length} block(s)) — complete records ===`,
+        ...items.map((it) => it.text), '', '=== END BATCH. Reply with the JSON. ==='].join('\n');
+}
+
+function parseSessionMap(raw: string, tokens: Set<string>, labels: Set<string>, points: Map<string, string>) {
+    let j: any;
+    try {
+        j = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
+    } catch (e) {
+        const m = raw.match(/\{[\s\S]*\}/);
+        if (!m) throw new Error('map reply is not JSON');
+        j = JSON.parse(m[0]);
+    }
+    const tok = (x: any) => (tokens.has(String(x)) ? String(x) : null);
+    const pointName = (x: any) => points.get(String(x || '').toLowerCase()) || String(x || '').slice(0, 60);
+    const students = (Array.isArray(j?.students) ? j.students : []).map((s: any) => ({
+        s: tok(s?.s), summary: String(s?.summary || '').slice(0, 400),
+        struggles: (Array.isArray(s?.struggles) ? s.struggles : []).slice(0, 6).map((x: any) => ({ concept: pointName(x?.concept), evidence: String(x?.evidence || '').slice(0, 200) })),
+        engagement: ['active', 'partial', 'evasive', 'none'].includes(s?.engagement) ? s.engagement : 'partial',
+        attention: !!s?.attention, reason: String(s?.reason || '').slice(0, 200),
+    })).filter((s: any) => s.s);
+    const errors = (Array.isArray(j?.errors) ? j.errors : []).map((e: any) => ({
+        category: String(e?.category || '').slice(0, 80), concept: pointName(e?.concept),
+        tasks: (Array.isArray(e?.tasks) ? e.tasks : []).map(String).filter((l: string) => labels.has(l)),
+        students: (Array.isArray(e?.students) ? e.students : []).map(tok).filter((x: any) => x),
+        evidence: String(e?.evidence || '').slice(0, 240),
+    })).filter((e: any) => e.category && e.students.length);
+    const tutor = (Array.isArray(j?.tutor) ? j.tutor : []).map((t: any) => ({ s: tok(t?.s), task: labels.has(String(t?.task)) ? String(t.task) : '', observation: String(t?.observation || '').slice(0, 240) })).filter((t: any) => t.s);
+    const notes = (Array.isArray(j?.notes) ? j.notes : []).map((x: any) => String(x).slice(0, 240)).slice(0, 3);
+    return { students, errors, tutor, notes };
+}
+
+/** REDUCE context: statistics + merged findings. */
+function sessionReportContext(corpus: any, findings: any): string {
+    const L: string[] = [`=== SESSION: "${corpus.sdoc.title}" — ${corpus.uids.length} participating students, ${corpus.tasks.length} tasks ===`];
+    L.push(sessionTaskBlock(corpus), '');
+    L.push('=== PER-TASK STATISTICS (deterministic) ===');
+    for (const p of corpus.perTask) {
+        L.push(`${p.label} "${p.title}": attempted ${p.attempted}, solved ${p.solved}, median attempts ${p.medianAttempts}, max ${p.maxAttempts}, median minutes to first accept ${p.medianMinutesToAc}, skipped by ${p.skipped}`);
+        L.push(`  failing verdicts (all attempts): ${Object.entries(p.verdicts).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}; first-attempt verdicts: ${Object.entries(p.firstFail).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}`);
+        L.push(`  tutor: ${p.tutor.threads} dialogues, ${p.tutor.questions} questions, ${p.tutor.replies} replies, "I don't know" ${p.tutor.idk}, unanswered ${p.tutor.unanswered}, resolved ${p.tutor.resolvedRate}%${p.tutor.meanReasoning != null ? `, mean reasoning level ${p.tutor.meanReasoning}/4` : ''}${p.tutor.meanOwnership != null ? `, mean ownership level ${p.tutor.meanOwnership}/4` : ''}`);
+    }
+    L.push('', '=== PER-KNOWLEDGE-POINT STATISTICS ===');
+    for (const e of corpus.perPoint) L.push(`${e.path}: tasks ${e.tasks.join(', ')}; solved rate ${e.solvedRate}% (${e.solved}/${e.attempted} task-attempts); students with surfaced misconception ${e.surfaced}${e.surfacedStudents.length ? ` (${e.surfacedStudents.join(', ')})` : ''}; "I don't know" replies ${e.idk}`);
+    const en = corpus.engagement;
+    L.push('', `=== TUTOR ENGAGEMENT (whole session) === students ${en.students}; engaged reasoners ${en.active}, partial ${en.partial}, silent ${en.silent}; questions ${en.questions}, replies ${en.replies}, "I don't know" ${en.idk} (${pct(en.idk, en.replies)}% of replies)`);
+    const R = corpus.results;
+    L.push('', R.evaluated
+        ? `=== RUBRIC RESULTS (evaluated ${R.final ? 'final' : 'provisional'}) === students ${R.students}; mean total ${R.meanTotal}/100, median ${R.medianTotal}; means — achievement ${R.meanAchievement}/30, ownership ${R.meanOwnership}/20, guidance-to-fix ${R.meanFixconv}/15, reasoning ${R.meanReasoning}/30, initiative ${R.meanInitiative}/5`
+        : '=== RUBRIC RESULTS === not evaluated yet');
+    const cov = findings.coverage || { students: corpus.uids.length, analyzed: corpus.uids.length, cached: 0, unanalyzed: [] as string[] };
+    L.push('', `=== FINDINGS OF THE PER-STUDENT ANALYSIS (${cov.analyzed} of ${cov.students} students read individually — every submission and tutor exchange${cov.cached ? `; ${cov.cached} unchanged since the last report, reused` : ''}) ===`);
+    if (cov.unanalyzed.length) L.push(`NOTE: ${cov.unanalyzed.length} student(s) could NOT be analyzed individually and appear in the statistics only: ${cov.unanalyzed.join(', ')}. Say so in section 1.`);
+    else L.push('Every participating student was analyzed individually.');
+    L.push('--- classified errors (merged) ---');
+    for (const e of findings.errors) L.push(`- [${e.concept}] ${e.category}: ${e.students.length} student(s) (${e.students.slice(0, 20).join(', ')}${e.students.length > 20 ? ', …' : ''}) on ${e.tasks.join(', ') || '?'} — ${e.evidence}`);
+    /*
+     * 📏 Two hundred per-student lines do not fit one call. The students
+     * who need the teacher's eye keep their full line; everyone else is
+     * listed by engagement group with a short summary — and if the
+     * context is still over budget, the summaries go, then the tutor
+     * observations, while the group lists (which name every student) stay.
+     */
+    const attention = findings.students.filter((x: any) => x.attention);
+    const rest = findings.students.filter((x: any) => !x.attention);
+    const groups: Record<string, string[]> = { active: [], partial: [], evasive: [], none: [] };
+    for (const x of rest) (groups[x.engagement] || groups.partial).push(x.s);
+    const line = (x: any, full: boolean) => `${x.s}: engagement=${x.engagement}${x.attention ? ` ATTENTION (${x.reason})` : ''} — ${full ? x.summary : x.summary.slice(0, 160)}${x.struggles.length ? ` | struggles: ${x.struggles.slice(0, full ? 6 : 3).map((y: any) => `${y.concept}${full ? ` (${y.evidence})` : ''}`).join('; ')}` : ''}`;
+    const build = (tier: number) => {
+        const out: string[] = ['--- students needing attention ---', ...attention.map((x: any) => line(x, tier === 0))];
+        out.push('--- other students, by tutor engagement (every token listed) ---');
+        for (const [g, toks] of Object.entries(groups)) if (toks.length) out.push(`${g}: ${toks.join(', ')}`);
+        if (tier <= 1) out.push('--- their summaries ---', ...rest.map((x: any) => line(x, false)));
+        if (tier <= 2 && findings.tutor.length) out.push('--- tutor dialogue observations ---', ...findings.tutor.slice(0, tier === 0 ? 60 : 30).map((t: any) => `- ${t.s} on ${t.task || '?'}: ${t.observation}`));
+        if (findings.notes.length) out.push('--- batch notes ---', ...findings.notes.map((n: string) => `- ${n}`));
+        return out;
+    };
+    const budget = SESSION_REDUCE_CHARS();
+    const head = L.join('\n').length;
+    let tier = 0;
+    let body = build(tier);
+    while (tier < 3 && head + body.join('\n').length > budget) {
+        tier += 1;
+        body = build(tier);
+    }
+    L.push(...body);
+    L.push('', '=== End of context. Write the report now. ===');
+    return L.join('\n');
+}
+
+/**
+ * 📡 The session report JOB — detached from the request, progress on the
+ * report document (the page polls it): collect → map (batches of students,
+ * three at a time) → reduce → substitute names → store.
+ */
+async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: number): Promise<void> {
+    const tid = String(sdoc.docId);
+    const startedAt = new Date();
+    const progress = (patch: any) => setClassReportJob(domainId, tid, { status: 'running', stage: 'collect', done: 0, total: 0, startedAt, by, ...patch });
+    try {
+        await progress({ stage: 'collect' });
+        const corpus = await buildSessionCorpus(domainId, sdoc, false);
+        if (!corpus.uids.length) throw new Error('No judged submissions yet — nothing to analyze.');
+        const tokens = new Set<string>([...corpus.sOf.values()]);
+        const labels = new Set<string>(corpus.tasks.map((t: any) => t.label));
+        const pointNames = new Map<string, string>();
+        for (const t of corpus.tasks) for (const n of t.points) pointNames.set(String(n).toLowerCase(), String(n));
+
+        // 🗂 The cache: students whose transcript hashes as before were
+        // analyzed by an earlier run — their findings are reused verbatim.
+        const hashOf = new Map<number, string>();
+        for (const st of corpus.students) hashOf.set(st.uid, createHash('sha1').update(renderStudent(st, 0)).digest('hex'));
+        const cache = await getClassReportMapCache(domainId, tid, corpus.uids);
+        const perStudent = new Map<string, any>(); // S-token → merged findings for that student
+        const analyzedNow = new Set<string>();
+        const cachedNow = new Set<string>();
+        const fresh: any[] = [];
+        for (const st of corpus.students) {
+            const c = cache.get(st.uid);
+            if (c && c.hash === hashOf.get(st.uid) && c.findings) {
+                perStudent.set(st.s, { ...c.findings, s: st.s });
+                cachedNow.add(st.s);
+            } else fresh.push(st);
+        }
+
+        const budget = SESSION_BATCH_CHARS();
+        const { batches, parts, startLevel } = packSessionBatches(fresh, budget);
+        logger.info('[pta-ui] session report: %d fresh student(s) → %d call(s) at compaction level %d (%d-char budget)%s', fresh.length, batches.length, startLevel, budget, parts ? `; ${parts} student part(s) split by task` : '');
+        await progress({ stage: 'map', done: 0, total: batches.length, students: corpus.uids.length, analyzed: cachedNow.size, cached: cachedNow.size });
+
+        // Findings per batch are folded into per-student records and the
+        // shared error / dialogue lists as they arrive.
+        const errByKey = new Map<string, any>();
+        const tutorObs: any[] = [];
+        const notes: string[] = [];
+        const absorb = (r: any, items: MapItem[]) => {
+            const inBatch = new Set(items.map((it) => it.st.s));
+            for (const sx of r.students) {
+                if (!inBatch.has(sx.s)) continue;
+                const prev = perStudent.get(sx.s);
+                if (!prev) perStudent.set(sx.s, sx);
+                else {
+                    // A student analyzed in parts: union the findings, keep the stronger flag.
+                    prev.summary = prev.summary.length >= sx.summary.length ? prev.summary : sx.summary;
+                    for (const g of sx.struggles) if (!prev.struggles.some((x: any) => x.concept === g.concept)) prev.struggles.push(g);
+                    prev.attention = prev.attention || sx.attention;
+                    if (sx.attention && !prev.reason) prev.reason = sx.reason;
+                    const rank = ['none', 'evasive', 'partial', 'active'];
+                    prev.engagement = rank[Math.max(rank.indexOf(prev.engagement), rank.indexOf(sx.engagement))] || prev.engagement;
+                }
+                analyzedNow.add(sx.s);
+            }
+            for (const e of r.errors) {
+                const key = `${e.concept.toLowerCase()}|${e.category.toLowerCase()}`;
+                if (!errByKey.has(key)) errByKey.set(key, { ...e, students: [], tasks: [] });
+                const m = errByKey.get(key);
+                for (const st of e.students) if (!m.students.includes(st)) m.students.push(st);
+                for (const t of e.tasks) if (!m.tasks.includes(t)) m.tasks.push(t);
+            }
+            tutorObs.push(...r.tutor);
+            notes.push(...r.notes);
+        };
+
+        /*
+         * 🔁 A batch that fails is not dropped: it is bisected until the
+         * offending item stands alone, and a lone item is retried one
+         * compaction level tighter. Only an item that fails at the tightest
+         * level is given up on — and then the report names the student.
+         */
+        let done = 0;
+        const analyzeItems = async (items: MapItem[], depth = 0): Promise<void> => {
+            try {
+                const raw = await aiTutor.runSessionMapBatch(sessionBatchContext(corpus, items));
+                absorb(parseSessionMap(raw, tokens, labels, pointNames), items);
+                return;
+            } catch (e) {
+                logger.warn('[pta-ui] session report map call failed (%d block(s), depth %d): %s', items.length, depth, e.message);
+            }
+            if (items.length > 1) {
+                const mid = Math.ceil(items.length / 2);
+                await analyzeItems(items.slice(0, mid), depth + 1);
+                await analyzeItems(items.slice(mid), depth + 1);
+                return;
+            }
+            const it = items[0];
+            if (it.level < SESSION_LEVELS.length - 1) {
+                const tighter: MapItem = { ...it, level: it.level + 1, text: renderStudent(it.st, it.level + 1, it.tasks, it.part) };
+                await analyzeItems([tighter], depth + 1);
+            }
+        };
+        let cursor = 0;
+        const worker = async () => {
+            for (;;) {
+                const idx = cursor++;
+                if (idx >= batches.length) return;
+                await analyzeItems(batches[idx]);
+                done += 1;
+                await progress({ stage: 'map', done, total: batches.length, students: corpus.uids.length, analyzed: analyzedNow.size + cachedNow.size, cached: cachedNow.size });
+            }
+        };
+        await Promise.all(Array.from({ length: SESSION_MAP_CONCURRENCY() }, () => worker()));
+
+        // 🗂 Remember this run's per-student findings for the next one.
+        for (const st of fresh) {
+            const f = perStudent.get(st.s);
+            if (f && analyzedNow.has(st.s)) await setClassReportMapCache(domainId, tid, st.uid, hashOf.get(st.uid)!, { ...f, s: undefined }).catch(() => {});
+        }
+        const unanalyzed = corpus.students.map((st: any) => st.s).filter((tok: string) => !perStudent.has(tok));
+        const findings = {
+            errors: [...errByKey.values()].sort((x, y) => y.students.length - x.students.length).slice(0, 40),
+            students: [...perStudent.values()],
+            tutor: tutorObs,
+            notes: notes.slice(0, 8),
+            coverage: { students: corpus.uids.length, analyzed: analyzedNow.size + cachedNow.size, cached: cachedNow.size, unanalyzed },
+        };
+        const failed = unanalyzed.length;
+        await progress({ stage: 'reduce', done: batches.length, total: batches.length, students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed });
+        const raw = await aiTutor.runSessionReport(sessionReportContext(corpus, findings));
+        await progress({ stage: 'finalize', done: batches.length, total: batches.length, students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed });
+        const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(raw, labels);
+        const sidMap = [...corpus.sOf.entries()].map(([uid, sTok]) => ({ s: sTok, uid, uname: corpus.udict[uid]?.uname || `user#${uid}` }));
+        const byTok = new Map(sidMap.map((e) => [e.s, e.uname]));
+        const substitute = (text: string) => text.replace(/\bS(\d+)\b/g, (m) => byTok.get(m) || m);
+        const reportNamed = substitute(reportAnon);
+        const concepts = conceptsAnon.map((c: any) => ({ ...c, students: (c.students || []).map((tok: string) => byTok.get(tok) || tok) }));
+        await setClassReport({
+            domainId, tid, reportAnon, reportNamed, sidMap, concepts, statsSnapshot: corpus.light, participants: corpus.uids.length, generatedBy: by,
+        });
+        await setClassReportJob(domainId, tid, {
+            status: 'done', stage: 'done', done: batches.length, total: batches.length, startedAt, finishedAt: new Date(), by,
+            students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed,
+        });
+        logger.info('[pta-ui] session report generated for %s/%s by uid=%d (%d students: %d analyzed now, %d from cache, %d unanalyzed; %d calls)', domainId, tid, by, corpus.uids.length, analyzedNow.size, cachedNow.size, failed, batches.length);
+    } catch (e) {
+        logger.warn('[pta-ui] session report job for %s/%s failed: %s', domainId, tid, e.message);
+        await setClassReportJob(domainId, tid, { status: 'failed', stage: 'done', done: 0, total: 0, startedAt, finishedAt: new Date(), error: String(e.message || e).slice(0, 300), by }).catch(() => {});
+    }
+}
+
 /**
  * Teacher-only class report over one contest/homework: GET serves the cached
  * report plus cheap live stats (dry=1 returns the full assembled context for
@@ -5759,6 +6736,28 @@ class AiClassReportHandler extends Handler {
     @param('dry', Types.Boolean, true)
     async get({ domainId }, tid: ObjectId, dry = false) {
         const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        if (kind === 'self-learning') {
+            // 📊 The session report: cached report + live statistics + the
+            // state of a running job (the page polls this while it runs).
+            const [doc, corpus] = await Promise.all([
+                getClassReport(domainId, String(tid)),
+                buildSessionCorpus(domainId, tdoc, true),
+            ]);
+            let job = doc?.job || null;
+            if (job && job.status === 'running' && Date.now() - new Date(job.startedAt).getTime() > SESSION_JOB_STALE_MS) {
+                job = { ...job, status: 'failed', error: 'The report job was interrupted (the server restarted). Generate it again.' };
+            }
+            this.response.body = {
+                kind,
+                report: doc?.reportNamed || null,
+                generatedAt: doc?.generatedAt || null,
+                participants: doc?.participants ?? null,
+                concepts: doc?.concepts || [],
+                stats: corpus.light,
+                job,
+            };
+            return;
+        }
         if (dry) {
             const stats = await buildClassStats(domainId, tdoc, true, kind);
             const big = stats.participants.length > CLASS_SINGLE_CALL_MAX;
@@ -5794,6 +6793,27 @@ class AiClassReportHandler extends Handler {
     async post({ domainId }, tid: ObjectId) {
         const { tdoc, kind } = await this.classTdoc(domainId, tid);
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
+        if (kind === 'self-learning') {
+            /*
+             * 📡 A BACKGROUND JOB, never the request: reading every student's
+             * every submission and tutor exchange takes minutes. One job per
+             * session at a time; a second click while it runs just returns
+             * the progress the page is already polling.
+             */
+            const doc = await getClassReport(domainId, String(tid));
+            const running = doc?.job && doc.job.status === 'running' && Date.now() - new Date(doc.job.startedAt).getTime() < SESSION_JOB_STALE_MS;
+            if (running) {
+                this.response.body = { kind, started: false, job: doc!.job };
+                return;
+            }
+            await this.limitRate('ai_class_report', 600, 3, '{{user}}');
+            const startedAt = new Date();
+            const job = { status: 'running' as const, stage: 'collect' as const, done: 0, total: 0, startedAt, by: this.user._id };
+            await setClassReportJob(domainId, String(tid), job);
+            runSessionReportJob(domainId, tdoc, this.user._id); // detached on purpose
+            this.response.body = { kind, started: true, job };
+            return;
+        }
         await this.limitRate('ai_class_report', 600, 2, '{{user}}');
         const stats = await buildClassStats(domainId, tdoc, true, kind);
         if (!stats.light.participants) throw new BadRequestError('No judged submissions yet — nothing to analyze.');

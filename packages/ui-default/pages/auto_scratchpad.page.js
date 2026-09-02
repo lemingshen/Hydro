@@ -178,6 +178,43 @@ const RAIL_STYLE = [
   '.sl-rail__bonus .sl-bonus__wait { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: #f3f0ff; border: 1px dashed #d9cdff; font-size: 12px; color: #5f3dc4; }',
   '.sl-rail__bonus .sl-bonus__wait i { width: 12px; height: 12px; border: 2px solid #d9cdff; border-top-color: #7048e8; border-radius: 50%; animation: slBonusSpin .8s linear infinite; flex: 0 0 auto; }',
   '@keyframes slBonusSpin { to { transform: rotate(360deg); } }',
+  // 🎁 The build card: the bonus task's background job, animated. Head with
+  // a rotating conic ring around the phase icon, a three-step track, a
+  // sweeping progress bar, a rotating stage line and weak-point chips.
+  '.sl-rail__bonus .sl-bjob { position: relative; overflow: hidden; padding: 10px 11px 11px; border-radius: 14px; background: linear-gradient(160deg, #f6f3ff, #fdf7ff 60%, #f3f0ff); border: 1px solid #e2d9ff; box-shadow: 0 10px 24px -14px rgba(112,72,232,.5), inset 0 1px 0 rgba(255,255,255,.7); animation: slBonusPop .45s cubic-bezier(.2,.9,.3,1.2) backwards; }',
+  '.sl-rail__bonus .sl-bjob::before { content: ""; position: absolute; inset: -40% -60%; background: radial-gradient(closest-side, rgba(174,62,201,.14), transparent 70%); animation: slBjobDrift 7s ease-in-out infinite alternate; pointer-events: none; }',
+  '@keyframes slBjobDrift { from { transform: translate(-12%, -8%); } to { transform: translate(14%, 10%); } }',
+  '.sl-rail__bonus .sl-bjob__head { position: relative; display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }',
+  '.sl-rail__bonus .sl-bjob__orb { position: relative; flex: 0 0 auto; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: #fff; box-shadow: 0 4px 12px -6px rgba(112,72,232,.7); }',
+  '.sl-rail__bonus .sl-bjob__orb::before { content: ""; position: absolute; inset: -3px; border-radius: 50%; background: conic-gradient(from 0deg, #7048e8, #ae3ec9, #e64980, #7048e8); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); animation: slBonusSpin 1.6s linear infinite; }',
+  '.sl-rail__bonus .sl-bjob__orb-ico { font-size: 18px; line-height: 1; animation: slBjobBreathe 2.2s ease-in-out infinite; }',
+  '@keyframes slBjobBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }',
+  '.sl-rail__bonus .sl-bjob__titles { min-width: 0; display: flex; flex-direction: column; gap: 2px; }',
+  '.sl-rail__bonus .sl-bjob__titles b { font-size: 12.5px; color: #5f3dc4; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }',
+  '.sl-rail__bonus .sl-bjob__stage { font-size: 11px; color: #7d8aa3; line-height: 1.3; transition: opacity .18s ease, transform .18s ease; }',
+  '.sl-rail__bonus .sl-bjob__stage.is-swap { opacity: 0; transform: translateY(3px); }',
+  '.sl-rail__bonus .sl-bjob__steps { position: relative; list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }',
+  '.sl-rail__bonus .sl-bjob__steps li { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #9aa4b5; padding: 3px 6px; border-radius: 9px; transition: color .25s ease, background .25s ease; }',
+  '.sl-rail__bonus .sl-bjob__steps li.is-active { color: #33415c; background: rgba(255,255,255,.75); font-weight: 600; }',
+  '.sl-rail__bonus .sl-bjob__steps li.is-done { color: #2f9e44; }',
+  '.sl-rail__bonus .sl-bjob__mark { flex: 0 0 auto; width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; background: #eceef3; color: #9aa4b5; }',
+  '.sl-rail__bonus li.is-done .sl-bjob__mark { background: #d3f9d8; color: #2f9e44; }',
+  '.sl-rail__bonus li.is-active .sl-bjob__mark { background: #e5dbff; }',
+  '.sl-rail__bonus .sl-bjob__spin { width: 9px; height: 9px; border: 2px solid #d9cdff; border-top-color: #7048e8; border-radius: 50%; animation: slBonusSpin .8s linear infinite; }',
+  '.sl-rail__bonus .sl-bjob__ico { flex: 0 0 auto; font-size: 12px; filter: grayscale(1); opacity: .6; transition: filter .25s ease, opacity .25s ease; }',
+  '.sl-rail__bonus li.is-active .sl-bjob__ico, .sl-rail__bonus li.is-done .sl-bjob__ico { filter: none; opacity: 1; }',
+  '.sl-rail__bonus .sl-bjob__track { position: relative; height: 5px; border-radius: 999px; background: #e9e3ff; overflow: hidden; }',
+  '.sl-rail__bonus .sl-bjob__track i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #7048e8, #ae3ec9); transition: width .8s cubic-bezier(.2,.8,.2,1); position: relative; overflow: hidden; }',
+  '.sl-rail__bonus .sl-bjob__track i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); transform: translateX(-100%); animation: slBjobSweep 1.6s ease-in-out infinite; }',
+  '@keyframes slBjobSweep { to { transform: translateX(100%); } }',
+  '.sl-rail__bonus .sl-bjob__kps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }',
+  '.sl-rail__bonus .sl-bjob__kps-ico { font-size: 12px; margin-right: 1px; }',
+  '.sl-rail__bonus .sl-bjob__kp { font-size: 10.5px; line-height: 1.3; padding: 2px 8px; border-radius: 999px; background: #fff; border: 1px solid #d9cdff; color: #5f3dc4; animation: slBonusPop .4s cubic-bezier(.2,.9,.3,1.2) backwards; }',
+  '.sl-rail__bonus .sl-bjob__kp:nth-child(2) { animation-delay: .05s; } .sl-rail__bonus .sl-bjob__kp:nth-child(3) { animation-delay: .1s; } .sl-rail__bonus .sl-bjob__kp:nth-child(4) { animation-delay: .15s; } .sl-rail__bonus .sl-bjob__kp:nth-child(5) { animation-delay: .2s; } .sl-rail__bonus .sl-bjob__kp:nth-child(6) { animation-delay: .25s; }',
+  '.sl-rail__bonus .sl-bjob__note { margin-top: 8px; font-size: 11px; line-height: 1.4; color: #5f3dc4; padding: 6px 8px; border-radius: 9px; background: rgba(255,255,255,.7); border: 1px dashed #d9cdff; }',
+  '.sl-rail__bonus .sl-bonus__retry { color: #7048e8; font-weight: 600; text-decoration: none; margin-left: 4px; }',
+  '.sl-rail__bonus .sl-bonus__retry:hover { text-decoration: underline; }',
+  '@media (prefers-reduced-motion: reduce) { .sl-rail__bonus .sl-bjob, .sl-rail__bonus .sl-bjob::before, .sl-rail__bonus .sl-bjob__orb::before, .sl-rail__bonus .sl-bjob__orb-ico, .sl-rail__bonus .sl-bjob__track i::after, .sl-rail__bonus .sl-bjob__kp { animation: none !important; } }',
   '.sl-rail__chip.subj.current { border-style: solid; border-color: #845ef7; box-shadow: 0 0 0 2px rgba(132,94,247,.28), 0 4px 12px -4px rgba(132,94,247,.5); color: #5f3dc4; background: #f3edff; }',
   '.sl-rail__expander { position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 260; width: 26px; height: 62px; border: 1px solid #dfe5ef; border-left: none; border-radius: 0 10px 10px 0; background: linear-gradient(180deg, #ffffff, #f6f8fc); cursor: pointer; color: #7d8aa3; font-size: 15px; box-shadow: 3px 0 12px -4px rgba(15,23,42,.18); transition: color .15s ease, box-shadow .15s ease; }',
   '.sl-rail__expander:hover { color: #1c7ed6; box-shadow: 3px 0 16px -4px rgba(28,126,214,.4); }',
@@ -213,6 +250,22 @@ const RAIL_STYLE = [
   '.pta-dark .sl-rail__chip.bonus-drafting { background: linear-gradient(90deg, #2c2440 0%, #3d3260 50%, #2c2440 100%); background-size: 200% 100%; }',
   '.pta-dark .sl-rail__chip.bonus-failed { background: #2c1e21; border-color: #6e3038; color: #ff8787; }',
   '.pta-dark .sl-rail__bonus .sl-bonus__wait { background: #2c2440; border-color: #4d3f7d; color: #d0bdfb; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob { background: linear-gradient(160deg, #2a2440, #302448 60%, #2c2440); border-color: #4d3f7d; box-shadow: 0 12px 26px -14px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.05); }',
+  '.pta-dark .sl-rail__bonus .sl-bjob::before { background: radial-gradient(closest-side, rgba(174,62,201,.22), transparent 70%); }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__orb { background: #1f2327; box-shadow: 0 4px 14px -6px rgba(0,0,0,.8); }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__titles b { color: #d0bdfb; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__stage { color: #9aa4ad; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__steps li { color: #6f7a86; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__steps li.is-active { color: #e6e9ee; background: rgba(255,255,255,.06); }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__steps li.is-done { color: #69b34c; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__mark { background: #343a42; color: #7f8b97; }',
+  '.pta-dark .sl-rail__bonus li.is-done .sl-bjob__mark { background: #1f3a24; color: #69b34c; }',
+  '.pta-dark .sl-rail__bonus li.is-active .sl-bjob__mark { background: #3d3260; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__spin { border-color: #4d3f7d; border-top-color: #b197fc; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__track { background: #3a3352; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__kp { background: #262b31; border-color: #4d3f7d; color: #d0bdfb; }',
+  '.pta-dark .sl-rail__bonus .sl-bjob__note { background: rgba(255,255,255,.05); border-color: #4d3f7d; color: #d0bdfb; }',
+  '.pta-dark .sl-rail__bonus .sl-bonus__retry { color: #b197fc; }',
   '.pta-dark .sl-rail__chip.subj.current { border-color: #b197fc; background: #2c2440; color: #d0bdfb; box-shadow: 0 0 0 2px rgba(177,151,252,.35); }',
   '.pta-dark .sl-rail__foot { background: linear-gradient(180deg, #22262c, #1e2227); border-top-color: #2e3338; }',
   '.pta-dark .sl-rail__expander { background: linear-gradient(180deg, #23272c, #1e2227); border-color: #2e3338; color: #9aa4ad; }',
@@ -389,20 +442,25 @@ async function getRailGroups() {
       groups.push({
         header: i18n('Bonus'),
         bonus: true,
-        items: uc.slBonuses.map((b, i) => ({
-          pid: b.docId ? String(b.docId) : '',
-          bonusId: b.id,
-          bonusStatus: b.status,
-          cls: ` bonus${b.status === 'drafting' ? ' bonus-drafting' : b.status === 'building' ? ' bonus-building' : b.status === 'failed' ? ' bonus-failed' : ''}`
-            + (b.docId && String(b.docId) === String(uc.slPid) ? ' current' : ''),
-          name: b.title || i18n('Bonus task'),
-          href: b.docId && b.status !== 'failed' ? `${prefix}/self-learning/${uc.slSsid}/p/${b.docId}` : 'javascript:;',
-          label: b.status === 'drafting' ? '…' : b.status === 'failed' ? '⚠' : `🎁${i + 1}`,
-          title: b.status === 'drafting' ? i18n('Designing your bonus task…')
-            : b.status === 'building' ? `${b.title || i18n('Bonus task')} — ${i18n('read and code now; the judge is being prepared')}`
-              : b.status === 'failed' ? `${i18n('Bonus task failed')}: ${b.message || ''}`
-                : `${b.title || i18n('Bonus task')} — ${(b.weakPoints || []).join(', ')}`,
-        })),
+        items: uc.slBonuses.map((b, i) => {
+          // No statement to open yet: diagnosing (the AI reads the work)
+          // and drafting (the statement is being written) look the same.
+          const designing = b.status === 'diagnosing' || b.status === 'drafting';
+          return {
+            pid: b.docId ? String(b.docId) : '',
+            bonusId: b.id,
+            bonusStatus: b.status,
+            cls: ` bonus${designing ? ' bonus-drafting' : b.status === 'building' ? ' bonus-building' : b.status === 'failed' ? ' bonus-failed' : ''}`
+              + (b.docId && String(b.docId) === String(uc.slPid) ? ' current' : ''),
+            name: b.title || i18n('Bonus task'),
+            href: b.docId && b.status !== 'failed' ? `${prefix}/self-learning/${uc.slSsid}/p/${b.docId}` : 'javascript:;',
+            label: designing ? '…' : b.status === 'failed' ? '⚠' : `🎁${i + 1}`,
+            title: designing ? i18n('Designing your bonus task…')
+              : b.status === 'building' ? `${b.title || i18n('Bonus task')} — ${i18n('read and code now; the judge is being prepared')}`
+                : b.status === 'failed' ? `${i18n('Bonus task failed')}: ${b.message || ''}`
+                  : `${b.title || i18n('Bonus task')} — ${(b.weakPoints || []).join(', ')}`,
+          };
+        }),
       });
     }
     return groups;

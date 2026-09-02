@@ -10,7 +10,7 @@ import { i18n, request } from 'vj/utils';
  * a new entry when the task is saved. Keys are the names themselves, so
  * the selection round-trips through a plain comma-separated input.
  */
-type KP = { name: string, description?: string, count?: number, category?: string } | string;
+type KP = { name: string, description?: string, count?: number, rollup?: number, childCount?: number, pathText?: string, category?: string } | string;
 
 const nameOf = (x: KP) => (typeof x === 'string' ? x : x.name);
 
@@ -31,12 +31,18 @@ const KnowledgePointSelectAutoComplete = forwardRef<AutoCompleteHandle<KP>, Auto
       const name = nameOf(item);
       const desc = typeof item === 'string' ? '' : (item.description || '');
       const count = typeof item === 'string' ? 0 : (item.count || 0);
-      const cat = typeof item === 'string' ? '' : (item.category || '');
+      // 🌳 Where the point sits in the catalog tree, and — for a topic —
+      // how many tasks sit beneath it (targeting a topic means "any of
+      // the points under it").
+      const path = typeof item === 'string' ? '' : (item.pathText || item.category || '');
+      const kids = typeof item === 'string' ? 0 : (item.childCount || 0);
+      const rollup = typeof item === 'string' ? 0 : (item.rollup || 0);
       return (
         <div className="problem-select__row">
           <span className="problem-select__name">{name}</span>
-          {cat ? <span className="problem-select__chip">{cat}</span> : null}
-          {count ? <span className="problem-select__chip" title={i18n('Tasks')}>{`\u00d7 ${count}`}</span> : null}
+          {path ? <span className="problem-select__chip" title={i18n('Under')}>{path}</span> : null}
+          {kids ? <span className="problem-select__chip" title={i18n('A topic: covers the points beneath it')}>{`${i18n('topic')} · ${kids}`}</span> : null}
+          {count || rollup ? <span className="problem-select__chip" title={i18n('Tasks')}>{`\u00d7 ${kids ? rollup : count}`}</span> : null}
           {desc ? <span className="problem-select__chip" title={desc}>{desc}</span> : null}
         </div>
       );

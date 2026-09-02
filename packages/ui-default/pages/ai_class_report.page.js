@@ -34,6 +34,28 @@ const STYLE = [
   '.acr__gen { display: block; margin: 6px auto 14px; border: none; border-radius: 999px; padding: 10px 26px; font-size: 14px; color: #fff; cursor: pointer; background: linear-gradient(120deg, #4c6ef5, #845ef7); box-shadow: 0 6px 16px -6px rgba(76,110,245,.6); transition: filter .12s ease, transform .12s var(--pta-ease), box-shadow .12s ease; }',
   '.acr__gen:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 9px 20px -6px rgba(76,110,245,.65); }',
   '.acr__wait { display: flex; align-items: center; gap: 14px; padding: 22px 14px; }',
+  // 📊 the trigger: a real button beside "Evaluate all students now", not a bare label
+  '.acr-btn { display: inline-flex; align-items: center; gap: 6px; border: none; border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 600; color: #fff; cursor: pointer; background: linear-gradient(120deg, #7048e8, #ae3ec9); box-shadow: 0 6px 14px -7px rgba(112,72,232,.8); transition: transform .14s var(--pta-ease, ease), box-shadow .14s ease, filter .14s ease; white-space: nowrap; }',
+  '.acr-btn:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 9px 18px -8px rgba(112,72,232,.9); }',
+  '.acr-btn:disabled { opacity: .6; cursor: default; transform: none; }',
+  // 📡 the session job's progress: stages, a real bar (batches), elapsed time
+  '.acr__job { display: flex; gap: 16px; align-items: flex-start; padding: 18px 16px; border-radius: 14px; background: linear-gradient(160deg, rgba(112,72,232,.08), transparent 70%); border: 1px solid rgba(112,72,232,.18); position: relative; overflow: hidden; }',
+  '.acr__orb { position: relative; flex: 0 0 auto; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--pta-card, #fff); box-shadow: 0 4px 14px -6px rgba(112,72,232,.7); }',
+  '.acr__orb::before { content: ""; position: absolute; inset: -3px; border-radius: 50%; background: conic-gradient(from 0deg, #7048e8, #ae3ec9, #e64980, #7048e8); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); animation: ptaSpin 1.5s linear infinite; }',
+  '.acr__orb span { font-size: 21px; line-height: 1; animation: acrBreathe 2.2s ease-in-out infinite; }',
+  '@keyframes acrBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }',
+  '.acr__job-body { flex: 1 1 auto; min-width: 0; }',
+  '.acr__job-title { font-size: 14px; font-weight: 700; color: var(--pta-violet-text, #5f3dc4); }',
+  '.acr__job-stage { font-size: 12.5px; color: var(--pta-ink-soft, #5b6b85); margin-top: 3px; }',
+  '.acr__job-track { position: relative; height: 6px; border-radius: 999px; background: rgba(112,72,232,.14); overflow: hidden; margin-top: 10px; }',
+  '.acr__job-track i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #7048e8, #ae3ec9); transition: width .6s cubic-bezier(.2,.8,.2,1); position: relative; overflow: hidden; }',
+  '.acr__job-track i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.5), transparent); transform: translateX(-100%); animation: acrSweep 1.6s ease-in-out infinite; }',
+  '@keyframes acrSweep { to { transform: translateX(100%); } }',
+  '.acr__job-steps { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12px; color: var(--pta-ink-faint, #98a2ac); }',
+  '.acr__job-steps span.is-done { color: var(--pta-ok-text, #237032); }',
+  '.acr__job-steps span.is-active { color: var(--pta-ink, #2b3a55); font-weight: 600; }',
+  '.acr__job-meta { margin-top: 8px; font-size: 12px; color: var(--pta-ink-faint, #98a2ac); }',
+  '@media (prefers-reduced-motion: reduce) { .acr__orb::before, .acr__orb span, .acr__job-track i::after { animation: none !important; } }',
   '.acr__spinner { width: 28px; height: 28px; border: 3px solid #dbe7f8; border-top-color: #4c6ef5; border-right-color: #845ef7; border-radius: 50%; animation: ptaSpin .8s linear infinite; flex: 0 0 auto; }',
   '.pta-dark .acr__spinner { border-color: #3a4a63; border-top-color: #91a7ff; border-right-color: #845ef7; }',
   '.acr__report { line-height: 1.65; animation: ptaFadeIn .3s ease both; }',
@@ -358,6 +380,12 @@ function statsStrip(stats) {
   for (const p of stats.problems || []) {
     html += `<span class="acr__stat" title="${esc(p.title || '')}">${esc(p.label)}: <b>${esc(String(p.solved))}</b>/${esc(String(p.attempted))} ${esc(i18n('solved'))}</span>`;
   }
+  if (stats.engagement) {
+    const en = stats.engagement;
+    html += `<span class="acr__stat" title="${esc(i18n('Tutor questions / student replies'))}">🤖 ${esc(String(en.questions))} / ${esc(String(en.replies))}</span>`;
+    if (en.replies) html += `<span class="acr__stat" title="${esc(i18n('\u201CI don\u2019t know\u201D replies'))}">🤷 ${esc(String(Math.round((en.idk / en.replies) * 100)))}%</span>`;
+    if (stats.results && stats.results.evaluated) html += `<span class="acr__stat" title="${esc(i18n('Mean rubric total'))}">Σ ${esc(String(stats.results.meanTotal))}/100</span>`;
+  }
   if (stats.sampled) html += `<span class="acr__stat">⚠ ${esc(i18n('sampled'))}</span>`;
   html += '</div>';
   return html;
@@ -380,9 +408,15 @@ function openModal() {
     + '</div>').appendTo($mask);
   const $body = $modal.find('.acr__body');
   let closed = false;
+  let pollTimer = null;
+  const stopPolling = () => {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  };
   const close = () => {
     if (closed) return;
     closed = true;
+    stopPolling();
     $(document).off('keydown.acr');
     $mask.addClass('acr-mask--closing');
     setTimeout(() => $mask.remove(), 190);
@@ -395,7 +429,75 @@ function openModal() {
   let stats = null;
   let concepts = [];
   let currentMd = '';
+  let kind = 'contest';
 
+  /* 📡 The self-learning report is a background job the page polls. */
+  // A failed job is old news once a later report exists.
+  const newerReportThan = (generatedAt, finishedAt) => !!(generatedAt && finishedAt && new Date(generatedAt) > new Date(finishedAt));
+  const JOB_STEPS = [
+    ['collect', '📚', i18n('Collecting every submission and tutor dialogue')],
+    ['map', '🔍', i18n('Reading each student\u2019s work')],
+    ['reduce', '✍️', i18n('Writing the report')],
+    ['finalize', '🏷️', i18n('Filling in names')],
+  ];
+  function jobHtml(job) {
+    const n = (stats && stats.participants) || 0;
+    const idx = Math.max(0, JOB_STEPS.findIndex(([k]) => k === job.stage));
+    const frac = job.stage === 'collect' ? 0.05 : job.stage === 'map' ? 0.1 + 0.6 * (job.total ? job.done / job.total : 0) : job.stage === 'reduce' ? 0.78 : job.stage === 'finalize' ? 0.94 : 1;
+    const elapsed = job.startedAt ? Math.max(0, Math.round((Date.now() - new Date(job.startedAt).getTime()) / 1000)) : 0;
+    const mm = Math.floor(elapsed / 60);
+    const ss = String(elapsed % 60).padStart(2, '0');
+    const stageText = job.stage === 'map' && job.total
+      ? `${JOB_STEPS[1][2]} \u2014 ${i18n('batch {0} of {1}').replace('{0}', Math.min(job.done + 1, job.total)).replace('{1}', job.total)}`
+      : (JOB_STEPS[idx] || JOB_STEPS[0])[2];
+    // 📏 Coverage as it grows: how many students the model has read so far (and how many came from the cache).
+    const total = job.students || n;
+    const coverage = job.stage === 'map' || job.stage === 'reduce' || job.stage === 'finalize'
+      ? ` · ${i18n('students analyzed')} ${job.analyzed || 0}/${total}${job.cached ? ` (${job.cached} ${i18n('from cache')})` : ''}` : '';
+    return statsStrip(stats)
+      + '<div class="acr__job"><div class="acr__orb"><span>' + (JOB_STEPS[idx] || JOB_STEPS[0])[1] + '</span></div>'
+      + '<div class="acr__job-body">'
+      + `<div class="acr__job-title">🤖 ${esc(i18n('Generating the session report'))} (${total} ${esc(i18n('students'))})</div>`
+      + `<div class="acr__job-stage">${esc(stageText)}\u2026${esc(coverage)}</div>`
+      + `<div class="acr__job-track"><i style="width:${Math.round(frac * 100)}%"></i></div>`
+      + `<div class="acr__job-steps">${JOB_STEPS.map(([, ico, label], i) => `<span class="${i < idx ? 'is-done' : i === idx ? 'is-active' : ''}">${i < idx ? '✓' : ico} ${esc(label)}</span>`).join('')}</div>`
+      + `<div class="acr__job-meta">${esc(i18n('Every submission and every tutor exchange goes through the AI in batches, then one report is written. This takes a few minutes; you can close this window — the job keeps running and the report will be here when you return.'))} · ${mm}:${ss}</div>`
+      + '</div></div>';
+  }
+  function showJob(job) {
+    $body.html(jobHtml(job));
+    $modal.find('.acr__regen, .acr__dl').hide();
+  }
+  function pollJob() {
+    stopPolling();
+    pollTimer = setTimeout(async () => {
+      if (closed) return;
+      try {
+        const res = await request.get(reportUrl());
+        if (closed) return;
+        stats = (res && res.stats) || stats;
+        const job = res && res.job;
+        lastJob = job || lastJob;
+        if (job && job.status === 'running') {
+          showJob(job);
+          pollJob();
+        } else if (job && job.status === 'failed' && !newerReportThan(res.generatedAt, job.finishedAt)) {
+          Notification.error(job.error || i18n('The report could not be generated.'));
+          concepts = (res && res.concepts) || [];
+          if (res.report) showReport(res.report, res.generatedAt);
+          else showGeneratePrompt();
+        } else {
+          concepts = (res && res.concepts) || [];
+          showReport(res.report, res.generatedAt);
+          Notification.success(i18n('Class report generated.'));
+        }
+      } catch (e) {
+        if (!closed) pollJob(); // transient: keep watching
+      }
+    }, 3000);
+  }
+
+  let lastJob = null;
   function showReport(reportMd, generatedAt) {
     currentMd = String(reportMd || '');
     const html = aiMarkdown.render(currentMd);
@@ -404,7 +506,9 @@ function openModal() {
     import('vj/components/highlighter/prismjs')
       .then(({ default: prism }) => prism.highlightBlocks($body))
       .catch(() => { /* highlighting is optional */ });
-    $modal.find('.acr__ts').text(generatedAt ? `${i18n('Saved')}: ${fmtTs(generatedAt)}` : '');
+    const cov = lastJob && lastJob.status === 'done' && lastJob.students
+      ? ` · ${i18n('{0}/{1} students analyzed individually').replace('{0}', lastJob.analyzed || 0).replace('{1}', lastJob.students)}${lastJob.unanalyzed ? ` (${lastJob.unanalyzed} ${i18n('not analyzed')})` : ''}` : '';
+    $modal.find('.acr__ts').text(generatedAt ? `${i18n('Saved')}: ${fmtTs(generatedAt)}${cov}` : '');
     $modal.find('.acr__regen, .acr__dl').show();
   }
 
@@ -422,6 +526,24 @@ function openModal() {
   async function generate() {
     const n = (stats && stats.participants) || 0;
     const m = (stats && (stats.problems || []).length) || 0;
+    if (kind === 'self-learning') {
+      // 📡 Start (or re-join) the background job, then watch it.
+      $modal.find('.acr__regen, .acr__dl').prop('disabled', true);
+      try {
+        const res = await request.post(reportUrl(), {});
+        if (closed) return;
+        showJob(res.job || { status: 'running', stage: 'collect', done: 0, total: 0, startedAt: new Date() });
+        if (!res.started) Notification.info(i18n('A report is already being generated for this session — showing its progress.'));
+        pollJob();
+      } catch (e) {
+        if (closed) return;
+        Notification.error(e.message);
+        showGeneratePrompt();
+      } finally {
+        $modal.find('.acr__regen, .acr__dl').prop('disabled', false);
+      }
+      return;
+    }
     $modal.find('.acr__regen, .acr__dl').prop('disabled', true);
     $body.html(statsStrip(stats)
       + '<div class="acr__wait"><div class="acr__spinner"></div>'
@@ -460,7 +582,12 @@ function openModal() {
     if (closed) return;
     stats = (res && res.stats) || null;
     concepts = (res && res.concepts) || [];
-    if (res && res.report) showReport(res.report, res.generatedAt);
+    kind = (res && res.kind) || kind;
+    lastJob = (res && res.job) || null;
+    if (res && res.job && res.job.status === 'running') {
+      showJob(res.job);
+      pollJob();
+    } else if (res && res.report) showReport(res.report, res.generatedAt);
     else showGeneratePrompt();
   }).catch((e) => {
     if (closed) return;

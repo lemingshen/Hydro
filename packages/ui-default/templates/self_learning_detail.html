@@ -166,6 +166,36 @@
 .slp-score { flex: 0 0 auto; font-size: 11.5px; font-weight: bold; border-radius: 999px; padding: 1px 10px; background: var(--pta-ok-soft); border: 1px solid var(--pta-ok-line); color: var(--pta-ok-text); }
 .slp-score--late { background: var(--pta-gold-soft); border-color: var(--pta-gold-line); color: var(--pta-gold-text); }
 .slp-score s { opacity: .65; font-weight: normal; margin-left: 3px; }
+  /* 🎁 teacher board: every student's bonus task — same table language as
+     the score board above, so the two panels read as one surface. */
+  .sldb__note { margin: 0 0 10px; padding: 8px 12px; border-radius: 10px; background: var(--pta-card-2); border: 1px solid var(--pta-line); font-size: 12.5px; color: var(--pta-ink-soft); }
+  .sldb__note--off { background: var(--pta-warn-soft); border-color: var(--pta-gold-line); color: var(--pta-warn-text); }
+  .sldb__counts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sldb__count { font-size: 11.5px; border-radius: 999px; padding: 2px 10px; background: var(--pta-card-3); border: 1px solid var(--pta-line); color: var(--pta-ink-soft); }
+  .sldb__count--ok { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+  .sldb__count--busy { background: var(--pta-warn-soft); border-color: var(--pta-line); color: var(--pta-warn-text); }
+  .sldb__count--bad { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); color: var(--pta-bad-text); }
+  .sldb__wrap { overflow: auto; max-height: 460px; border: 1px solid var(--pta-line); border-radius: 10px; background: var(--pta-card); }
+  .sldb__table { display: table; width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; color: var(--pta-ink); }
+  .sldb__table tr { display: table-row; }
+  .sldb__table th, .sldb__table td { display: table-cell; white-space: nowrap; padding: 8px 14px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--pta-line-soft); }
+  .sldb__table thead th { position: sticky; top: 0; z-index: 2; background: var(--pta-card-2); color: var(--pta-ink-faint); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; border-bottom: 2px solid var(--pta-line); }
+  .sldb__table tbody tr:nth-child(even) td { background: var(--pta-card-2); }
+  .sldb__table tbody tr:hover td { background: var(--pta-violet-soft); }
+  .sldb__num { text-align: center !important; }
+  .sldb__name { color: var(--pta-ink-faint); margin-left: 6px; }
+  /* The generated statement can be long; this is the one column that wraps. */
+  .sldb__task { white-space: normal !important; max-width: 320px; }
+  .sldb__pid { font-family: var(--code-font-family); font-size: 11.5px; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 7px; padding: 1px 7px; margin-right: 6px; }
+  .sldb__kp { display: inline-flex; flex-wrap: wrap; gap: 4px; white-space: normal; max-width: 280px; }
+  .sldb__st { font-size: 11.5px; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+  .sldb__st--ready { background: var(--pta-ok-soft); color: var(--pta-ok-text); }
+  .sldb__st--failed { background: var(--pta-fail-soft, #fff5f5); color: var(--pta-fail); }
+  .sldb__st--busy { background: var(--pta-warn-soft); color: var(--pta-warn-text); }
+  .sldb__set { font-size: 11.5px; text-decoration: none; }
+  .sldb__set--no { color: var(--pta-ink-faint); }
+  .sldb__none { color: var(--pta-ink-faint); }
+  .sldb__empty { color: var(--pta-ink-soft); font-size: 13px; margin: 0; }
 </style>
 <div class="row">
   <div class="medium-9 columns">
@@ -489,12 +519,117 @@
       </div>
     </div>
     {% endif %}
+    {#
+      🎁 TEACHER BOARD — every student's bonus task, right after the
+      session's own task list. A bonus task is generated per student from
+      their own work, so it appears in none of the surfaces above: it is
+      not one of sdoc.pids, and the score board carries only a one-word
+      status, and only once an evaluation has been run. This is the live
+      picture, and it needs no evaluation.
+    #}
+    {% if staffView %}
+    <div class="section sldb">
+      <div class="section__header">
+        <h1 class="section__title">🎁 {{ _('Bonus tasks') }}</h1>
+        {% if bonusStats and bonusStats.total %}
+        <div class="section__tools sldb__counts">
+          <span class="sldb__count">{{ _('{0} student(s)').replace('{0}', bonusStats.total) }}</span>
+          {% if bonusStats.accepted %}<span class="sldb__count sldb__count--ok">✓ {{ _('{0} solved').replace('{0}', bonusStats.accepted) }}</span>{% endif %}
+          {% if bonusStats.building %}<span class="sldb__count sldb__count--busy">⏳ {{ _('{0} building').replace('{0}', bonusStats.building) }}</span>{% endif %}
+          {% if bonusStats.failed %}<span class="sldb__count sldb__count--bad">⚠ {{ _('{0} failed').replace('{0}', bonusStats.failed) }}</span>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="section__body">
+        {% if not bonusAllowed %}
+        <div class="sldb__note sldb__note--off">
+          🚫 {{ _('Bonus is switched off for this session, so students cannot request a bonus task. Tick “Bonus” on the edit page to offer one.') }}
+          {% if bonusRows and bonusRows.length %} {{ _('The tasks below were requested while it was on; they stay open to the students who own them.') }}{% endif %}
+        </div>
+        {% endif %}
+        {% if bonusRows and bonusRows.length %}
+        {% if bonusAllowed %}
+        <div class="sldb__note">
+          🎁 {{ _('A student who has attempted every task of this session can request ONE bonus task, designed by the AI from their own attempts and tutor exchanges to drill the weak points it found. There is no tutor on a bonus task: the student submits, sees the verdict and retries.') }}
+          {% if bonusStats %} 📚 {{ _('{0} of {1} have been added to this domain’s problem set — a bonus task joins it as soon as its judge is verified, so every student and teacher can use it.').replace('{0}', bonusStats.inProblemSet).replace('{1}', bonusStats.total) }}{% endif %}
+        </div>
+        {% endif %}
+        <div class="sldb__wrap">
+        <table class="sldb__table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>{{ _('Student') }}</th>
+              <th>{{ _('Bonus task') }}</th>
+              <th>{{ _('Targeted weak points') }}</th>
+              <th>{{ _('Status') }}</th>
+              <th>{{ _('Problem Set') }}</th>
+              <th class="sldb__num">{{ _('Attempts') }}</th>
+              <th class="sldb__num">{{ _('Best') }}</th>
+              <th class="sldb__num">{{ _('Solved') }}</th>
+              <th>{{ _('Last attempt') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+          {%- for b in bonusRows -%}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td><a href="{{ url('user_detail', uid=b.uid) }}">{{ b.uname }}</a>{% if b.name %}<span class="sldb__name">{{ b.name }}</span>{% endif %}</td>
+              <td class="sldb__task">
+                {#- The teacher owns the generated problem, so problem_detail
+                    opens it even while it is still hidden. The student's own
+                    solve URL is keyed to THEIR progress document and would
+                    404 here, so it is deliberately not linked. -#}
+                {% if b.docId and b.problemPid %}
+                  <span class="sldb__pid">{{ b.problemPid }}</span><a href="{{ url('problem_detail', pid=b.problemPid) }}">{{ b.title or b.problemTitle or _('Bonus task') }}</a>
+                {% elif b.docId %}
+                  <span class="sldb__none">{{ b.title or _('Bonus task') }} ({{ _('Problem unavailable') }})</span>
+                {% else %}
+                  <span class="sldb__none">{{ b.title or _('Bonus task') }}</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if b.weakPoints and b.weakPoints.length %}
+                <span class="sldb__kp">{%- for w in b.weakPoints -%}<span class="slp-kind slp-kind--p">{{ w }}</span>{%- endfor -%}</span>
+                {% else %}<span class="sldb__none">—</span>{% endif %}
+              </td>
+              <td>
+                {% if b.status == 'ready' %}<span class="sldb__st sldb__st--ready" title="{{ _('Verified — the student can submit to it') }}">✓ {{ _('Ready') }}</span>
+                {% elif b.status == 'failed' %}<span class="sldb__st sldb__st--failed" title="{{ b.message }}">⚠ {{ _('Failed') }}</span>
+                {% else %}<span class="sldb__st sldb__st--busy" title="{{ b.message }}">⏳ {{ _('Preparing…') }}</span>{% endif %}
+              </td>
+              <td>
+                {#- A state badge, not a link: the task itself is one click
+                    away in the column before this one, and a problem-set
+                    search link would depend on whichever search module the
+                    deployment runs having indexed a just-published task. -#}
+                {% if b.inProblemSet %}<span class="sldb__set sldb__st sldb__st--ready" title="{{ _('This bonus task was added to the domain’s problem set — every student and teacher can use it.') }}">📚 {{ _('Added') }}</span>
+                {% elif b.status == 'ready' %}<span class="sldb__set sldb__set--no" title="{{ _('Verified but still hidden — reload this page to publish it, or check the AI Studio log.') }}">— {{ _('Hidden') }}</span>
+                {% else %}<span class="sldb__set sldb__set--no" title="{{ _('A bonus task joins the problem set once its judge is verified.') }}">— {{ _('Not yet') }}</span>{% endif %}
+              </td>
+              <td class="sldb__num">{{ b.attempts }}</td>
+              <td class="sldb__num">{% if b.attempts %}{{ b.best }}{% else %}—{% endif %}</td>
+              <td class="sldb__num">{% if b.accepted %}✓{% elif b.attempts %}·{% else %}—{% endif %}</td>
+              <td>{% if b.lastAt %}{{ datetimeSpan(b.lastAt)|safe }}{% else %}<span class="sldb__none">—</span>{% endif %}</td>
+            </tr>
+          {%- endfor -%}
+          </tbody>
+        </table>
+        </div>
+        {% elif bonusAllowed %}
+        <p class="sldb__empty">🎁 {{ _('No student has requested a bonus task in this session yet. Once a student has attempted every task, they can ask for one from the side panel of any task — it is designed by the AI from their own attempts and tutor exchanges, and joins this domain’s problem set once its judge is verified.') }}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
   </div>
   <div class="medium-3 columns">
     <div class="section side">
       <div class="section__body sld-meta">
         <div class="sld-chip">👤 <span>{{ _('Owner') }}: <a href="{{ url('user_detail', uid=sdoc.owner) }}">{{ udict[sdoc.owner].uname }}</a></span></div>
         <div class="sld-chip">🕒 <span>{{ _('Created') }}: {{ datetimeSpan(sdoc._id)|safe }}</span></div>
+        {#- 🌐 the session-wide submission languages, for students and staff alike -#}
+        <div class="sld-chip" title="{{ _('Every programming task in this session — including bonus tasks — can only be submitted in these languages.') if (sdoc.langs and sdoc.langs.length) else _('Every judge language is allowed in this session.') }}">🌐 <span>{{ _('Languages') }}: {% if sdoc.langs and sdoc.langs.length %}{% for l in sdoc.langs %}{{ model.setting.langs[l].display if model.setting.langs[l] else l }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ _('any') }}{% endif %}</span></div>
         {% if canEdit %}
         <a href="{{ url('self_learning_edit', ssid=sdoc.docId) }}" class="expanded rounded button">✏️ {{ _('Edit') }}</a>
         {% endif %}
