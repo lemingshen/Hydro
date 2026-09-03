@@ -69,7 +69,9 @@
     {% endif %}
       </li>
     {% else %}
-      <li class="menu__item"><a class="menu__link" href="{{ url('contest_problemlist', tid=tdoc.docId) }}">
+      {#- PTA: students go straight to the one-page paper; managers keep the tabular list. -#}
+      {%- set _listRoute = 'contest_problemlist' if (handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_CONTEST) or tdoc.rule == 'homework') else 'contest_paper' -%}
+      <li class="menu__item"><a class="menu__link" href="{{ url(_listRoute, tid=tdoc.docId) }}">
         <span class="icon icon-unordered_list"></span> {{ _('Problem List') }}
       </a></li>
       {% if page_name == 'contest_detail' and tsdoc.attend and model.contest.isOngoing(tdoc, tsdoc) and tdoc.rule !== 'homework' %}
@@ -142,7 +144,6 @@
           ({{ _('Attended') }})
         {% endif %}
       </dd>
-      <dt>{{ _('Rule') }}</dt><dd>{{ _(model.contest.RULES[tdoc.rule].TEXT) }}</dd>
       <dt>{{ _('Problem') }}</dt><dd>{{ tdoc.pids.length }}</dd>
       {#- 🌐 the test's allowed submission languages -#}
       <dt>{{ _('Languages') }}</dt><dd title="{{ _('Every programming problem here can only be submitted in these languages.') if (tdoc.langs and tdoc.langs.length) else _('Every judge language is allowed.') }}">{% if tdoc.langs and tdoc.langs.length %}{% for l in tdoc.langs %}{{ model.setting.langs[l].display if model.setting.langs[l] else l }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ _('any') }}{% endif %}</dd>

@@ -138,6 +138,14 @@ const RAIL_STYLE = [
   '.sl-rail__body { flex: 1 1 auto; overflow-y: auto; padding-bottom: 10px; scrollbar-width: thin; }',
   '.sl-rail__cat { padding: 14px 12px 0; font-size: 11px; font-weight: bold; color: #93a0b5; letter-spacing: .08em; text-transform: uppercase; }',
   '.sl-rail__grid { padding: 8px 12px 2px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; align-content: start; }',
+  '.sl-rail__grid--pts { row-gap: 24px; padding-bottom: 18px; }',
+  '.sl-rail__chip.submitted { background: #e7f2fd; border-color: #a5d0f7; color: #1864ab; }',
+  '.pta-dark .sl-rail__chip.submitted { background: #1e2b3c; border-color: #2b74b8; color: #8fc6ff; }',
+  '.sl-rail__chip.has-pts { position: relative; }',
+  '.sl-rail__chip.has-pts::after { content: attr(data-pts); position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%); white-space: nowrap; font-size: 10px; font-weight: 600; letter-spacing: 0; color: #7d8aa3; text-transform: none; }',
+  '.pta-dark .sl-rail__chip.has-pts::after { color: #8b97a3; }',
+  '.sl-rail__timer:empty { display: none; }',
+  '.sl-rail__timer { padding: 10px 12px 0; display: flex; justify-content: center; }',
   '.sl-rail__chip { display: flex; align-items: center; justify-content: center; height: 36px; border: 1px solid #dfe5ef; border-radius: 10px; color: #5b6b85; text-decoration: none; background: #fff; font-size: 13px; font-weight: 500; transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease, color .14s ease, background .14s ease; }',
   '.sl-rail__chip:hover { border-color: #74b3f5; color: #1c7ed6; transform: translateY(-1px); box-shadow: 0 4px 10px -4px rgba(28,126,214,.35); }',
   '.sl-rail__chip.quiz { border-style: dashed; border-color: #9be2cd; color: #0ca678; background: #f2fbf8; }',
@@ -310,6 +318,39 @@ function fetchActivityKinds() {
 }
 
 /** Contest/homework chip groups: kind-grouped when kinds are known, flat otherwise. */
+/**
+ * Test / homework rail sections, shared by the paper page and the task pages:
+ * true/false, single/multiple choice, fill-in-the-blank, then programming
+ * (and subjective). Objective chips carry the paper's running number
+ * (item.index); programming chips number themselves 1..n and show their
+ * points underneath. Items without a group (older backends) fall back to
+ * their kind.
+ */
+const RAIL_SECTIONS = [
+  ['tf', 'True / False'], ['choice', 'Single / Multiple Choice'], ['blank', 'Fill in the Blank'],
+  ['objective', 'Objectives'], ['subjective', 'Subjective Tasks'], ['programming', 'Programming'],
+];
+
+function groupRailItems(items) {
+  const bucket = Object.fromEntries(RAIL_SECTIONS.map(([k]) => [k, []]));
+  for (const it of items) {
+    const group = bucket[it.group] ? it.group : (it.kind || 'programming');
+    bucket[group].push(it);
+  }
+  const groups = [];
+  for (const [key, header] of RAIL_SECTIONS) if (bucket[key].length) groups.push({ key, header: i18n(header), items: bucket[key] });
+  for (const g of groups) {
+    g.items.forEach((it, i) => {
+      const n = it.index || (i + 1);
+      it.label = it.accepted ? '✓' : String(n);
+      it.title = `${n}. ${it.name}${typeof it.points === 'number' ? ` — ${it.points} ${i18n('pts')}` : ''}`;
+      // Points are visible on programming chips (objective points sit on the paper).
+      if (g.key === 'programming' && typeof it.points === 'number') it.pts = it.points;
+    });
+  }
+  return groups;
+}
+
 function buildTdocGroups(kinds) {
   const uc = window.UiContext || {};
   const prefix = window.location.pathname.split('/p/')[0];
@@ -318,33 +359,24 @@ function buildTdocGroups(kinds) {
   if (kinds) {
     const byPid = {};
     for (const k of kinds) byPid[String(k.pid)] = k;
-    const quizzes = [];
-    const subj = [];
-    const programming = [];
+    const items = [];
     for (const pid of pids) {
       const info = byPid[String(pid)] || {};
       const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
       const st = info.status || 0;
-      const item = {
+      items.push({
         pid: String(pid),
+        kind: kind3,
+        group: info.group,
+        index: info.index,
+        points: info.points,
         accepted: st === 1,
         cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(pid),
         href: `${prefix}/p/${pid}?tid=${uc.tdoc.docId}`,
-      };
-      (kind3 === 'programming' ? programming : (kind3 === 'subjective' ? subj : quizzes)).push(item);
-    }
-    const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
-    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
-    if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
-    for (const g of groups) {
-      g.items.forEach((it, i) => {
-        it.label = it.accepted ? '✓' : String(i + 1);
-        it.title = `${i + 1}. ${it.name}`;
       });
     }
-    return groups;
+    return groupRailItems(items);
   }
   return [{
     header: null,
@@ -375,32 +407,29 @@ async function getRailGroups() {
    * paper's scrollspy rather than set here.
    */
   if (uc.paperRail && Array.isArray(uc.paperRail.items) && uc.paperRail.items.length) {
-    const quizzes = [];
-    const subj = [];
-    const programming = [];
-    for (const p of uc.paperRail.items) {
+    /*
+     * Test paper rail: one section per objective question type — true/false,
+     * single/multiple choice, fill-in-the-blank — then programming (and
+     * subjective, if any). Objective chips carry the paper's running number
+     * (item.index) so the rail and the question badges agree; programming
+     * chips number themselves 1..n.
+     */
+    return groupRailItems(uc.paperRail.items.map((p) => {
       const kindCls = p.kind === 'objective' ? ' quiz' : (p.kind === 'subjective' ? ' subj' : '');
       const st = p.status || 0;
-      const item = {
+      const handedIn = !st && p.submitted ? ' submitted' : '';
+      return {
         pid: String(p.pid),
+        kind: p.kind,
+        group: p.group,
+        index: p.index,
+        points: p.points,
         accepted: st === 1,
-        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${kindCls}`,
+        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${handedIn}${kindCls}`,
         name: p.title || String(p.pid),
         href: p.href,
       };
-      (p.kind === 'programming' ? programming : (p.kind === 'subjective' ? subj : quizzes)).push(item);
-    }
-    const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
-    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
-    if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
-    for (const g of groups) {
-      g.items.forEach((it, i) => {
-        it.label = it.accepted ? '✓' : String(i + 1);
-        it.title = `${i + 1}. ${it.name}`;
-      });
-    }
-    return groups;
+    }));
   }
   if (Array.isArray(uc.slProblems) && uc.slProblems.length) {
     const prefix = window.location.pathname.split('/self-learning/')[0];
@@ -592,6 +621,17 @@ async function injectRail(mode) {
     railBuilding = false;
   }
   if (document.getElementById('sl-rail')) return; // a concurrent build won
+  // The current task's points, next to its statement title (test pages).
+  try {
+    const uc = window.UiContext || {};
+    const current = uc.pdoc && String(uc.pdoc.docId);
+    let pts;
+    for (const g of groups || []) for (const it of g.items) if (String(it.pid) === current && typeof it.points === 'number') pts = it.points;
+    if (typeof pts === 'number' && !document.querySelector('.sl-pts-badge')) {
+      const $title = $('.problem-content .section__title, .section__header .section__title').first();
+      if ($title.length) $title.append(`<span class="sl-pts-badge" title="${esc(i18n('Points of this task'))}">${esc(`${pts} ${i18n('pts')}`)}</span>`);
+    }
+  } catch (e) { /* decoration only */ }
   if (!groups) {
     const uc = window.UiContext || {};
     console.info('[pta-ui] problem rail skipped:', {
@@ -615,12 +655,14 @@ async function injectRail(mode) {
       + `<div class="sl-rail__ptext" data-total="${tracked}">${solved} / ${tracked} ${esc(i18n('solved'))}</div></div>`
     : '';
   const body = groups.map((g) => {
-    const chips = g.items.map((it) => `<a class="sl-rail__chip${it.cls}"${it.pid ? ` data-pid="${esc(it.pid)}"` : ''}${it.bonusId ? ` data-bonus="${esc(it.bonusId)}" data-bonus-status="${esc(it.bonusStatus || '')}"` : ''} href="${it.href}" title="${esc(it.title)}">${esc(it.label)}</a>`).join('');
-    return `${g.header ? `<div class="sl-rail__cat">${esc(g.header)}</div>` : ''}<div class="sl-rail__grid">${chips}</div>`;
+    const chips = g.items.map((it) => `<a class="sl-rail__chip${it.cls}${typeof it.pts === 'number' ? ' has-pts' : ''}"${it.pid ? ` data-pid="${esc(it.pid)}"` : ''}${typeof it.pts === 'number' ? ` data-pts="${esc(`${it.pts} ${i18n('pts')}`)}"` : ''}${it.bonusId ? ` data-bonus="${esc(it.bonusId)}" data-bonus-status="${esc(it.bonusStatus || '')}"` : ''} href="${it.href}" title="${esc(it.title)}">${esc(it.label)}</a>`).join('');
+    const withPts = g.items.some((it) => typeof it.pts === 'number');
+    return `${g.header ? `<div class="sl-rail__cat">${esc(g.header)}</div>` : ''}<div class="sl-rail__grid${withPts ? ' sl-rail__grid--pts' : ''}">${chips}</div>`;
   }).join('');
   $(`<div id="sl-rail" class="sl-rail" style="top:${navTop()}px">`
     + `<div class="sl-rail__head"><span>${esc(i18n('Problems'))}</span>`
     + `<button id="sl-rail-toggle" type="button" title="${esc(i18n('Collapse'))}">⟨</button></div>`
+    + '<div class="sl-rail__timer" id="sl-rail-timer"></div>'
     + progressHtml
     + ((window.UiContext && UiContext.slGate) ? '<div id="sl-gate" class="sl-rail__gate"></div>' : '')
     + `<div class="sl-rail__body">${body}</div>`
@@ -656,10 +698,18 @@ async function injectRail(mode) {
  * red outline after a failed try. Exposed on window so the self-learning
  * solve page (a separate bundle) can drive it too.
  */
-export function markRailStatus(pid, accepted) {
+export function markRailStatus(pid, accepted, submitted = false) {
   const key = (window.CSS && CSS.escape) ? CSS.escape(String(pid)) : String(pid);
   const chip = document.querySelector(`#sl-rail .sl-rail__chip[data-pid="${key}"]`);
   if (!chip) return;
+  if (submitted && !accepted) {
+    // An objective answer whose verdict is withheld: "handed in", not "wrong".
+    if (!chip.classList.contains('ac')) {
+      chip.classList.remove('tried');
+      chip.classList.add('submitted');
+    }
+    return;
+  }
   if (accepted) {
     chip.classList.remove('tried');
     if (!chip.classList.contains('ac')) {

@@ -3,8 +3,11 @@
 <div class="row">
   <div class="medium-9 columns">
     <div class="section">
-      <div class="section__body">
-        <form method="post">
+      <form method="post">
+        <div class="section__header">
+          <h2 class="section__title">{{ _('Basic Info') }}</h2>
+        </div>
+        <div class="section__body">
           {{ form.form_text({
               columns:12,
               label:'Title',
@@ -78,25 +81,57 @@
                 value:tdoc.maintainer|default('')
             }) }}
           </div>
-          <div class="row"><div class="columns">
-            <label>
-              {{ _('Extension Score Penalty') }}
-              <textarea name="penaltyRules" class="monospace textbox" data-yaml>{% if tdoc %}{{ penaltyRules }}{% else %}{% include 'partials/homework_default_penalty_rules.yaml' %}{% endif %}</textarea>
-            </label>
-          </div></div>
-          {{ form.form_text({
+          {{ form.form_textarea({
               columns:null,
-              label:'Problems',
-              name:'pids',
-              value:pids
+              label:'Content',
+              name:'content',
+              value:tdoc['content']|default(''),
+              markdown:true
           }) }}
-          {#-
-            🌐 Allowed submission languages — the same field, picker and
-            wording as the self-learning session editor. A comma-joined
-            list of judge language ids (LanguageSelectAutoComplete makes it
-            a chip picker); empty = every judge language. Folded into every
-            problem's own language list on the problem pages.
-          -#}
+        </div>
+        {#-
+          PTA homework editor — the same paper sections as the test editor
+          (contest_edit.html / contest_edit.page.ts): three objective
+          sections with a total each, programming tasks with their own points,
+          a running sum, the hidden `paper` JSON.
+        -#}
+        <div style="padding-top: 0" class="section__header">
+          <h2 class="section__title">{{ _('Objective Tasks') }}</h2>
+          <div class="section__tools"><span class="tep__sum" id="tep-sum" data-total="100"></span></div>
+        </div>
+        <div class="section__body tep" id="tep-objective">
+          <div class="pta-note pta-note--blue tep__note">{{ _('The points of every task in the homework should add up to 100. Each objective section splits its total evenly over its tasks; programming tasks carry the points you type.') }}</div>
+          {%- for sec in [['tf', 'True / False', '✓✗'], ['choice', 'Single / Multiple Choice', '◉'], ['blank', 'Fill in the Blank', '✎']] -%}
+          <div class="tep__sec" data-sec="{{ sec[0] }}">
+            <div class="tep__sec-head">
+              <span class="tep__sec-icon">{{ sec[2] }}</span>
+              <span class="tep__sec-title">{{ _(sec[1]) }}</span>
+              <span class="tep__sec-stat" data-stat="{{ sec[0] }}"></span>
+            </div>
+            <div class="row">
+              <div class="medium-3 columns">
+                <label>{{ _('Total score') }}
+                  <input type="number" min="0" step="0.5" class="textbox tep__total" name="tep_total_{{ sec[0] }}" data-total-for="{{ sec[0] }}" placeholder="0">
+                </label>
+                <p class="help-text tep__each" data-each="{{ sec[0] }}">{{ _('Points per task are assigned automatically.') }}</p>
+              </div>
+              <div class="medium-9 columns">
+                <label>{{ _('Tasks') }} <small class="tep__hint">{{ _('Search by title or id; hover a row to preview the statement.') }}</small>
+                  <input class="textbox tep__pids" name="tep_pids_{{ sec[0] }}" data-pids-for="{{ sec[0] }}" placeholder="{{ _('Pick tasks...') }}">
+                </label>
+              </div>
+            </div>
+          </div>
+          {%- endfor -%}
+        </div>
+        <div style="padding-top: 0" class="section__header">
+          <h2 class="section__title">{{ _('Programming Tasks') }}</h2>
+        </div>
+        <div class="section__body tep" id="tep-programming">
+          <label>{{ _('Tasks') }} <small class="tep__hint">{{ _('Search by title or id; hover a row to preview the statement.') }}</small>
+            <input class="textbox tep__pids" name="tep_pids_prog" data-pids-for="prog" placeholder="{{ _('Pick programming tasks...') }}">
+          </label>
+          <div class="tep__scores" id="tep-prog-scores"></div>
           {{ form.form_text({
               columns:null,
               label:'Allowed languages',
@@ -105,13 +140,19 @@
               placeholder:_('Every judge language — pick one or more to restrict'),
               help_text:_('Once the homework is created, every programming problem in it can only be submitted in the selected languages. Leave it empty to allow every judge language. A problem that already restricts its own languages accepts only those that are in both lists.')
           }) }}
-          {{ form.form_textarea({
-              columns:null,
-              label:'Content',
-              name:'content',
-              value:tdoc['content']|default(''),
-              markdown:true
-          }) }}
+          <input type="hidden" name="pids" value="{{ pids }}">
+          <input type="hidden" name="paper" value="">
+        </div>
+        <div style="padding-top: 0" class="section__header">
+          <h2 class="section__title">{{ _('Homework Settings') }}</h2>
+        </div>
+        <div class="section__body">
+          <div class="row"><div class="columns">
+            <label>
+              {{ _('Extension Score Penalty') }}
+              <textarea name="penaltyRules" class="monospace textbox" data-yaml>{% if tdoc %}{{ penaltyRules }}{% else %}{% include 'partials/homework_default_penalty_rules.yaml' %}{% endif %}</textarea>
+            </label>
+          </div></div>
           <div class="row"><div class="columns">
           {% if page_name == 'homework_edit' %}
             <button name="operation" value="update" type="submit" class="rounded primary button">
@@ -134,8 +175,8 @@
               {{ _('Cancel') }}
             </button>
           </div></div>
-        </form>
-      </div>
+        </div>
+      </form>
     </div>
   </div>
   <div class="medium-3 columns">

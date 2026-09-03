@@ -31,6 +31,24 @@ export async function judge({
     let totalStatus = 0;
     const subtasks = {};
     if (!Object.keys(config.answers).length) throw new FormatError('Invalid standard answer.');
+    /*
+     * PTA fork: task-level comparison flags for fill-in blanks, written by
+     * the objective question builder as `matching: { ignoreCase, ignoreSpaces }`
+     * in config.yaml. They relax the string comparison (single answer and the
+     * `{ answer: score }` map form alike); choice letters are unaffected.
+     */
+    const matching = (config as any).matching || {};
+    const norm = (s: any) => {
+        let t = String(s ?? '').trim();
+        if (matching.ignoreCase) t = t.toLowerCase();
+        if (matching.ignoreSpaces) t = t.replace(/\s+/g, '');
+        return t;
+    };
+    const findMapKey = (map: Record<string, number>, ans: string) => {
+        if (map[ans] !== undefined) return ans;
+        const target = norm(ans);
+        return Object.keys(map).find((k) => norm(k) === target);
+    };
     for (const key in config.answers) {
         const ansInfo = config.answers[key] as [string | string[], number] | Record<string, number>;
         // eslint-disable-next-line ts/no-loop-func
@@ -69,10 +87,13 @@ export async function judge({
                 if (stdAns.length === ans.size && stdSet.isSupersetOf(ans)) report(STATUS.STATUS_ACCEPTED, fullScore, 'Correct');
                 else if (ans.size && stdSet.isSupersetOf(ans)) report(STATUS.STATUS_WRONG_ANSWER, Math.floor(fullScore / 2), 'Partially Correct');
                 else report(STATUS.STATUS_WRONG_ANSWER, 0, 'Incorrect');
-            } else if (stdAns.toString() === usrAns) report(STATUS.STATUS_ACCEPTED, fullScore, 'Correct');
+            } else if (norm(stdAns.toString()) === norm(usrAns)) report(STATUS.STATUS_ACCEPTED, fullScore, 'Correct');
             else report(STATUS.STATUS_WRONG_ANSWER, 0, 'Incorrect');
-        } else if (!ansInfo[usrAns]) report(STATUS.STATUS_WRONG_ANSWER, 0, 'Incorrect');
-        else report(STATUS.STATUS_ACCEPTED, +ansInfo[usrAns] || 0, 'Correct');
+        } else {
+            const hit = findMapKey(ansInfo, usrAns);
+            if (hit === undefined || !ansInfo[hit]) report(STATUS.STATUS_WRONG_ANSWER, 0, 'Incorrect');
+            else report(STATUS.STATUS_ACCEPTED, +ansInfo[hit] || 0, 'Correct');
+        }
     }
     end({
         status: totalStatus, score: totalScore, time: 0, memory: 0, subtasks,

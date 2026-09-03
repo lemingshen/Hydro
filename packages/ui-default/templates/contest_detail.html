@@ -13,7 +13,6 @@
       </div>
       <div class="section__body">
         <span class="problem__tag-item">{{ _(model.contest.statusText(tdoc, tsdoc)) }}</span>
-        <span class="problem__tag-item icon icon-award">{{ _(model.contest.RULES[tdoc.rule].TEXT) }}</span>
         <span class="problem__tag-item">{{ _('Start at') }}: {{ contest.render_time(tsdoc.startAt or tdoc.beginAt) }}</span>
         <span class="problem__tag-item icon icon-schedule">{{ contest.render_duration(tdoc) }} {{ _('hour(s)') }}</span>
         <span class="problem__tag-item">{{ _('Host') }}: {{ user.render_inline(udict[tdoc.owner], badge=false) }}</span>

@@ -121,7 +121,20 @@ export class JudgeResultCallbackContext {
     static async postJudge(rdoc: RecordDoc, context?: JudgeResultCallbackContext) {
         if (rdoc.contest?.toString().startsWith('0'.repeat(23))) return;
         const accept = rdoc.status === builtin.STATUS.STATUS_ACCEPTED;
-        const updated = await problem.updateStatus(rdoc.domainId, rdoc.pid, rdoc.uid, rdoc._id, rdoc.status, rdoc.score);
+        /*
+         * PTA: an objective answer (lang '_') inside a running Test / Homework
+         * is scored only after the container ends, whatever its rule. The
+         * contest journal is still written below (applyProjection masks it),
+         * but the problem-set status — what the problem list, the problem
+         * page, the statistics and the homepage show — is written by
+         * contest.syncObjectiveStatus when the container ends.
+         */
+        let deferred = false;
+        if (rdoc.contest && rdoc.lang === '_') {
+            const tdoc = await contest.get(rdoc.domainId, rdoc.contest);
+            if (tdoc && !contest.isDone(tdoc)) deferred = true;
+        }
+        const updated = deferred ? false : await problem.updateStatus(rdoc.domainId, rdoc.pid, rdoc.uid, rdoc._id, rdoc.status, rdoc.score);
         if (rdoc.contest) await contest.updateStatus(rdoc.domainId, rdoc.contest, rdoc.uid, rdoc._id, rdoc.pid, rdoc);
         else if (accept && updated) await domain.incUserInDomain(rdoc.domainId, rdoc.uid, 'nAccept', 1);
         const isNormalSubmission = ![

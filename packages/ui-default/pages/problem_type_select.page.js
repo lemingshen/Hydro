@@ -1,5 +1,6 @@
 import $ from 'jquery';
 import Notification from 'vj/components/notification';
+import { objectiveTitleOf } from 'vj/components/problem/objectiveTitle';
 import { NamedPage } from 'vj/misc/Page';
 import { getTheme, i18n } from 'vj/utils';
 
@@ -56,7 +57,14 @@ const STYLE = [
   '.pta-dark .ptsc input[value="P"]:checked + .ptsc__body { background: #152a40; }',
   '.pta-dark .ptsc input[value="O"]:checked + .ptsc__body { background: #0f2f26; }',
   '.pta-dark .ptsc input[value="S"]:checked + .ptsc__body { background: #251d3d; }',
+  // Objective: the title box is filled from the question text (read-only).
+  '.textbox.pts-derived { background: var(--pta-card-2); color: var(--pta-ink-soft); cursor: default; }',
+  '.pts-derived-note { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--pta-ink-faint); }',
+  '.pts-derived-note b { color: var(--pta-violet-text); font-weight: 600; }',
 ].join('\n');
+
+/** The title form's max length (framework Types.Title); the server keeps the full rule. */
+const FORM_TITLE_MAX = 64;
 
 export default new NamedPage(['problem_create', 'problem_edit'], () => {
   const $pid = $('input[name="pid"]');
@@ -116,12 +124,75 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
     if (k) $sel.find(`input[value="${k}"]`).prop('checked', true);
   });
 
+  /*
+   * OBJECTIVE TITLES ARE THE QUESTION. While the Objective type is selected
+   * the title box is read-only and mirrors the question text of the content
+   * (options and answer markers excluded — components/problem/objectiveTitle,
+   * the client copy of lib/objective_title.ts). The editor writes to the
+   * hidden `content` textarea without firing events, so the mirror polls it
+   * lightly and refreshes right before submit; the server applies the same
+   * rule when saving, so what is shown here is what will be stored.
+   */
+  const $title = $('input[name="title"]');
+  const $content = $('textarea[name="content"]');
+  const $note = $(`<p class="pts-derived-note">✦ <span>${esc(i18n('Objective tasks are titled by their question text — this box is filled automatically from the content (options and answer markers excluded).'))}</span></p>`);
+  let derivedMode = false;
+  let lastManualTitle = null;
+  const readContent = () => String($content.val() || $content.text() || '');
+  const syncTitle = () => {
+    if (!derivedMode) return;
+    const t = objectiveTitleOf(readContent(), '');
+    const shown = t.length > FORM_TITLE_MAX ? `${t.slice(0, FORM_TITLE_MAX - 1)}…` : t;
+    if ($title.val() !== shown) $title.val(shown);
+  };
+  const applyMode = (key) => {
+    const on = key === 'O';
+    if (on === derivedMode) {
+      if (on) syncTitle();
+      return;
+    }
+    derivedMode = on;
+    if (on) {
+      lastManualTitle = String($title.val() || '');
+      $title.addClass('pts-derived').attr('readonly', 'readonly').attr('title', i18n('Filled automatically from the question text'));
+      $title.closest('label').append($note);
+      syncTitle();
+    } else {
+      $title.removeClass('pts-derived').removeAttr('readonly').removeAttr('title');
+      $note.detach();
+      if (lastManualTitle !== null && !$title.val()) $title.val(lastManualTitle);
+    }
+  };
+  applyMode(init);
+  $sel.find('input[name="pts-type"]').on('change', function onPickTitle() {
+    applyMode(String($(this).val()));
+  });
+  $pid.on('input blur', () => {
+    const k = currentKey();
+    if (k) applyMode(k);
+  });
+  $('textarea[data-editor]').on('input keyup', () => syncTitle());
+  const timer = setInterval(syncTitle, 700);
+  $(window).on('unload', () => clearInterval(timer));
+  // The form's own submit guard runs on the button click; refresh first.
+  document.addEventListener('click', (ev) => {
+    if (ev.target && ev.target.closest && ev.target.closest('[type="submit"]')) syncTitle();
+  }, true);
+
   $pid.closest('form').on('submit', (ev) => {
     const picked = String($sel.find('input[name="pts-type"]:checked').val() || 'P');
     const k = currentKey();
     if (k !== picked) {
       ev.preventDefault();
       Notification.error(i18n('The problem ID must start with {0} for this problem type.').replace('{0}', `'${picked}'`));
+      return;
+    }
+    if (derivedMode) {
+      syncTitle();
+      if (!String($title.val() || '').trim()) {
+        ev.preventDefault();
+        Notification.error(i18n('Write the question in the content first — the title of an objective task is derived from it.'));
+      }
     }
   });
 });

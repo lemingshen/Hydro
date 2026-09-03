@@ -15,6 +15,9 @@ import {
     InvalidTokenError, MethodNotAllowedError, NotAssignedError, NotFoundError, PermissionError, ValidationError,
 } from '../error';
 import { ContestStatusDoc, FileInfo, ScoreboardConfig, Tdoc } from '../interface';
+import { gradeObjectiveAnswer } from '../lib/objective_grade';
+import { readRawProblemConfig } from '../lib/problem_config';
+import { objectiveSubKindOf } from '../lib/objective_markdown';
 import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
@@ -27,6 +30,7 @@ import ScheduleModel from '../model/schedule';
 import * as setting from '../model/setting';
 import storage from '../model/storage';
 import user from '../model/user';
+
 import {
     Handler, param, post, Type, Types,
 } from '../service/server';
@@ -62,6 +66,111 @@ export function resolveAllowedLangs(raw: string[], pdict: Record<number, any>, p
             + `${dead.join('; ')}. Widen the language list or remove the problem.`);
     }
     return langs;
+}
+
+/* ------------------------------------------------------------------ */
+/*  PTA: objective tasks are scored only after the container ends      */
+/* ------------------------------------------------------------------ */
+/**
+ * Whatever the rule, an objective answer given inside a running Test or
+ * Homework reveals nothing until the container ends:
+ *   - the record and the contest journal are masked by applyProjection
+ *     (status Waiting, no score), on every page and socket;
+ *   - the problem-set status (problem list, problem page, statistics,
+ *     homepage) is NOT written at judge time (handler/judge.ts postJudge
+ *     defers it) but by this sync, which the end-of-container schedule task
+ *     runs (`syncObjective`), with a lazy fallback on the first visit after
+ *     the end. Idempotent through the `objectiveSynced` flag on the tdoc.
+ */
+export function hasObjectiveTask(pids: number[], pdict: Record<number, { pid?: string | number }>): boolean {
+    return pids.some((pid) => /^o/i.test(String(pdict[pid]?.pid || '')));
+}
+
+export async function syncObjectiveStatus(domainId: string, tdoc: Tdoc) {
+    if ((tdoc as any).objectiveSynced || !contest.isDone(tdoc)) return;
+    await contest.edit(domainId, tdoc.docId, { objectiveSynced: true } as any);
+    const pdict = await problem.getList(domainId, tdoc.pids, true, false, ['docId', 'pid'] as any, true);
+    const objective = tdoc.pids.filter((pid) => /^o/i.test(String(pdict[pid]?.pid || '')));
+    if (!objective.length) return;
+    const rdocs = await record.getMulti(domainId, { contest: tdoc.docId, lang: '_', pid: { $in: objective } }).sort({ _id: 1 }).toArray();
+    for (const rdoc of rdocs) {
+        if (![STATUS.STATUS_ACCEPTED, STATUS.STATUS_WRONG_ANSWER].includes(rdoc.status)) continue;
+        const updated = await problem.updateStatus(domainId, rdoc.pid, rdoc.uid, rdoc._id, rdoc.status, rdoc.score);
+        if (!updated || rdoc.status !== STATUS.STATUS_ACCEPTED) continue;
+        await problem.inc(domainId, rdoc.pid, 'nAccept', 1);
+        await record.collStat.updateOne({ _id: rdoc._id }, {
+            $set: {
+                domainId, pid: rdoc.pid, uid: rdoc.uid, time: rdoc.time, memory: rdoc.memory, length: rdoc.code?.length || 0, lang: rdoc.lang,
+            },
+        }, { upsert: true });
+    }
+}
+
+const PENDING_STATUSES = [STATUS.STATUS_WAITING, STATUS.STATUS_JUDGING, STATUS.STATUS_COMPILING, STATUS.STATUS_FETCHED];
+
+/**
+ * END-OF-CONTAINER EVALUATION. When a Test / Homework ends — on schedule,
+ * or because a teacher moved its end into the past — every student's results
+ * are rebuilt from the submission records themselves, so the scoreboard is
+ * complete even if a journal entry was lost at judge time (a write that
+ * raced another submission, a judge callback that never arrived):
+ *   1. objective answers that were never judged are queued again;
+ *   2. each attendee's journal is rebuilt from all of their records in the
+ *      container (records are authoritative; entries the records don't
+ *      cover are kept) and the rule's stats are recomputed;
+ *   3. the objective problem-set statuses are synced (syncObjectiveStatus).
+ * Idempotent: re-running only refreshes.
+ */
+export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
+    if (!contest.isDone(tdoc)) return;
+    const pids = tdoc.pids || [];
+    const rdocs = await record.getMulti(domainId, { contest: tdoc.docId, pid: { $in: pids } }, {
+        projection: { _id: 1, uid: 1, pid: 1, status: 1, score: 1, lang: 1, subtasks: 1 },
+    }).sort({ _id: 1 }).toArray();
+    /*
+     * Objective answers are graded here, in process, against each task's
+     * answer key (lib/objective_grade): whatever state the judge left them in
+     * — never judged, still pending, or judged — every answer gets its score
+     * now, and the record is updated so the students' pages agree with the
+     * scoreboard. Programming records keep the judge's verdicts.
+     */
+    const objectivePids = pids.filter((pid) => rdocs.some((r) => r.pid === pid && r.lang === '_'));
+    if (objectivePids.length) {
+        const pdict = await problem.getList(domainId, objectivePids, true, false, ['docId', 'pid', 'data', 'domainId'] as any, true);
+        const keys: Record<number, any> = {};
+        for (const pid of objectivePids) if (pdict[pid]) keys[pid] = await readRawProblemConfig(pdict[pid]);
+        for (const r of rdocs) {
+            if (r.lang !== '_' || !keys[r.pid]?.answers) continue;
+            const full = await record.get(domainId, r._id);
+            if (!full) continue;
+            const grade = gradeObjectiveAnswer(keys[r.pid], full.code || '');
+            r.status = grade.status;
+            r.score = grade.score;
+            r.subtasks = grade.subtasks as any;
+            await record.update(domainId, r._id, {
+                status: grade.status, score: grade.score, subtasks: grade.subtasks as any, judgeAt: new Date(), judger: 0,
+            });
+        }
+    }
+    const byUid: Record<number, typeof rdocs> = {};
+    for (const r of rdocs) (byUid[r.uid] ||= []).push(r);
+    const tsdocs = await document.getMultiStatus(domainId, document.TYPE_CONTEST, { docId: tdoc.docId }).toArray();
+    const uids = new Set<number>([...tsdocs.map((t) => t.uid), ...Object.keys(byUid).map(Number)]);
+    for (const uid of uids) {
+        const tsdoc = tsdocs.find((t) => t.uid === uid);
+        const fromRecords = (byUid[uid] || [])
+            .filter((r) => r.lang === '_' || !PENDING_STATUSES.includes(r.status))
+            .map((r) => ({
+                rid: r._id, pid: r.pid, status: r.status, score: r.score || 0, subtasks: r.subtasks, lang: r.lang,
+            }));
+        const covered = new Set(fromRecords.map((j) => j.rid.toHexString()));
+        const kept = (tsdoc?.journal || []).filter((j) => !covered.has(j.rid.toHexString()));
+        const journal = [...kept, ...fromRecords].sort((a, b) => a.rid.getTimestamp().getTime() - b.rid.getTimestamp().getTime());
+        if (!journal.length && !tsdoc) continue;
+        const stats = contest.RULES[tdoc.rule].stat(tdoc, journal);
+        await document.setStatus(domainId, document.TYPE_CONTEST, tdoc.docId, uid, { journal, ...stats } as any);
+    }
+    await syncObjectiveStatus(domainId, tdoc);
 }
 
 export class ContestListHandler extends Handler {
@@ -158,11 +267,19 @@ export class ContestDetailBaseHandler extends Handler {
                 args: { tid, prefix: 'contest_detail' },
                 checker: () => true,
             },
-            {
-                name: 'contest_problemlist',
-                args: { tid, prefix: 'contest_problemlist' },
-                checker: () => this.tsdoc?.attend || contest.isDone(this.tdoc),
-            },
+            (this.user.own(this.tdoc) || this.user.hasPerm(PERM.PERM_EDIT_CONTEST))
+                ? {
+                    name: 'contest_problemlist',
+                    args: { tid, prefix: 'contest_problemlist' },
+                    checker: () => this.tsdoc?.attend || contest.isDone(this.tdoc),
+                }
+                // PTA: students open the one-page paper (the test UI) instead of the list.
+                : {
+                    name: 'contest_paper',
+                    displayName: 'Problem List',
+                    args: { tid, prefix: 'contest_paper' },
+                    checker: () => this.tsdoc?.attend || contest.isDone(this.tdoc),
+                },
             {
                 name: 'contest_print',
                 args: { tid, prefix: 'contest_print' },
@@ -325,10 +442,32 @@ export class ContestProblemListHandler extends ContestDetailBaseHandler {
         if (contest.RULES[this.tdoc.rule].hidden) throw new ContestNotFoundError(domainId, tid);
     }
 
+    /** Students never see the tabular problem list of a Test: the one-page paper is the test UI. */
+    private paperForStudents(domainId: string, tid: ObjectId): boolean {
+        if (this.request.json) return false;
+        if (this.user.own(this.tdoc) || this.user.hasPerm(PERM.PERM_EDIT_CONTEST)) return false;
+        if (this.tdoc.rule === 'homework') return false;
+        this.response.redirect = this.url('contest_paper', { tid });
+        return true;
+    }
+
     @param('tid', Types.ObjectId)
     async get(domainId: string, tid: ObjectId) {
         if (contest.isNotStarted(this.tdoc)) throw new ContestNotLiveError(domainId, tid);
         if (!this.tsdoc?.attend && !contest.isDone(this.tdoc)) throw new ContestNotAttendedError(domainId, tid);
+        // PTA: for students the whole test is ONE page — the paper (objective
+        // questions inline, programming tasks in its rail). The tabular list
+        // stays for managers. JSON callers keep the data. The start stamp is
+        // written before leaving so nothing depends on the redirect target.
+        if (this.tsdoc?.attend && !this.tsdoc.startAt && contest.isOngoing(this.tdoc)) {
+            await contest.setStatus(domainId, tid, this.user._id, { startAt: new Date() });
+            this.tsdoc.startAt = new Date();
+        }
+        if (this.paperForStudents(domainId, tid)) return;
+        // Fallback for the end-of-test schedule task (see evaluateContainerResults).
+        if (contest.isDone(this.tdoc) && !(this.tdoc as any).objectiveSynced) {
+            await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
+        }
         const [pdict, udict, tcdocs] = await Promise.all([
             problem.getList(domainId, this.tdoc.pids, true, true, problem.PROJECTION_CONTEST_LIST),
             user.getList(domainId, [this.tdoc.owner, this.user._id]),
@@ -395,6 +534,96 @@ export class ContestProblemListHandler extends ContestDetailBaseHandler {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/*  PTA test editor: the paper as four sections                        */
+/* ------------------------------------------------------------------ */
+const PAPER_SECTIONS = ['tf', 'choice', 'blank'] as const;
+export interface PaperSections {
+    tf: { total: number, pids: number[] };
+    choice: { total: number, pids: number[] };
+    blank: { total: number, pids: number[] };
+    prog: { pids: number[], scores: Record<number, number> };
+}
+
+const round2 = (x: number) => Math.round(x * 100) / 100;
+
+/**
+ * The stored sections of a test, or — for a test saved before this editor
+ * existed — its problems classified by kind and question type, with the
+ * stored per-problem weights (default 100 each) as the points.
+ */
+export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSections> {
+    const empty: PaperSections = { tf: { total: 0, pids: [] }, choice: { total: 0, pids: [] }, blank: { total: 0, pids: [] }, prog: { pids: [], scores: {} } };
+    if (!tdoc) return empty;
+    const stored = (tdoc as any).sections;
+    if (stored && typeof stored === 'object') {
+        for (const k of PAPER_SECTIONS) {
+            empty[k].total = +stored[k]?.total || 0;
+            empty[k].pids = (stored[k]?.pids || []).map((x) => +x).filter((x) => x);
+        }
+        empty.prog.pids = (stored.prog?.pids || []).map((x) => +x).filter((x) => x);
+        empty.prog.scores = stored.prog?.scores || {};
+        return empty;
+    }
+    const pdict = await problem.getList(domainId, tdoc.pids, true, false, ['docId', 'pid', 'content'] as any, true);
+    for (const pid of tdoc.pids) {
+        const pdoc = pdict[pid];
+        const weight = tdoc.score?.[pid] ?? 100;
+        if (pdoc && /^o/i.test(String(pdoc.pid || ''))) {
+            const sub = objectiveSubKindOf(pdoc.content) || 'choice';
+            empty[sub].pids.push(pid);
+            empty[sub].total = round2(empty[sub].total + weight);
+        } else {
+            empty.prog.pids.push(pid);
+            empty.prog.scores[pid] = weight;
+        }
+    }
+    return empty;
+}
+
+/**
+ * Validate the editor's paper JSON and turn it into the problem order, the
+ * per-problem weights and the sections to store. Objective sections split
+ * their total evenly over their tasks (10 points over 5 true/false tasks =
+ * 2 each); programming tasks carry the points the teacher typed.
+ */
+export async function parsePaper(domainId: string, raw: string, viewer: any) {
+    let j: any;
+    try {
+        j = JSON.parse(raw);
+    } catch {
+        throw new ValidationError('paper');
+    }
+    if (!j || typeof j !== 'object') throw new ValidationError('paper');
+    const ids = (v: any) => [...new Set((Array.isArray(v) ? v : String(v || '').split(',')).map((x) => +x).filter((x) => Number.isInteger(x) && x > 0))];
+    const points = (v: any) => {
+        const n = Math.round((+v || 0) * 100) / 100;
+        if (!(n >= 0) || n > 1000) throw new ValidationError('paper');
+        return n;
+    };
+    const sections: PaperSections = {
+        tf: { total: points(j.tf?.total), pids: ids(j.tf?.pids) },
+        choice: { total: points(j.choice?.total), pids: ids(j.choice?.pids) },
+        blank: { total: points(j.blank?.total), pids: ids(j.blank?.pids) },
+        prog: { pids: ids(j.prog?.pids), scores: {} },
+    };
+    for (const pid of sections.prog.pids) sections.prog.scores[pid] = points(j.prog?.scores?.[pid]);
+    const all = [...sections.tf.pids, ...sections.choice.pids, ...sections.blank.pids, ...sections.prog.pids];
+    const pids = [...new Set(all)];
+    const pdict = await problem.getList(domainId, pids, viewer.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || viewer._id, false, ['docId', 'pid'] as any, true);
+    for (const pid of pids) if (!pdict[pid]) throw new ValidationError('paper', `problem ${pid}`);
+    // Kind guard: objective sections hold O-tasks, the programming section P-tasks.
+    for (const k of PAPER_SECTIONS) for (const pid of sections[k].pids) if (!/^o/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not an objective task`);
+    for (const pid of sections.prog.pids) if (/^[os]/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a programming task`);
+    const score: Record<number, number> = {};
+    for (const k of PAPER_SECTIONS) {
+        const n = sections[k].pids.length;
+        for (const pid of sections[k].pids) score[pid] = n ? round2(sections[k].total / n) : 0;
+    }
+    for (const pid of sections.prog.pids) score[pid] = sections.prog.scores[pid];
+    return { pids, score, sections };
+}
+
 export class ContestEditHandler extends Handler {
     tdoc: Tdoc;
 
@@ -431,6 +660,10 @@ export class ContestEditHandler extends Handler {
             files: tid ? this.tdoc.files : [],
             urlForFile: (filename: string) => this.url('contest_file_download', { tid, filename, type: 'public' }),
         };
+        // PTA test editor: the paper as four sections. The stored layout is
+        // used when the test was saved by this editor; older tests are
+        // classified from their problems so they open in the same form.
+        this.UiContext.paper = await paperOf(domainId, this.tdoc);
     }
 
     @param('tid', Types.ObjectId, true)
@@ -439,7 +672,7 @@ export class ContestEditHandler extends Handler {
     @param('duration', Types.Float)
     @param('title', Types.Title)
     @param('content', Types.Content)
-    @param('rule', Types.String)
+    @param('rule', Types.String, true)
     @param('pids', Types.Content)
     @param('rated', Types.Boolean)
     @param('code', Types.String, true)
@@ -452,16 +685,24 @@ export class ContestEditHandler extends Handler {
     @param('allowPrint', Types.Boolean)
     @param('keepScoreboardHidden', Types.Boolean)
     @param('langs', Types.CommaSeperatedArray, true)
+    @param('paper', Types.Content, true)
     async postUpdate(
         domainId: string, tid: ObjectId, beginAtDate: string, beginAtTime: string, duration: number,
         title: string, content: string, rule: string, _pids: string, rated = false,
         _code = '', autoHide = false, assign: string[] = [], lock: number = null,
         contestDuration: number = null, maintainer: number[] = [], allowViewCode = false, allowPrint = false,
-        keepScoreboardHidden = false, langs: string[] = [],
+        keepScoreboardHidden = false, langs: string[] = [], paper = '',
     ) {
-        if (!Object.keys(contest.RULES).includes(rule) || contest.RULES[rule].hidden) throw new ValidationError('rule');
+        // PTA: one rule for every test (model/contest TEST_RULE). A test that
+        // was created under a legacy rule keeps it until it is re-saved.
+        rule = contest.TEST_RULE;
         if (autoHide) this.checkPerm(PERM.PERM_EDIT_PROBLEM);
-        const pids = _pids.replace(/，/g, ',').split(',').map((i) => +i).filter((i) => i);
+        // PTA test editor: the four-section paper (objective sections with a
+        // total each, programming tasks with their own points) decides the
+        // problem order and the per-problem weights (tdoc.score, the native
+        // OI/IOI weighting). The plain `pids` field remains for API callers.
+        const parsedPaper = paper ? await parsePaper(domainId, paper, this.user) : null;
+        const pids = parsedPaper ? parsedPaper.pids : _pids.replace(/，/g, ',').split(',').map((i) => +i).filter((i) => i);
         const beginAtMoment = moment.tz(`${beginAtDate} ${beginAtTime}`, this.user.timeZone);
         if (!beginAtMoment.isValid()) throw new ValidationError('beginAtDate', 'beginAtTime');
         const endAt = beginAtMoment.clone().add(duration, 'hours').toDate();
@@ -493,6 +734,17 @@ export class ContestEditHandler extends Handler {
             await Promise.all(pids.map((pid) => problem.edit(domainId, pid, { hidden: true })));
             operation.push('unhide');
         }
+        // Objective answers are scored on the problem set only when the test ends.
+        if (Date.now() <= endAt.getTime() && hasObjectiveTask(pids, pdict)) operation.push('syncObjective');
+        if (tid && this.tdoc && (this.tdoc as any).objectiveSynced && Date.now() <= endAt.getTime()) {
+            await contest.edit(domainId, tid, { objectiveSynced: false } as any);
+        }
+        // Ended early (the end moved into the past): evaluate every student now,
+        // so the scoreboard is complete the moment the teacher opens it.
+        if (tid && Date.now() > endAt.getTime()) {
+            const fresh = await contest.get(domainId, tid);
+            if (fresh) await evaluateContainerResults(domainId, { ...fresh, objectiveSynced: false } as any);
+        }
         if (operation.length) {
             await ScheduleModel.add({
                 ...task,
@@ -502,7 +754,8 @@ export class ContestEditHandler extends Handler {
         }
         await contest.edit(domainId, tid, {
             assign, _code, autoHide, lockAt, maintainer, allowViewCode, allowPrint, keepScoreboardHidden, langs,
-        });
+            ...(parsedPaper ? { score: parsedPaper.score, sections: parsedPaper.sections } : {}),
+        } as any);
         this.response.body = { tid };
         this.response.redirect = this.url('contest_detail', { tid });
     }
@@ -885,6 +1138,10 @@ export class ContestScoreboardHandler extends ContestDetailBaseHandler {
             if (!contest.canShowScoreboard.call(this, this.tdoc, true)) throw new ContestScoreboardHiddenError(tid);
             if (contest.isNotStarted(this.tdoc)) throw new ContestNotLiveError(domainId, tid);
         }
+        // A finished container is evaluated before its board is rendered.
+        if (contest.isDone(this.tdoc) && !(this.tdoc as any).objectiveSynced) {
+            await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
+        }
         const view = this.ctx.scoreboard.getView(viewId);
         if (!view) throw new NotFoundError(`View ${viewId} not found`);
         const args = {};
@@ -992,6 +1249,7 @@ export async function apply(ctx: Context) {
                     tasks.push(problem.edit(doc.domainId, pid, { hidden: false }));
                 }
             }
+            if (op === 'syncObjective') tasks.push(evaluateContainerResults(doc.domainId, tdoc));
         }
         await Promise.all(tasks);
     });

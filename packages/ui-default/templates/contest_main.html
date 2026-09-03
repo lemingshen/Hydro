@@ -12,7 +12,7 @@
         <ul class="info">
           <li>
             <span class="icon icon-award"></span>
-            {{ _('Rule') }}: {{ _(model.contest.RULES[tdoc['rule']].TEXT) }}
+            {{ _('Test') }}
           </li>
           <li>
             <span class="icon icon-calendar"></span>
@@ -56,7 +56,7 @@
   {%- endfor -%}
     <div class="section">
       <div class="section__header">
-        <h1 class="section__title">{{ _('All Contests') if not rule else _('All {0} Contests').format(_(model.contest.RULES[rule].TEXT)) }}</h1>
+        <h1 class="section__title">{{ _('All Contests') }}</h1>
         <div class="section__tools">
           <form method="get" name="filter-form">
             <input type="text" class="inline compact textbox" name="q" value="{{ q }}" placeholder="{{ _('Search contests...') }}">
@@ -68,14 +68,6 @@
               {%- if not groups|length -%}
                 <option disabled>{{ _('No group available') }}</option>
               {%- endif -%}
-            </select>
-            <select class="inline compact select" name="rule">
-              <option value=""{% if not rule %} selected{% endif %}>{{ _('All') }}</option>
-              {%- for k, v in model.contest.RULES -%}
-                {% if not v.hidden %}
-                  <option value="{{ k }}"{% if rule == k %} selected{% endif %}>{{ _('All {0} Contests').format(v.TEXT) }}</option>
-                {% endif %}
-              {%- endfor -%}
             </select>
             <button type="submit" class="button hasjs--hide">
               {{ _('Search') }}
@@ -103,10 +95,6 @@
                   <span class="pta-row__count">👥 {{ tdoc['attend']|default(0) }}</span>
                 </div>
                 <div class="pta-row__meta">
-                  {#- The rule pill was a ?rule= quick-filter link; inside the
-                      whole-row anchor it becomes a plain chip — the toolbar's
-                      rule dropdown carries that filter now. -#}
-                  <span class="pta-chip pta-chip--blue">🏆 {{ _(model.contest.RULES[tdoc.rule].TEXT) }}</span>
                   {% if tdoc.rated %}
                   <span class="pta-chip pta-chip--gold">⭐ Rated</span>
                   {% endif %}
@@ -134,15 +122,12 @@
   </div>
   <div class="medium-3 columns">
   {% if handler.user.hasPerm(perm.PERM_CREATE_CONTEST) %}
-    <div class="section side">
-      <div class="section__header">
-        <h1 class="section__title">
-          {{ _('Create Contest') }}
-        </h1>
-      </div>
-      <div class="section__body">
-        <p><a href="{{ url('contest_create') }}" class="expanded primary button">{{ _('Create a contest') }}</a></p>
-      </div>
+    {# Same side card as the Self-Learning page (pta_theme.page.styl: .pta-side-hero). #}
+    <div class="pta-side-hero">
+      <div class="pta-side-hero__icon">🏁</div>
+      <div class="pta-side-hero__title">{{ _('Create Contest') }}</div>
+      <p>{{ _('Schedule a timed test over a set of tasks: duration, allowed languages and the scoreboard policy.') }}</p>
+      <a href="{{ url('contest_create') }}" class="pta-side-hero__cta">＋ {{ _('Create a contest') }}</a>
     </div>
   {% endif %}
   </div>

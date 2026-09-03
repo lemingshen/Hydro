@@ -34,6 +34,8 @@ import { Context } from '../context';
 import { Logger } from '../logger';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../error';
 import * as aiTutor from '../lib/ai_tutor';
+import { escapeOptionLine } from '../lib/objective_markdown';
+import { objectiveTitleOf } from '../lib/objective_title';
 import { AdmZip } from '../libs';
 import { PERM, PRIV } from '../model/builtin';
 import KnowledgeModel from '../model/knowledge';
@@ -890,7 +892,8 @@ const P_OBJ_ANSWERS = [
     'Write the ANSWER KEY for the objective quiz below. The questions are FINAL — the teacher has approved them. Do not restate, renumber or modify them.',
     'Schema: {"answers": {"<id>": [answer, score]}}',
     'One entry per question marker present in the statement, using that marker\'s exact id.',
-    'Answer format by marker type: select → the single correct option LETTER ("A", "B", …) counting the markdown list under the marker from A; multiselect → an array of correct letters, alphabetically sorted; dropdown → the exact option text as written inside the brackets; input/textarea → the exact expected string (short and unambiguous — a number or one word).',
+    'Answer format by marker type: select → the single correct option LETTER ("A", "B", …) counting the markdown list under the marker from A; multiselect → an array of correct letters, alphabetically sorted; dropdown → the exact option text as written inside the brackets; input/textarea → the exact expected string (short and unambiguous — a number or one word), OR an array of ACCEPTED ALTERNATIVES when several spellings are legitimately correct (e.g. ["iostream", "<iostream>"], ["O(n)", "O(N)", "linear"]) — never list wrong answers.',
+    'Optionally add a top-level "matching" object for the fill-in blanks: {"ignoreCase": true} unless letter case is part of what is tested (C++ identifiers, string literals), {"ignoreSpaces": true} when the blanks are expressions where spacing is irrelevant (x=1 vs x = 1). Omit it for a quiz without fill-in blanks.',
     'Every score is a positive integer, and all scores sum to exactly 100. Weight harder questions higher.',
     'Solve each question carefully from the statement and the teacher\'s materials before answering; a wrong key is worse than a wrong question.',
 ].join('\n');
@@ -907,11 +910,12 @@ const P_OBJECTIVE = [
     '  * Short answer: {{ textarea(N) }} — graded by EXACT match, so use it ONLY if the teacher explicitly asked for short answers.',
     '- True/False = a select with exactly two options: True / False (or 对 / 错 when the brief is Chinese).',
     '- Never put markers inside code fences. 4-8 questions unless the teacher asked otherwise. Mix the requested question types sensibly.',
-    '"answers": select → the single correct option LETTER ("A", "B", …); multiselect → array of correct letters, alphabetically sorted; dropdown → the exact option text; input/textarea → the exact expected string (short and unambiguous — a number or one word). Every score is a positive integer and all scores sum to 100.',
+    '"answers": select → the single correct option LETTER ("A", "B", …); multiselect → array of correct letters, alphabetically sorted; dropdown → the exact option text; input/textarea → the exact expected string (short and unambiguous — a number or one word) or an array of accepted alternatives when several spellings are legitimately correct (e.g. ["iostream", "<iostream>"]). Every score is a positive integer and all scores sum to 100.',
+    'Optionally add a top-level "matching" object for fill-in blanks: {"ignoreCase": true} unless letter case is part of what is tested, {"ignoreSpaces": true} when spacing is irrelevant in the expected expressions.',
     "Ground every question in the teacher's materials; write in English only.",
 ].join('\n');
 
-const P_OBJ_REPAIR = 'The quiz below failed validation. Fix the problems and reply with the SAME full schema {"title","body","answers"}. Keep questions that had no problem unchanged.';
+const P_OBJ_REPAIR = 'The quiz below failed validation. Fix the problems and reply with the SAME full schema {"title","body","answers"} (plus the optional top-level "matching" object, unchanged unless it was part of the problem). Keep questions that had no problem unchanged.';
 
 const P_OBJ_REPORT = 'Write a short TEACHER BRIEFING for the finished OBJECTIVE QUIZ below. Schema: {"summary": string, "knowledgePoints": string[], "caseDesign": string, "pitfalls": string[]}. "summary" = what the quiz covers and how it maps to the materials. "knowledgePoints" = the concepts tested. "caseDesign" = per-question one-liners: the correct answer and WHY it is correct. "pitfalls" = the misconception each wrong option / likely wrong answer targets.';
 
@@ -924,8 +928,32 @@ function parseAnswersYaml(raw: string): Record<string, any> {
     if (obj && typeof obj === 'object' && obj.answers && typeof obj.answers === 'object') obj = obj.answers;
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new BadRequestError('The answer key must be a YAML mapping of question id -> [answer, score].');
     const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(obj)) out[String(k)] = v;
+    // `matching` is the quiz-level comparison block, not a question id.
+    for (const [k, v] of Object.entries(obj)) if (k !== 'matching') out[String(k)] = v;
     return out;
+}
+
+/** The fill-in comparison flags the judge understands (hydrojudge objective). */
+const MATCHING_FLAGS = ['ignoreCase', 'ignoreSpaces'] as const;
+type MatchingFlags = Partial<Record<typeof MATCHING_FLAGS[number], true>>;
+
+function cleanMatchingFlags(raw: any): MatchingFlags | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const out: MatchingFlags = {};
+    for (const f of MATCHING_FLAGS) if (raw[f] === true || raw[f] === 'true') out[f] = true;
+    return Object.keys(out).length ? out : null;
+}
+
+/** The `matching` block of an answer-key YAML (either layout), if any. */
+function parseMatchingYaml(raw: string): MatchingFlags | null {
+    let obj: any = null;
+    try {
+        obj = yamlLoad(String(raw || ''));
+    } catch {
+        return null;
+    }
+    if (!obj || typeof obj !== 'object') return null;
+    return cleanMatchingFlags(obj.matching);
 }
 
 /**
@@ -963,18 +991,41 @@ function validateObjective(body: string, answers: Record<string, any>) {
             ans = String(ans ?? '').trim();
             const opts = (m.options || []).map((x) => x.trim());
             if (!opts.includes(ans)) { issues.push(`Q${id}: the answer must be exactly one of the dropdown options (${opts.join(' / ') || 'none found'}).`); continue; }
-        } else { // fill-in-the-blank / free-response
-            ans = String(ans ?? '').trim();
-            if (!ans) { issues.push(`Q${id}: the expected answer must not be empty.`); continue; }
-            if (ans.length > 200) { issues.push(`Q${id}: the expected answer is too long for exact matching (keep it under 200 chars).`); continue; }
+        } else { // fill-in-the-blank / free-response: one answer, or several accepted alternatives
+            const alts = [...new Set((Array.isArray(ans) ? ans : [ans]).map((x: any) => String(x ?? '').trim()).filter((x: string) => x))];
+            const altIssue = !alts.length ? `Q${id}: the expected answer must not be empty.`
+                : alts.length > 10 ? `Q${id}: at most 10 accepted alternatives.`
+                    : alts.some((x) => x.length > 200) ? `Q${id}: the expected answer is too long for exact matching (keep it under 200 chars).` : '';
+            if (altIssue) {
+                issues.push(altIssue);
+                continue;
+            }
+            ans = alts.length === 1 ? alts[0] : alts;
         }
         normalized[id] = [ans, score];
     }
     const orderedIds = Object.keys(normalized).sort(aiTutor.questionIdCompare);
     const ordered: Record<string, [any, number]> = {};
-    for (const id of orderedIds) ordered[id] = normalized[id];
+    const kinds: Record<string, string> = {};
+    for (const id of orderedIds) {
+        ordered[id] = normalized[id];
+        kinds[id] = meta[id]?.kind || '';
+    }
     const total = orderedIds.reduce((a, id) => a + ordered[id][1], 0);
-    return { issues, normalized: ordered, count: orderedIds.length, total };
+    return { issues, normalized: ordered, kinds, count: orderedIds.length, total };
+}
+
+/** A fill-in / free-response question (the kinds the `matching` flags apply to). */
+const isTextKind = (kind: string) => kind === 'fill-in-the-blank' || kind === 'free-response';
+
+/**
+ * The per-task config.yaml entry for one question of a split quiz: choice
+ * letters and single answers keep the [answer, 100] form; a blank with
+ * several accepted alternatives uses the judge's map form { alt: 100, … }.
+ */
+function taskAnswerEntry(kind: string, ans: any): [any, number] | Record<string, number> {
+    if (isTextKind(kind) && Array.isArray(ans) && ans.length > 1) return Object.fromEntries(ans.map((a: string) => [a, 100]));
+    return [Array.isArray(ans) && isTextKind(kind) ? ans[0] : ans, 100];
 }
 
 /**
@@ -1009,7 +1060,14 @@ function validateObjectiveBody(body: string) {
     return { issues, count: ids.length, ids };
 }
 
-const answersYamlOf = (map: Record<string, [any, number]>) => yamlDump(map, { flowLevel: 1 });
+/**
+ * The draft's answer-key artifact: `id: [answer, score]` per question, and —
+ * when a fill-in blank compares loosely — a trailing `matching:` block. The
+ * teacher edits this YAML in the Studio; parseAnswersYaml/parseMatchingYaml
+ * read both parts back.
+ */
+const answersYamlOf = (map: Record<string, [any, number]>, matching: MatchingFlags | null = null) => yamlDump(map, { flowLevel: 1 })
+    + (matching ? yamlDump({ matching }, { flowLevel: 1 }) : '');
 
 function objAnswersDigest(body: string, map: Record<string, [any, number]>): string {
     const meta = aiTutor.extractQuestionMeta(body || '');
@@ -1055,11 +1113,11 @@ async function generateObjectiveArtifact(d: AuthorDraftDoc, target: string): Pro
         let j = await ask();
         let v = validateObjective(bodyNow, j?.answers && typeof j.answers === 'object' ? j.answers : {});
         if (v.issues.length) {
-            j = await ask(`Your previous key was rejected:\n- ${v.issues.join('\n- ')}\nReply with {"answers": {...}} only.`);
+            j = await ask(`Your previous key was rejected:\n- ${v.issues.join('\n- ')}\nReply with {"answers": {...}} (plus the optional "matching" object) only.`);
             v = validateObjective(bodyNow, j?.answers && typeof j.answers === 'object' ? j.answers : {});
             if (v.issues.length) throw Object.assign(new BadRequestError(`The answer key failed validation: ${v.issues[0]}`), { evidence: v.issues.join('\n') });
         }
-        return { answers: { yaml: answersYamlOf(v.normalized) } };
+        return { answers: { yaml: answersYamlOf(v.normalized, cleanMatchingFlags(j?.matching)) } };
     }
     if (target === 'statement') {
         const j = await aiJSON(SYS_COMMON, `${P_OBJECTIVE}\n\n${brief}`);
@@ -1074,12 +1132,12 @@ async function generateObjectiveArtifact(d: AuthorDraftDoc, target: string): Pro
             if (v2.issues.length) throw Object.assign(new BadRequestError(`The quiz failed validation: ${v.issues[0]}`), { evidence: v.issues.join('\n') });
             return {
                 statement: { title: String(j2.title || j.title).slice(0, 120), body: String(j2.body).slice(0, 30000) },
-                answers: { yaml: answersYamlOf(v2.normalized) },
+                answers: { yaml: answersYamlOf(v2.normalized, cleanMatchingFlags(j2.matching ?? j.matching)) },
             };
         }
         return {
             statement: { title: String(j.title).slice(0, 120), body: String(j.body).slice(0, 30000) },
-            answers: { yaml: answersYamlOf(v.normalized) },
+            answers: { yaml: answersYamlOf(v.normalized, cleanMatchingFlags(j.matching)) },
         };
     }
     if (target === 'report') {
@@ -2401,7 +2459,10 @@ function splitObjectiveBody(body: string): { origId: string, body: string }[] {
                 const t = lines[k].trim();
                 if (!t) { if (block.some((l) => /^\s*[-*]\s+/.test(l.trim()) && l.trim())) break; block.push(lines[k]); continue; }
                 if (!/^[-*]\s+/.test(t)) break;
-                block.push(lines[k]);
+                // Verbatim options: `- >>` would render as a blockquote
+                // (lib/objective_markdown), so the AI's option text is escaped
+                // exactly like the manual builder escapes it.
+                block.push(escapeOptionLine(lines[k]));
                 i = k;
             }
         }
@@ -2427,9 +2488,19 @@ function draftPids(d: AuthorDraftDoc): string[] {
     if (Array.isArray((d as any).pids) && (d as any).pids.length) return (d as any).pids;
     return d.pid ? [d.pid] : [];
 }
-/** Per-part scratch title: base plus a question ordinal when split. */
-function partTitle(base: string, k: number, total: number, draft: boolean): string {
-    const t = total > 1 ? `${base} — Q${k + 1}` : base;
+/**
+ * Per-part scratch title.
+ *
+ * Objective parts are titled by their own question text (lib/objective_title:
+ * options and answer markers removed) — every task then carries a distinct,
+ * readable title in the homework / test pickers instead of ten copies of the
+ * quiz title. Programming and subjective drafts keep the statement title,
+ * plus an ordinal when a draft materializes several parts.
+ */
+function partTitle(base: string, k: number, total: number, draft: boolean, objectiveBody?: string): string {
+    const t = typeof objectiveBody === 'string'
+        ? objectiveTitleOf(objectiveBody, total > 1 ? `${base} — Q${k + 1}` : base)
+        : (total > 1 ? `${base} — Q${k + 1}` : base);
     return draft ? `[AI Draft] ${t}` : t;
 }
 
@@ -2455,13 +2526,13 @@ async function runObjectivePipeline(domainId: string, id: ObjectId) {
             }
             await stage('precheck', `Validation found ${v.issues.length} problem(s) — asking the AI to repair (attempt ${attempt + 1})`);
             const j = await aiJSON(SYS_COMMON, [P_OBJ_REPAIR, `Problems found:\n- ${v.issues.join('\n- ')}`,
-                `Current quiz:\n${JSON.stringify({ title: d.artifacts.statement.title, body: d.artifacts.statement.body, answers: parseAnswersYaml(d.artifacts.answers.yaml) })}`,
+                `Current quiz:\n${JSON.stringify({ title: d.artifacts.statement.title, body: d.artifacts.statement.body, answers: parseAnswersYaml(d.artifacts.answers.yaml), matching: parseMatchingYaml(d.artifacts.answers.yaml) || undefined })}`,
                 briefBlock(d)].join('\n\n'));
             if (!j?.body || !j?.answers) throw Object.assign(new Error('The AI repair did not return a usable quiz.'), { stage: 'precheck', evidence: v.issues.join('\n') });
             const v2 = validateObjective(String(j.body), j.answers);
             await patchDraft(id, {
                 'artifacts.statement': { title: String(j.title || d.artifacts.statement.title).slice(0, 120), body: String(j.body).slice(0, 30000) },
-                'artifacts.answers': { yaml: answersYamlOf(v2.normalized) },
+                'artifacts.answers': { yaml: answersYamlOf(v2.normalized, cleanMatchingFlags(j.matching) ?? parseMatchingYaml(d.artifacts.answers.yaml)) },
             }, { actor: 'ai', action: `repair:objective #${attempt + 1}` });
             d = await getDraft(domainId, id);
             v = v2;
@@ -2479,6 +2550,7 @@ async function runObjectivePipeline(domainId: string, id: ObjectId) {
          * surplus so no orphaned [AI Draft] problems linger.
          */
         const parts = splitObjectiveBody(d.artifacts.statement.body);
+        const quizMatching = parseMatchingYaml(d.artifacts.answers.yaml);
         if (parts.length !== v.count) {
             throw Object.assign(new Error(`Splitter found ${parts.length} question(s) but the key covers ${v.count} — the markers and the answer key disagree.`), { stage: 'materialize' });
         }
@@ -2487,7 +2559,7 @@ async function runObjectivePipeline(domainId: string, id: ObjectId) {
         const docIds: number[] = [];
         const pids: string[] = [];
         for (let k = 0; k < parts.length; k++) {
-            const title = partTitle(d.artifacts.statement.title, k, parts.length, true);
+            const title = partTitle(d.artifacts.statement.title, k, parts.length, true, parts[k].body);
             let pDocId = prevIds[k];
             if (pDocId && !(await problem.get(domainId, pDocId))) pDocId = undefined; // deleted outside the Studio
             if (!pDocId) {
@@ -2499,8 +2571,13 @@ async function runObjectivePipeline(domainId: string, id: ObjectId) {
             const pid = await ensureKindPid(domainId, pDocId, kindOf(d));
             const orig = v.normalized[parts[k].origId];
             if (!orig) throw Object.assign(new Error(`No answer found for question #${parts[k].origId}.`), { stage: 'materialize' });
-            await problem.addTestdata(domainId, pDocId, 'config.yaml',
-                Buffer.from(yamlDump({ type: 'objective', answers: { '1': [orig[0], 100] } })), d.owner);
+            // Same config shape the manual question builder writes: accepted
+            // alternatives as the judge's map form, the quiz-level matching
+            // flags on fill-in tasks only (choice letters never need them).
+            const qKind = v.kinds[parts[k].origId] || '';
+            const taskCfg: any = { type: 'objective', answers: { '1': taskAnswerEntry(qKind, orig[0]) } };
+            if (quizMatching && isTextKind(qKind)) taskCfg.matching = quizMatching;
+            await problem.addTestdata(domainId, pDocId, 'config.yaml', Buffer.from(yamlDump(taskCfg)), d.owner);
             docIds.push(pDocId);
             pids.push(pid);
         }
@@ -3260,7 +3337,7 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             const v = validateObjective(body, parseAnswersYaml(j.yaml));
             if (v.issues.length) throw new BadRequestError(`The answer key does not match the statement: ${v.issues[0]}${v.issues.length > 1 ? ` (+${v.issues.length - 1} more)` : ''}`);
             await patchDraft(this.ddoc._id, {
-                'artifacts.answers': { yaml: answersYamlOf(v.normalized) },
+                'artifacts.answers': { yaml: answersYamlOf(v.normalized, parseMatchingYaml(j.yaml)) },
                 'pipeline.status': this.ddoc.pipeline.status === 'passed' ? 'idle' : this.ddoc.pipeline.status,
             }, { actor: 'teacher', action: 'edit:answers', detail: `${v.count}q/${v.total}pts` });
             this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), validated: { count: v.count, total: v.total } };
@@ -3453,11 +3530,14 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             // Re-assert the pid so drafts from before stamping existed, or
             // whose kind was switched, still publish under the right prefix.
             const pid = await ensureKindPid(domainId, docId, kindOf(this.ddoc));
-            const pubTags = ((await problem.get(domainId, docId))?.tag || []);
+            const cur = await problem.get(domainId, docId);
+            const pubTags = (cur?.tag || []);
             await problem.edit(domainId, docId, {
                 hidden: !!hidden,
                 pid,
-                title: partTitle(this.ddoc.artifacts.statement!.title, k, total, false),
+                // Objective tasks: the title is the question (see partTitle).
+                title: partTitle(this.ddoc.artifacts.statement!.title, k, total, false,
+                    kindOf(this.ddoc) === 'objective' ? String(cur?.content || '') : undefined),
                 tag: pubTags,
             });
             pids.push(pid);

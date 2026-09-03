@@ -6,6 +6,25 @@
 {% if not pdocs.length %}
   {{ nothing.render('Sorry, there are no problems in the problem set.') }}
 {% else %}
+  {#-
+    PTA UI: the list is short by design (PROBLEM_LIST_PAGE_SIZE rows, see
+    handler/problem.ts), so the range bar says where this page sits in the
+    whole set and the pager is repeated at the bottom. `pageSize` is absent
+    on a stale backend: fall back to the row count so the range stays sane.
+  -#}
+  {%- set _size = pageSize or pdocs.length -%}
+  {%- set _from = (page - 1) * _size + 1 -%}
+  {%- set _to = _from + pdocs.length - 1 -%}
+  <div class="pta-listbar">
+    <span class="pta-listbar__range">
+      {{ _('Showing {0}–{1} of {2}').format(_from, _to, (pcount if pcountRelation != 'gte' else pcount ~ '+')) }}
+      <span class="pta-listbar__label">{{ _('Problems') }}</span>
+    </span>
+    <span class="pta-listbar__pages">
+      <span class="pta-listbar__pill">{{ _('Page {0} of {1}').format(page, ppcount) }}</span>
+      <span class="pta-listbar__pill pta-listbar__pill--dim">{{ _('{0} per page').format(_size) }}</span>
+    </span>
+  </div>
   {{ paginator.render(page, ppcount, position='top', add_qs=utils.buildQueryString(q=qs, sort='' if sort == 'default' else sort, kind=kind)) }}
   <table class="data-table hide-problem-tag">
     <colgroup>
@@ -57,8 +76,10 @@
         <td class="col--name col--problem-name" data-star-action="{{ url('problem_detail', pid=pdoc.docId) }}" {% if handler.user.hasPriv(PRIV.PRIV_USER_PROFILE) %} data-star="{{ psdoc.star }}"{% endif %}>
           {{ problem.render_problem_title(pdoc) }}
         </td>
-        <td class="col--ac-tried">{{ pdoc.nAccept }} / {{ pdoc.nSubmit }}</td>
-        <td class="col--difficulty">{{ pdoc['difficulty'] or lib.difficulty(pdoc.nSubmit, pdoc.nAccept) or _('(None)') }}</td>
+        <td class="col--ac-tried"><span class="pta-ratio"><span class="pta-ratio__ac">{{ pdoc.nAccept }}</span><span class="pta-ratio__sep">/</span><span class="pta-ratio__tried">{{ pdoc.nSubmit }}</span></span></td>
+        {#- PTA fork: the 1..10 difficulty as a graded chip (pta_theme.page.styl .pta-diff). -#}
+        {%- set _diff = pdoc['difficulty'] or lib.difficulty(pdoc.nSubmit, pdoc.nAccept) -%}
+        <td class="col--difficulty">{% if _diff %}<span class="pta-diff pta-diff--{{ 1 if _diff <= 2 else (2 if _diff <= 4 else (3 if _diff <= 6 else (4 if _diff <= 8 else 5))) }}" title="{{ _('Difficulty') }} {{ _diff }}/10">{{ _diff }}</span>{% else %}<span class="pta-diff" title="{{ _('(None)') }}">–</span>{% endif %}</td>
       </tr>
     {%- endfor -%}
     </tbody>

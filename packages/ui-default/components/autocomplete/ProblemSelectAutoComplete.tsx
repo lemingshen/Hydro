@@ -15,6 +15,7 @@ export default class ProblemSelectAutoComplete extends AutoComplete {
         // self-learning sessions). The Type filter disappears and every
         // query carries that kind; omit for the unrestricted picker.
         lockKind: options.lockKind,
+        lockSub: options.lockSub,
       },
       ...options,
     });

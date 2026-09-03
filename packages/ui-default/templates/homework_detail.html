@@ -14,6 +14,20 @@
         {{ tdoc['content']|markdown|safe }}
       </div>
     </div>
+    {%- set _hwManager = handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) -%}
+    {%- if pdict and not _hwManager -%}
+    {#- PTA: students work on the one-page paper (objective sections inline,
+        programming tasks in its rail); the tabular list stays for managers. -#}
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">{{ _('Problem List') }}</h1>
+      </div>
+      <div class="section__body hw-paper-cta">
+        <p class="hw-paper-cta__text">{{ _('All tasks of this homework are on one page: answer the objective questions there and open the programming tasks from its rail.') }}</p>
+        <a class="rounded primary button hw-paper-cta__btn" href="{{ url('homework_paper', tid=tdoc.docId) }}">📝 {{ _('Open the homework') }} ({{ tdoc.pids|length }} {{ _('task(s)') }})</a>
+      </div>
+    </div>
+    {%- else -%}
     <div class="section">
       <div class="section__header">
         <h1 class="section__title">{{ _('Problem') }}</h1>
@@ -78,6 +92,7 @@
       {{ nothing.render('Please claim the assignment to see the problems.') }}
     {% endif %}
     </div>
+    {%- endif -%}
   </div>
   <div class="medium-3 columns">
     {% include "partials/homework_sidebar.html" %}

@@ -11,17 +11,28 @@
     <div class="pta-hero__main">
       <div class="pta-hero__over">{{ _('Course space') }}</div>
       <h1 class="pta-hero__title">{{ handler.domain.name or handler.domain._id }}</h1>
+      {#- Same name resolution as the nav: real name, then the domain display name, then the login ID. -#}
+      {%- set heroName = ((((handler.user.firstName or '') ~ ' ' ~ (handler.user.lastName or '')) | trim) or handler.user.displayName or handler.user.uname) -%}
       <p class="pta-hero__sub">
         {%- if handler.user.hasPriv(model.builtin.PRIV.PRIV_USER_PROFILE) -%}
-          {{ _('Welcome back') }}, {{ handler.user.uname }} — {{ _('pick up where you left off.') }}
+          {{ _('Welcome back') }}, {{ heroName }} — {{ _('pick up where you left off.') }}
         {%- else -%}
           {{ _('Sign in to start practicing.') }}
         {%- endif -%}
       </p>
     </div>
+    {#- The four course surfaces, each behind the same permission as its nav entry. -#}
     <div class="pta-hero__actions">
-      <a class="pta-hero__btn" href="{{ url('problem_main') }}">{{ _('Problem Set') }}</a>
-      <a class="pta-hero__btn pta-hero__btn--ghost" href="{{ url('self_learning') }}">{{ _('self_learning') }}</a>
+      {% if handler.user.hasPerm(perm.PERM_VIEW_PROBLEM) %}
+      <a class="pta-hero__btn" href="{{ url('problem_main') }}">📚 {{ _('problem_main') }}</a>
+      {% endif %}
+      <a class="pta-hero__btn pta-hero__btn--ghost" href="{{ url('self_learning') }}">🤖 {{ _('self_learning') }}</a>
+      {% if handler.user.hasPerm(perm.PERM_VIEW_HOMEWORK) %}
+      <a class="pta-hero__btn pta-hero__btn--ghost" href="{{ url('homework_main') }}">📝 {{ _('homework_main') }}</a>
+      {% endif %}
+      {% if handler.user.hasPerm(perm.PERM_VIEW_CONTEST) %}
+      <a class="pta-hero__btn pta-hero__btn--ghost" href="{{ url('contest_main') }}">🏁 {{ _('contest_main') }}</a>
+      {% endif %}
     </div>
   </div>
 </div></div>

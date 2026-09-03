@@ -12,6 +12,7 @@ import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
 import problem from '../model/problem';
 import record from '../model/record';
+import ScheduleModel from '../model/schedule';
 import storage from '../model/storage';
 import system from '../model/system';
 import user from '../model/user';
@@ -19,7 +20,7 @@ import {
     Handler, param, post, Types,
 } from '../service/server';
 import {
-    ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, resolveAllowedLangs,
+    ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, evaluateContainerResults, hasObjectiveTask, paperOf, parsePaper, resolveAllowedLangs,
 } from './contest';
 
 export const validatePenaltyRules = (input: string) => {
@@ -176,6 +177,8 @@ class HomeworkEditHandler extends Handler {
             pids: tid ? tdoc.pids.join(',') : '',
             page_name: tid ? 'homework_edit' : 'homework_create',
         };
+        // PTA homework editor: the same four-section paper as the test editor.
+        this.UiContext.paper = await paperOf(domainId, tdoc);
     }
 
     @param('tid', Types.ObjectId, true)
@@ -192,13 +195,17 @@ class HomeworkEditHandler extends Handler {
     @param('maintainer', Types.NumericArray, true)
     @param('assign', Types.CommaSeperatedArray, true)
     @param('langs', Types.CommaSeperatedArray, true)
+    @param('paper', Types.Content, true)
     async postUpdate(
         domainId: string, tid: ObjectId, beginAtDate: string, beginAtTime: string,
         penaltySinceDate: string, penaltySinceTime: string, extensionDays: number,
         penaltyRules: PenaltyRules, title: string, content: string, _pids: string, rated = false,
-        maintainer: number[] = [], assign: string[] = [], langs: string[] = [],
+        maintainer: number[] = [], assign: string[] = [], langs: string[] = [], paper = '',
     ) {
-        const pids = _pids.replace(/，/g, ',').split(',').map((i) => +i).filter((i) => i);
+        // PTA homework editor: objective sections with a total each, programming
+        // tasks with their own points → problem order + tdoc.score weights.
+        const parsedPaper = paper ? await parsePaper(domainId, paper, this.user) : null;
+        const pids = parsedPaper ? parsedPaper.pids : _pids.replace(/，/g, ',').split(',').map((i) => +i).filter((i) => i);
         const tdoc = tid ? await contest.get(domainId, tid) : null;
         if (!tid) this.checkPerm(PERM.PERM_CREATE_HOMEWORK);
         else if (!this.user.own(tdoc)) this.checkPerm(PERM.PERM_EDIT_HOMEWORK);
@@ -240,6 +247,19 @@ class HomeworkEditHandler extends Handler {
                 || tdoc.pids.sort().join(' ') !== pids.sort().join(' ')) {
                 await contest.recalcStatus(domainId, tdoc.docId);
             }
+        }
+        if (parsedPaper) await contest.edit(domainId, tid, { score: parsedPaper.score, sections: parsedPaper.sections } as any);
+        // Objective answers are scored on the problem set only when the
+        // homework's hard deadline passes (contest.syncObjectiveStatus).
+        const syncTask = { type: 'schedule', subType: 'contest', domainId, tid };
+        await ScheduleModel.deleteMany(syncTask);
+        if (Date.now() <= endAt.toDate().getTime() && hasObjectiveTask(pids, pdict)) {
+            await ScheduleModel.add({ ...syncTask, operation: ['syncObjective'], executeAfter: endAt.toDate() });
+            await contest.edit(domainId, tid, { objectiveSynced: false } as any);
+        } else if (Date.now() > endAt.toDate().getTime()) {
+            // Closed early: evaluate every student now.
+            const fresh = await contest.get(domainId, tid);
+            if (fresh) await evaluateContainerResults(domainId, { ...fresh, objectiveSynced: false } as any);
         }
         this.response.body = { tid };
         this.response.redirect = this.url('homework_detail', { tid });

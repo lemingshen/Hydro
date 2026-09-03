@@ -144,6 +144,7 @@ const DETAIL_STYLE = [
   '.aisq__opt--ok .aisq__letter { color: #2b8a3e; }',
   '.aisq__tick { margin-left: auto; color: #2b8a3e; font-weight: bold; }',
   '.aisq__ans { margin-top: 8px; font-size: 12.5px; color: var(--pta-ink-soft); }',
+  '.aisq__or { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--pta-ok-text); margin: 0 2px; }',
   '.aisq__ans code { background: #ebfbee; color: #2b8a3e; border-radius: 6px; padding: 1px 7px; }',
   '.pta-dark .aisq__ans code { background: #10331d; color: #69db7c; }',
   '.aisq__titlerow { margin-bottom: 12px; }',
@@ -550,7 +551,9 @@ function questionCards(d) {
     }
     let ans = '';
     if (q.answer !== undefined && !q.options.length) {
-      ans = `<div class="aisq__ans">${esc(i18n('Expected'))}: <code>${esc(Array.isArray(q.answer) ? q.answer.join(', ') : q.answer)}</code></div>`;
+      // A blank may accept several alternatives (the key holds an array).
+      const alts = Array.isArray(q.answer) ? q.answer : [q.answer];
+      ans = `<div class="aisq__ans">${esc(i18n('Expected'))}: ${alts.map((a) => `<code>${esc(a)}</code>`).join(` <span class="aisq__or">${esc(i18n('or'))}</span> `)}</div>`;
     } else if (q.answer !== undefined && q.tag === 'dropdown') {
       ans = `<div class="aisq__ans">${esc(i18n('Expected'))}: <code>${esc(Array.isArray(q.answer) ? q.answer.join(', ') : q.answer)}</code></div>`;
     }

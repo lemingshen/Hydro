@@ -800,8 +800,46 @@ const homework = buildContestRule({
     },
 });
 
+/**
+ * PTA: THE rule of a Test. There is no rule picker any more — every test is
+ * scored the same way:
+ *   - programming tasks give real-time feedback (a student sees each verdict
+ *     and score the moment it is judged; best score per task counts, weighted
+ *     by the points the test editor assigns through tdoc.score);
+ *   - objective tasks are scored only after the deadline: the verdict is
+ *     withheld until the test ends (applyProjection in this file), the
+ *     problem-set status is synced at the end, and the scoreboard is
+ *     rebuilt from the records when the test finishes (handler/contest.ts
+ *     evaluateContainerResults).
+ * Built on the IOI mechanics (score-based, no OI-style hiding). The legacy
+ * rules stay registered so tests created earlier keep their behaviour.
+ */
+const test = buildContestRule({
+    TEXT: 'Test',
+    submitAfterAccept: false,
+    showRecord: (tdoc, now) => now > tdoc.endAt && !isLocked(tdoc),
+    showSelfRecord: () => true,
+    showScoreboard: (tdoc, now) => now > tdoc.beginAt,
+    // OI's stat, except that a task's points come from the test editor
+    // verbatim: 0 points means 0 (OI treats a missing OR zero weight as 100).
+    stat(tdoc, journal) {
+        const detail: Record<number, any> = {};
+        let score = 0;
+        for (const j of journal.filter((i) => tdoc.pids.includes(i.pid))) {
+            if (!detail[j.pid] || detail[j.pid].score < j.score) detail[j.pid] = { ...j };
+        }
+        for (const i in detail) score += ((tdoc.score?.[i] ?? 100) * (detail[i].score || 0)) / 100;
+        return { score: Math.round(score * 100) / 100, detail, display: detail };
+    },
+    applyProjection(_, rdoc) {
+        return rdoc;
+    },
+}, oi);
+
+export const TEST_RULE = 'test';
+
 export const RULES: ContestRules = {
-    acm, oi, homework, ioi, ledo, strictioi,
+    acm, oi, homework, ioi, ledo, strictioi, test,
 };
 
 const collBalloon = db.collection('contest.balloon');
@@ -1181,6 +1219,7 @@ global.Hydro.model.contest = {
     apply,
 
     RULES,
+    TEST_RULE,
     PrintTaskStatus,
     buildContestRule,
     add,

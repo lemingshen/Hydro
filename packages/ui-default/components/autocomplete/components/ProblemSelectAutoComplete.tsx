@@ -341,14 +341,20 @@ type ProblemSelectProps = AutoCompleteProps<ProblemDoc> & {
    * use it — they are programming-only and the server refuses the rest.
    */
   lockKind?: string;
+  /**
+   * PTA fork (test editor): with lockKind 'objective', narrow the rows to one
+   * question type — 'tf' (true/false), 'choice' (single/multiple choice) or
+   * 'blank' (fill-in-the-blank). The server classifies from the content.
+   */
+  lockSub?: string;
 };
 
 const ProblemSelectAutoComplete = forwardRef<AutoCompleteHandle<ProblemDoc>, ProblemSelectProps>((allProps, ref) => {
-  const { lockKind, ...props } = allProps;
+  const { lockKind, lockSub, ...props } = allProps;
   const [filters, setFilters] = React.useState<Filters>({ ...EMPTY_FILTERS });
   // The pinned kind always wins, whatever a stale filter state may hold.
   const kind = lockKind || filters.kind;
-  const signature = filterSignature({ ...filters, kind });
+  const signature = `${filterSignature({ ...filters, kind })}\u0002${lockSub || ''}`;
 
   return (
     <div className="problem-select__shell">
@@ -365,6 +371,7 @@ const ProblemSelectAutoComplete = forwardRef<AutoCompleteHandle<ProblemDoc>, Pro
             quick: true,
             sort: query ? 'default' : 'recent',
             ...kind ? { kind } : {},
+            ...lockSub ? { sub: lockSub } : {},
             ...filters.tags.length ? { tags: filters.tags.join(',') } : {},
             ...filters.dMin ? { difficultyMin: filters.dMin } : {},
             ...filters.dMax ? { difficultyMax: filters.dMax } : {},
@@ -417,6 +424,7 @@ ProblemSelectAutoComplete.propTypes = {
   freeSolo: PropTypes.bool,
   freeSoloConverter: PropTypes.func,
   lockKind: PropTypes.string,
+  lockSub: PropTypes.string,
 };
 
 ProblemSelectAutoComplete.displayName = 'ProblemSelectAutoComplete';

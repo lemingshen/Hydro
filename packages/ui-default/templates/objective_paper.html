@@ -30,19 +30,54 @@
       <div class="section__body paper-top__note paper-note--closed">🔒 {{ _('This session has ended — you can still review the paper; submissions are closed.') }}</div>
       {% endif %}
     </div>
+    {%- if showScores -%}
+    {#- PTA test paper: the score overview — the three objective sections, the programming tasks and the total. -#}
+    <div class="section paper-overview">
+      <div class="section__body paper-overview__body">
+        <div class="paper-overview__head">
+          <span class="paper-overview__title">📊 {{ _('Score overview') }}</span>
+          <span class="paper-overview__total">{{ _('Total') }} <b>{{ totalPoints }}</b> {{ _('pts') }}</span>
+        </div>
+        <div class="paper-overview__cells">
+          {%- for g in groups -%}
+          <a class="paper-overview__cell" href="#sec-{{ g.key }}">
+            <span class="paper-overview__icon">{{ g.icon }}</span>
+            <span class="paper-overview__name">{{ _(g.name) }}</span>
+            <span class="paper-overview__meta">{{ g.tasks|length }} {{ _('task(s)') }} · <b>{{ g.total }}</b> {{ _('pts') }}</span>
+          </a>
+          {%- endfor -%}
+          {%- if programmingPoints -%}
+          <span class="paper-overview__cell paper-overview__cell--prog">
+            <span class="paper-overview__icon">⌨</span>
+            <span class="paper-overview__name">{{ _('Programming') }}</span>
+            <span class="paper-overview__meta">{{ othersCount }} {{ _('task(s)') }} · <b>{{ programmingPoints }}</b> {{ _('pts') }}</span>
+          </span>
+          {%- endif -%}
+        </div>
+      </div>
+    </div>
+    {%- endif -%}
     {%- if not tasks.length -%}
       <div class="section"><div class="section__body typo"><p>{{ _('This set contains no objective tasks.') }}</p></div></div>
     {%- endif -%}
-    {%- for t in tasks -%}
+    {%- for g in groups -%}
+    {%- if g.name -%}
+    <div class="paper-sec" id="sec-{{ g.key }}">
+      <span class="paper-sec__icon">{{ g.icon }}</span>
+      <span class="paper-sec__name">{{ _(g.name) }}</span>
+      <span class="paper-sec__meta">{{ g.tasks|length }} {{ _('task(s)') }}{% if showScores %} · {{ _('Total') }} <b>{{ g.total }}</b> {{ _('pts') }}{% endif %}</span>
+    </div>
+    {%- endif -%}
+    {%- for t in g.tasks -%}
+    {#- Objective tasks are titled by their question, so the card shows the
+        content directly: the running number (and its points) are the header. -#}
     <div class="section paper-q" id="q-{{ t.docId }}" data-docid="{{ t.docId }}" data-submit-url="{{ t.submitUrl }}">
-      <div class="section__header">
-        <h1 class="section__title paper-q__title">
-          <span class="paper-q__num">{{ t.index }}</span> {{ t.title }}
-          <small class="paper-q__pid">{{ t.pid }}</small>
-          <span class="paper-q__status" data-status-for="{{ t.docId }}"></span>
-        </h1>
-      </div>
       <div class="section__body typo richmedia paper-q__content">
+        <div class="paper-q__lead">
+          <span class="paper-q__num" title="{{ t.pid }}">{{ t.index }}</span>
+          {%- if showScores and t.points is not none -%}<span class="paper-q__pts">{{ t.points }} {{ _('pts') }}</span>{%- endif -%}
+          <span class="paper-q__status" data-status-for="{{ t.docId }}"></span>
+        </div>
         {{ t.content|content(handler.user.viewLang|default(''), false)|safe }}
       </div>
       {%- if canSubmit -%}
@@ -52,6 +87,7 @@
       </div>
       {%- endif -%}
     </div>
+    {%- endfor -%}
     {%- endfor -%}
   </div>
 </div>

@@ -11,10 +11,9 @@
 ) }}
 {{ set(UiContext, 'rids', rdocs.map(eval("rdoc=>rdoc._id.toString()"))) }}
 {% if selfOnly %}
-<style>
-  .rec-selfonly { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 9px 14px; border-radius: 12px; background: var(--pta-blue-soft); border: 1px solid var(--pta-blue-line); color: var(--pta-blue-text); font-size: 12.5px; animation: ptaFadeUp .26s var(--pta-ease) backwards; }
-</style>
-<div class="rec-selfonly">🔒 {{ _('Submission history is private — you are seeing only your own records.') }}</div>
+<div class="row"><div class="columns">
+  <div class="pta-note pta-note--blue">🔒 {{ _('Submission history is private — you are seeing only your own records.') }}</div>
+</div></div>
 {% endif %}
 <div class="row">
   <div class="medium-12 columns">

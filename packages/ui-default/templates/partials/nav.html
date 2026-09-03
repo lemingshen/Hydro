@@ -63,7 +63,7 @@
   Profile), filled by the roster importer and editable by the user; the
   per-domain displayName is the older fallback; the ID is the last resort.
 #}{%- set navRealName = (((handler.user.firstName or '') ~ ' ' ~ (handler.user.lastName or '')) | trim) -%}
-        <a href="{{ url('user_detail', uid=handler.user._id) }}" class="nav__item">{{ navRealName or handler.user.displayName or handler.user.uname }} <span class="icon icon-expand_more nojs--hide"></span></a>
+        <a href="{{ url('user_detail', uid=handler.user._id) }}" class="nav__item pta-nav__user"><img class="pta-nav__avatar" src="{{ avatarUrl(handler.user.avatar, 48) }}" width="24" height="24" loading="lazy" alt="">{{ navRealName or handler.user.displayName or handler.user.uname }} <span class="icon icon-expand_more nojs--hide"></span></a>
         <ol class="dropdown-target menu" id="menu-nav-user">
           <li class="menu__item">
             <a href="{{ url('user_detail', uid=handler.user._id) }}" class="menu__link">

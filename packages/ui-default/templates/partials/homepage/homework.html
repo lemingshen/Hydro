@@ -5,36 +5,39 @@
     <div class="section__header">
       <h1 class="section__title">{{ _('Homework') }}</h1>
     </div>
-    <ol class="section__list homework__list">
+    {#-
+      PTA fork: the same rows as the Homework list page (pta_theme.page.styl
+      .pta-rowlist / .pta-row), in the flush variant that lives inside a card.
+    -#}
+    <ol class="section__list homework__list pta-rowlist pta-rowlist--flush">
       {%- for tdoc in htdocs -%}
-        <li class="section__list__item homework__item">
-          <div class="media">
-            <div class="media__left medium">
-              <div class="homework__date numbox">
-                <div class="numbox__num large">{{ datetimeSpan(tdoc['penaltySince'], false, 'D')|safe }}</div>
-                <div class="numbox__text">{{ datetimeSpan(tdoc['penaltySince'], false, 'YYYY-M')|safe }}</div>
+        <li class="section__list__item pta-rowwrap">
+          <a class="pta-row" href="{{ url('homework_detail', tid=tdoc.docId) }}">
+            <div class="pta-row__side">
+              <div class="pta-datebox">
+                <div class="pta-datebox__num">{{ datetimeSpan(tdoc['penaltySince'], false, 'D')|safe }}</div>
+                <div class="pta-datebox__sub">{{ datetimeSpan(tdoc['penaltySince'], false, 'YYYY-M')|safe }}</div>
               </div>
             </div>
-            <div class="media__body medium">
-              <h1 class="homework__title"><a href="{{ url('homework_detail', tid=tdoc.docId) }}" data-emoji-enabled>{{ tdoc['title'] }}</a></h1>
-              <ul class="supplementary list">
-                <li>{{ _('Status') }}: {{ _(model.contest.statusText(tdoc)) }}</li>
-                <li>{{ _('Open Since') }}: {{ datetimeSpan(tdoc['beginAt'])|safe }}</li>
-                <li>
-                  {% if model.contest.isExtended(tdoc) or model.contest.isDone(tdoc) %}
-                    {{ _('Hard Deadline') }}: {{ datetimeSpan(tdoc['endAt'])|safe }}
-                  {% else %}
-                    {{ _('Deadline') }}: {{ datetimeSpan(tdoc['penaltySince'])|safe }}
-                  {% endif %}
-                </li>
-                {% if htsdict[tdoc['docId']]['attend'] == 1 %}
-                  <li class="homework__info-attended">
-                    <span class="icon icon-check"></span> {{ _('Claimed') }}
-                  </li>
+            <div class="pta-row__main">
+              <div class="pta-row__titlerow">
+                <span class="pta-row__title" data-emoji-enabled>{{ tdoc['title'] }}</span>
+                <span class="pta-row__count">{{ tdoc.pids|length }} {{ _('Problems') }}</span>
+              </div>
+              <div class="pta-row__meta">
+                <span class="pta-chip{% if model.contest.isNotStarted(tdoc) %} pta-chip--blue{% elif model.contest.isExtended(tdoc) %} pta-chip--gold{% elif model.contest.isDone(tdoc) %} pta-chip--dim{% else %} pta-chip--ok{% endif %}">📊 {{ _(model.contest.statusText(tdoc)) }}</span>
+                {% if model.contest.isExtended(tdoc) or model.contest.isDone(tdoc) %}
+                  <span class="pta-chip pta-chip--gold">⏳ {{ _('Hard Deadline') }} {{ datetimeSpan(tdoc['endAt'])|safe }}</span>
+                {% else %}
+                  <span class="pta-chip">⏳ {{ _('Deadline') }} {{ datetimeSpan(tdoc['penaltySince'])|safe }}</span>
                 {% endif %}
-              </ul>
+                {% if htsdict[tdoc['docId']]['attend'] == 1 %}
+                  <span class="pta-chip pta-chip--ok">✓ {{ _('Claimed') }}</span>
+                {% endif %}
+              </div>
             </div>
-          </div>
+            <span class="pta-row__go">→</span>
+          </a>
         </li>
       {%- endfor -%}
     </ol>

@@ -1801,3 +1801,1156 @@ html.page--self_learning_paper .paper-note--closed { background: var(--pta-card-
 .pta-dark .sl-bubble code { background: #322a48; color: #cdbdfb; }
 .pta-dark .sl-float__hint { background: #1c1a26; border-color: #3d3750; }
 .pta-dark .sl-divider span { background: #262333; }
+
+
+/* ========================================================================== */
+/*  PASS 3 — cohesion & polish                                                */
+/*  Every stock Hydro surface the earlier passes left untouched now speaks     */
+/*  the same language as the PTA components: the page canvas, section cards,  */
+/*  section tabs, side menus, form controls, secondary buttons, the problem-  */
+/*  set search bar, markdown content, and the homepage widgets. Plus the      */
+/*  shared pieces the templates were re-implementing inline (side hero, list  */
+/*  rows, notes, chips, difficulty). Everything rides the PASS-1 tokens, so   */
+/*  the dark theme follows automatically unless a value is stated below.      */
+/* ========================================================================== */
+
+/* ------------------------------- page canvas -------------------------------- */
+/* Modern displays leave the 1200px container floating in empty space, and
+   the problem set (table + knowledge panel) is the page that suffers most.
+   One more breakpoint above the stock hd() one; nested rows stay unbounded. */
+
+@media (min-width: 1440px) {
+  .row { max-width: 1300px; }
+}
+
+/* ------------------------------ section cards ------------------------------- */
+/* Card anatomy: a compact title row, then a hairline that separates it from
+   the body. Flush tables (.no-padding) keep their own header as the divider. */
+
+h1.section__title {
+  font-size: 1.28rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+}
+
+h2.section__title { font-size: 1.1rem; font-weight: 700; }
+
+.section > .section__header + .section__body:not(.no-padding) {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--pta-line-soft);
+}
+
+.section__header .section__tools .button.compact,
+.section__header .section__tools .compact.button { margin-bottom: 0; }
+
+/* Section list items (stock list pages: discussion, files, domain lists) */
+.section__list__item { border-bottom-color: var(--pta-line-soft); transition: background-color 0.12s ease; }
+.section__list__item:not(.pta-rowwrap):hover { background-color: var(--pta-card-2); }
+.theme--dark .section__list__item { border-bottom-color: var(--pta-line); }
+
+/* ------------------------------ section tabs -------------------------------- */
+/* The pink top border becomes an underline in the accent color; hover is a
+   soft fill; the immersive (profile) variant keeps its white active tab. */
+
+.section__tab-container:not(.immersive) .section__tab-header {
+  padding-left: 10px;
+  padding-right: 10px;
+  border-bottom: 1px solid var(--pta-line-soft);
+}
+
+.section__tab-container:not(.immersive) .section__tab-header-item {
+  border-top: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 9px 9px 0 0;
+  margin-right: 2px;
+  margin-bottom: -1px;
+  padding: 0 16px;
+  font-weight: 500;
+  color: var(--pta-ink-soft);
+  cursor: pointer;
+}
+
+.section__tab-container:not(.immersive) .section__tab-header-item:hover {
+  border-color: transparent;
+  background: var(--pta-card-2);
+  color: var(--pta-ink);
+}
+
+.section__tab-container:not(.immersive) .section__tab-header-item.selected,
+.section__tab-container:not(.immersive) .section__tab-header-item.tab--active,
+.section__tab-container:not(.immersive) .section__tab-header-item.selected:hover,
+.section__tab-container:not(.immersive) .section__tab-header-item.tab--active:hover {
+  border-color: transparent;
+  border-bottom-color: var(--pta-primary);
+  background: transparent;
+  color: var(--pta-primary);
+  font-weight: 600;
+}
+
+.theme--dark .section__tab-container:not(.immersive) .section__tab-header-item.selected,
+.theme--dark .section__tab-container:not(.immersive) .section__tab-header-item.tab--active,
+.theme--dark .section__tab-container:not(.immersive) .section__tab-header-item.selected:hover,
+.theme--dark .section__tab-container:not(.immersive) .section__tab-header-item.tab--active:hover {
+  border-bottom-color: var(--pta-primary-2);
+  color: var(--pta-primary-2);
+}
+
+.section__tab-container.immersive .section__tab-header-item {
+  border-radius: 10px 10px 0 0;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+/* ------------------------------- side menus --------------------------------- */
+/* Settings, domain and admin pages list their sections in a .menu inside a
+   side card. Pill items instead of the flush, left-bordered rows; the active
+   item is a soft accent fill rather than the pink block. Dropdown menus are
+   not inside a .section and keep their own styling from pass 2. */
+
+.section .menu { padding: 8px 0; }
+
+.section .menu .menu__link {
+  margin: 1px 8px;
+  padding: 9px 12px;
+  width: calc(100% - 16px);
+  border-left: none;
+  border-radius: 10px;
+  color: var(--pta-ink-soft);
+  font-weight: 500;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.section .menu a.menu__link:not(.disabled):hover,
+.section .menu button.menu__link:not(.disabled):hover {
+  border-color: transparent;
+  background: var(--pta-card-2);
+  color: var(--pta-ink);
+}
+
+.section .menu a.menu__link.active,
+.section .menu a.menu__link.active:hover,
+.section .menu button.menu__link.active,
+.section .menu button.menu__link.active:hover {
+  border-color: transparent;
+  background: var(--pta-blue-soft);
+  color: var(--pta-blue-text);
+  font-weight: 600;
+}
+
+.section .menu .menu__link.highlight { background: var(--pta-violet-soft); color: var(--pta-violet-text); }
+.section .menu .menu__item .menu .menu__link { padding-left: 30px; }
+.section .menu .menu__seperator { border-top-color: var(--pta-line-soft); margin: 6px 12px; }
+.theme--dark .section .menu .menu__seperator { border-top-color: var(--pta-line); }
+
+/* ------------------------------ form controls ------------------------------- */
+
+label:not(.quick-input-list-label):not(.checkbox):not(.radiobox):not(.textbox):not(.material) {
+  color: var(--pta-ink-soft);
+  font-weight: 500;
+}
+
+.help-text { color: var(--pta-ink-faint); font-size: 12.5px; line-height: 1.5; }
+
+label.checkbox, label.radiobox { color: var(--pta-ink); font-weight: 400; }
+
+.textbox, textarea.textbox, select.select { color: var(--pta-ink); }
+.textbox::placeholder, textarea.textbox::placeholder { color: var(--pta-ink-faint); }
+
+/* ---------------------------- secondary buttons ------------------------------ */
+/* White pill-ish buttons with a hairline; the accent arrives on hover. The
+   gradient primary, the immersive inverse and text buttons are untouched. */
+
+.button:not(.codicon):not(.primary):not(.inverse):not(.text) {
+  background-color: var(--pta-card);
+  border-color: var(--pta-line);
+  color: var(--pta-ink);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.button:not(.codicon):not(.primary):not(.inverse):not(.text):not(.disabled):hover,
+.button:not(.codicon):not(.primary):not(.inverse):not(.text):not(.disabled):focus {
+  background-color: var(--pta-card-2);
+  border-color: var(--pta-blue-line);
+  color: var(--pta-blue-text);
+  box-shadow: 0 6px 14px -8px rgba(28, 126, 214, 0.35);
+  transform: translateY(-1px);
+}
+
+.button:not(.codicon):not(.primary):not(.inverse):not(.text):not(.disabled):active { transform: translateY(0); }
+
+.theme--dark .button:not(.codicon):not(.primary):not(.inverse):not(.text) {
+  background-color: #2a3036;
+  border-color: #3a424b;
+  color: #d5dade;
+  box-shadow: none;
+}
+
+.theme--dark .button:not(.codicon):not(.primary):not(.inverse):not(.text):not(.disabled):hover,
+.theme--dark .button:not(.codicon):not(.primary):not(.inverse):not(.text):not(.disabled):focus {
+  background-color: #323942;
+  border-color: #4a545f;
+  color: #8fc6ff;
+}
+
+/* --------------------------- problem-set search bar -------------------------- */
+/* The stock bar shipped a teal button and a square input beside the PTA
+   tabs. Same geometry (the sort select and the stat counter are positioned
+   absolutely against it), new skin. */
+
+.search > input {
+  border: 1px solid var(--pta-line);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  padding: 5px 12px;
+  background: var(--pta-card);
+  color: var(--pta-ink);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.search > input:focus { border-color: var(--pta-primary); box-shadow: var(--pta-ring); position: relative; z-index: 1; }
+
+.search > button {
+  border: 1px solid transparent;
+  border-radius: 0 10px 10px 0;
+  background: var(--pta-grad-btn);
+  color: #fff;
+  transition: filter 0.15s ease;
+}
+
+.search > button:hover { filter: brightness(1.08); }
+
+.search-sort {
+  background: transparent;
+  color: var(--pta-ink-soft);
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+.search > div { color: var(--pta-ink-faint); font-size: 13px; }
+
+.theme--dark .search > input { background: #1d2126; border-color: #363d45; color: #d5dade; }
+.theme--dark .search-sort { color: #aab4be; }
+
+/* ------------------------- markdown content (.typo) ------------------------- */
+/* Problem statements, bulletins, discussions, tutor bubbles: calmer headings,
+   chip-like inline code, framed code blocks, readable tables and quotes. */
+
+.typo h1, .typo h2, .typo h3, .typo h4 { color: var(--pta-ink); letter-spacing: -0.01em; }
+
+.typo :not(pre) > code {
+  padding: 0.12em 0.42em;
+  border-radius: 6px;
+  background: var(--pta-card-3);
+  border: 1px solid var(--pta-line-soft);
+  color: var(--pta-crimson);
+  font-size: 0.92em;
+}
+
+.theme--dark .typo :not(pre) > code { background: #2a3036; border-color: #3a424b; color: #ff8fa3; }
+
+.typo pre:not(.slm__code) {
+  border-radius: 10px;
+  border: 1px solid var(--pta-line-soft);
+  background: var(--pta-card-2);
+}
+
+.theme--dark .typo pre:not(.slm__code) { background: #1b1f24; border-color: #30363d; }
+
+.typo table th, .typo table td { border-color: var(--pta-line); color: var(--pta-ink-soft); }
+.typo table th, .typo table thead th { background: var(--pta-card-2); color: var(--pta-ink); font-weight: 600; font-size: 0.92em; letter-spacing: 0.02em; }
+.theme--dark .typo table th, .theme--dark .typo table td { border-color: #3a424b; }
+.theme--dark .typo table th, .theme--dark .typo table thead th { background: #262b31; color: var(--pta-ink); }
+
+.typo blockquote {
+  border-left: 3px solid var(--pta-blue-line);
+  background: var(--pta-card-2);
+  border-radius: 0 10px 10px 0;
+  color: var(--pta-ink-soft);
+}
+
+.theme--dark .typo blockquote { background: #1d2126; border-left-color: #2b74b8; }
+
+.typo hr { border-bottom-color: var(--pta-line); height: 1px; margin: 1.2em 0; }
+
+/* ------------------------------ problem chips ------------------------------- */
+/* The problem page's info row and the list's knowledge-point links become the
+   same soft pills as everything else; knowledge points carry the violet. */
+
+.problem__tag-item {
+  border-radius: 999px;
+  background-color: var(--pta-card-3);
+  color: var(--pta-ink-soft);
+  font-size: 12.5px;
+  min-height: 26px;
+  line-height: 26px !important;
+  padding: 0 11px !important;
+  margin-left: 0;
+  margin-right: 5px;
+  margin-bottom: 6px;
+  transition: background-color 0.12s ease, color 0.12s ease, transform 0.12s var(--pta-ease);
+}
+
+.problem__tag-item.interactive:hover { background: var(--pta-blue-soft); color: var(--pta-blue-text); transform: translateY(-1px); }
+.problem__tag-item.tags { background: var(--pta-violet-soft); color: var(--pta-violet-text); }
+.problem__tag-item.tags.interactive:hover { background: var(--pta-violet-line); color: var(--pta-violet-text); }
+.theme--dark .problem__tag-item { color: var(--pta-ink-soft); }
+.theme--dark .problem__tag-item.tags { color: var(--pta-violet-text); }
+
+.problem__tag-link {
+  border-radius: 999px;
+  background: var(--pta-violet-soft);
+  color: var(--pta-violet-text) !important;
+  font-size: 12px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.problem__tag-link:hover { background: var(--pta-violet); color: #fff !important; }
+.theme--dark .problem__tag-link { background-color: var(--pta-violet-soft); color: var(--pta-violet-text) !important; }
+.theme--dark .problem__tag-link:hover { background-color: var(--pta-violet); color: #fff !important; }
+
+/* ------------------------- difficulty & acceptance ratio --------------------- */
+/* The 1..10 difficulty reads as a graded chip (green → red) instead of a
+   bare number; the AC / Tried column keeps the numbers but muted the tried. */
+
+.pta-diff {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: var(--pta-card-3);
+  border: 1px solid var(--pta-line);
+  color: var(--pta-ink-faint);
+}
+
+.pta-diff--1 { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+.pta-diff--2 { background: var(--pta-blue-soft); border-color: var(--pta-blue-line); color: var(--pta-blue-text); }
+.pta-diff--3 { background: var(--pta-gold-soft); border-color: var(--pta-gold-line); color: var(--pta-gold-text); }
+.pta-diff--4 { background: var(--pta-warn-soft); border-color: var(--pta-warn-line); color: var(--pta-warn-text); }
+.pta-diff--5 { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); color: var(--pta-bad-text); }
+
+.pta-ratio { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pta-ratio__ac { font-weight: 600; color: var(--pta-ink); }
+.pta-ratio__sep { color: var(--pta-ink-faint); margin: 0 3px; }
+.pta-ratio__tried { color: var(--pta-ink-faint); }
+
+/* ------------------------------ shared notes -------------------------------- */
+/* One inline banner for "you are seeing only your own records", schedule
+   notes and similar one-liners; variants follow the token triples. */
+
+.pta-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--pta-card-2);
+  border: 1px solid var(--pta-line);
+  color: var(--pta-ink-soft);
+  animation: ptaFadeUp 0.26s var(--pta-ease) backwards;
+}
+
+.pta-note--blue { background: var(--pta-blue-soft); border-color: var(--pta-blue-line); color: var(--pta-blue-text); }
+.pta-note--ok { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+.pta-note--warn { background: var(--pta-warn-soft); border-color: var(--pta-warn-line); color: var(--pta-warn-text); }
+.pta-note--violet { background: var(--pta-violet-soft); border-color: var(--pta-violet-line); color: var(--pta-violet-text); }
+
+/* ------------------------------- chip variants ------------------------------ */
+
+.pta-chip--warn { background: var(--pta-warn-soft); border-color: var(--pta-warn-line); color: var(--pta-warn-text); }
+.pta-chip--bad { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); color: var(--pta-bad-text); }
+.pta-chip--violet { background: var(--pta-violet-soft); border-color: var(--pta-violet-line); color: var(--pta-violet-text); }
+.pta-chip .time { color: inherit; }
+
+/* ----------------------------- side hero card ------------------------------- */
+/* The right-column call-to-action (create a session / homework / test, plus
+   the one-paragraph pitch of the page). Previously only the Self-Learning
+   page had it, inline; now it is shared by every list page. */
+
+.pta-side-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--pta-radius);
+  background: linear-gradient(135deg, #1f6fd0 0%, #6b4ce0 100%);
+  color: #fff;
+  padding: 18px 16px 16px;
+  margin-bottom: 30px;
+  box-shadow: 0 14px 34px -14px rgba(76, 110, 245, 0.6);
+  animation: ptaFadeUp 0.3s var(--pta-ease) 0.1s backwards;
+}
+
+.pta-side-hero::after {
+  content: '';
+  position: absolute;
+  right: -30px;
+  top: -30px;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+
+.pta-side-hero__icon { font-size: 26px; margin-bottom: 8px; line-height: 1; }
+.pta-side-hero__title { font-size: 15px; font-weight: 700; margin: 0 0 6px; color: #fff; }
+.pta-side-hero p { color: rgba(255, 255, 255, 0.94); font-size: 13px; line-height: 1.6; margin: 0 0 14px; }
+.pta-side-hero p:last-child { margin-bottom: 0; }
+
+.pta-side-hero__cta,
+.pta-dark .pta-side-hero .pta-side-hero__cta,
+.theme--dark .pta-side-hero .pta-side-hero__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff;
+  color: #4338ca;
+  font-weight: 700;
+  font-size: 13.5px;
+  text-decoration: none;
+  box-shadow: 0 10px 22px -10px rgba(0, 0, 0, 0.45);
+  transition: transform 0.15s var(--pta-ease), box-shadow 0.15s ease;
+}
+
+.pta-side-hero__cta:hover,
+.pta-dark .pta-side-hero .pta-side-hero__cta:hover,
+.theme--dark .pta-side-hero .pta-side-hero__cta:hover {
+  transform: translateY(-1px);
+  background: #fff;
+  color: #4338ca;
+  text-decoration: none;
+  box-shadow: 0 14px 26px -10px rgba(0, 0, 0, 0.5);
+}
+
+.pta-side-hero__cta:active { transform: translateY(0); }
+.theme--dark .pta-side-hero { box-shadow: 0 14px 34px -14px rgba(0, 0, 0, 0.7); }
+
+/* ------------------------- row lists: emblem & flush variant ----------------- */
+/* .pta-row__emblem: the date-box slot when there is no date (an icon tile).
+   .pta-rowlist--flush: rows inside a section card (the homepage widgets) —
+   hairline-separated instead of individual floating cards. */
+
+.pta-row__emblem {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 21px;
+  background: linear-gradient(135deg, #e7f2fd, #efe9fd);
+  box-shadow: inset 0 0 0 1px rgba(76, 110, 245, 0.14);
+  transition: transform 0.2s var(--pta-ease);
+}
+
+.pta-row:hover .pta-row__emblem { transform: rotate(-6deg) scale(1.06); }
+.theme--dark .pta-row__emblem { background: linear-gradient(135deg, #1e2b3c, #281f3e); box-shadow: inset 0 0 0 1px rgba(120, 150, 255, 0.18); }
+
+.pta-rowlist--flush { gap: 0; margin: 0; }
+.pta-rowlist--flush > .pta-rowwrap { animation: none; }
+.pta-rowlist--flush .pta-row { border: none; border-radius: 0; box-shadow: none; padding: 12px 15px; border-bottom: 1px solid var(--pta-line-soft); }
+.pta-rowlist--flush .pta-row::before { display: none; }
+.pta-rowlist--flush > .pta-rowwrap:last-child .pta-row { border-bottom: none; }
+.pta-rowlist--flush .pta-row:hover { transform: none; box-shadow: none; background: var(--pta-card-2); border-color: var(--pta-line-soft); }
+.pta-rowlist--flush .pta-row__title { font-size: 14.5px; }
+.pta-rowlist--flush .pta-datebox { min-width: 54px; padding: 4px 8px; }
+.pta-rowlist--flush .pta-datebox__num { font-size: 20px; }
+.pta-rowlist--flush .pta-row__side { min-width: 56px; }
+.theme--dark .pta-rowlist--flush .pta-row { border-bottom-color: var(--pta-line); }
+.theme--dark .pta-rowlist--flush .pta-row:hover { border-color: var(--pta-line); }
+
+/* Homepage widget cards: the "More >" pager hugs the list. */
+html.page--homepage .section .pta-rowlist--flush + .pager.pager-bottom { margin: 4px 0 0; padding: 8px 12px 12px; }
+
+/* --------------------------------- nav user --------------------------------- */
+/* The account trigger shows the avatar beside the (real) name. */
+
+.nav .pta-nav__avatar {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  margin: -2px 7px 0 0;
+  vertical-align: middle;
+  object-fit: cover;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9), 0 0 0 3px var(--pta-blue-line);
+}
+
+.theme--dark .nav .pta-nav__avatar { box-shadow: 0 0 0 2px #1d2126, 0 0 0 3px #3a424b; }
+.nav .nav__list--secondary .nav__item { font-weight: 500; }
+
+/* ------------------------------ homepage hero -------------------------------- */
+/* Room for the four course surfaces without the buttons wrapping awkwardly. */
+
+.pta-hero__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, auto));
+  gap: 10px;
+}
+
+.pta-hero__btn { white-space: nowrap; justify-content: center; }
+
+/* The dark pass recolors anchors at (0,1,1)+, which washed the indigo label
+   off the white pill (and the ghost pill's white). Restated per theme. */
+.theme--dark .pta-hero .pta-hero__btn,
+.theme--dark .pta-hero .pta-hero__btn:visited { background: rgba(255, 255, 255, 0.94); color: #3d4fc4; }
+.theme--dark .pta-hero .pta-hero__btn:hover { background: #fff; color: #3d4fc4; }
+.theme--dark .pta-hero .pta-hero__btn--ghost,
+.theme--dark .pta-hero .pta-hero__btn--ghost:visited { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.theme--dark .pta-hero .pta-hero__btn--ghost:hover { background: rgba(255, 255, 255, 0.24); color: #fff; }
+
+@media (max-width: 760px) {
+  .pta-hero__actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Inputs inside labels inherit the label weight (font: inherit); keep the
+   typed text regular. */
+input.textbox, textarea.textbox, select.select, .textbox, .select { font-weight: 400; }
+
+/* ------------------------------ reduced motion ------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .pta-side-hero, .pta-note, .pta-row__emblem {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------- list-page toolbars ----------------------------- */
+/* Homework, Test and Self-Learning share one header toolbar: view picker,
+   search box, filters. Inline on wide screens (the stock absolute tools
+   slot), a full-width row under the title on narrow ones. */
+
+html.page--homework_main .section__header .section__tools,
+html.page--contest_main .section__header .section__tools,
+html.page--self_learning .section__header .section__tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+html.page--homework_main .section__tools .filter-form,
+html.page--contest_main .section__tools .filter-form,
+html.page--self_learning .section__tools .filter-form,
+html.page--homework_main .section__tools form[name='filter-form'],
+html.page--contest_main .section__tools form[name='filter-form'],
+html.page--self_learning .section__tools form[name='filter-form'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+html.page--homework_main .section__tools .inline.compact.textbox,
+html.page--contest_main .section__tools .inline.compact.textbox,
+html.page--self_learning .section__tools .inline.compact.textbox { width: 190px; }
+
+@media (max-width: 960px) {
+  html.page--homework_main .section__header,
+  html.page--contest_main .section__header,
+  html.page--self_learning .section__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 10px;
+  }
+
+  html.page--homework_main .section__header .section__tools,
+  html.page--contest_main .section__header .section__tools,
+  html.page--self_learning .section__header .section__tools {
+    position: static;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  html.page--homework_main .section__tools .inline.compact.textbox,
+  html.page--contest_main .section__tools .inline.compact.textbox,
+  html.page--self_learning .section__tools .inline.compact.textbox {
+    flex: 1 1 140px;
+    width: auto;
+    min-width: 0;
+  }
+}
+
+
+/* ------------------------ knowledge points panel (.kpp) --------------------- */
+/* Moved out of partials/category.html (the panel is included by the problem
+   set, problem create and problem edit pages) so it ships once from the
+   bundle like every other shared component. Behaviour: pages/knowledge_panel.page.js */
+
+.kpp { --kpp-top: 76px; }
+.kpp__tools { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.kpp__search { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0 10px 0 30px; border: 1px solid var(--pta-line); border-radius: 999px; background: var(--pta-card-2) no-repeat 10px center / 14px 14px; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2398a2ac' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/></svg>"); font-size: 12.5px; color: var(--pta-ink); outline: none; transition: border-color .12s ease, box-shadow .12s ease; }
+.kpp__search:focus { border-color: var(--pta-violet); box-shadow: 0 0 0 3px var(--pta-violet-soft); }
+.kpp__search::placeholder { color: var(--pta-ink-faint); }
+.kpp__total { flex: 0 0 auto; font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--pta-ink-faint); background: var(--pta-card-3); border-radius: 999px; padding: 2px 8px; }
+.kpp__active { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--pta-violet-soft); border: 1px solid var(--pta-violet-line); }
+.kpp__active-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--pta-violet-text); margin-right: 2px; }
+.kpp__active .kpp__clear { margin-left: auto; font-size: 12px; color: var(--pta-violet-text); text-decoration: none; white-space: nowrap; }
+.kpp__active .kpp__clear:hover { text-decoration: underline; }
+.kpp__scroll { position: relative; }
+.kpp--expanded .kpp__scroll { max-height: calc(100vh - var(--kpp-top) - 210px); min-height: 160px; overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
+.kpp__head { display: flex; align-items: center; gap: 6px; margin: 10px 0 5px; padding-left: calc(var(--kpp-depth, 0) * 12px); }
+.kpp__head:first-child { margin-top: 2px; }
+.kpp__group { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 11px; font-weight: bold; letter-spacing: .06em; text-transform: uppercase; color: var(--pta-ink-faint); cursor: pointer; text-align: left; }
+.kpp__group::before { content: '▾'; font-size: 10px; transition: transform .15s var(--pta-ease); flex: 0 0 auto; }
+.kpp__group[aria-expanded="false"]::before { transform: rotate(-90deg); }
+.kpp__group-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kpp__group-n { font-weight: normal; opacity: .8; flex: 0 0 auto; }
+.kpp__gfilter { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; text-transform: none; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-soft); text-decoration: none; white-space: nowrap; }
+.kpp__gfilter:hover { border-color: var(--pta-violet-line); background: var(--pta-violet-soft); color: var(--pta-violet-text); }
+.kpp__gfilter--on { border-color: var(--pta-violet); background: var(--pta-violet); color: #fff; }
+.kpp__head[hidden], .kpp__chips[hidden], .kpp__chip[hidden] { display: none; }
+.kpp__chips { display: flex; flex-wrap: wrap; gap: 5px; padding-left: calc(var(--kpp-depth, 0) * 12px); }
+.kpp__chip--topic { border-style: dashed; font-weight: 600; }
+.kpp__chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 9px; border-radius: 999px; font-size: 12px; line-height: 1.5; border: 1px solid var(--pta-line); background: var(--pta-card-2); color: var(--pta-ink-soft); text-decoration: none; transition: background .12s ease, border-color .12s ease, transform .12s var(--pta-ease); }
+.kpp__chip:hover { border-color: var(--pta-violet-line); background: var(--pta-violet-soft); color: var(--pta-violet-text); transform: translateY(-1px); }
+.kpp__chip--on { border-color: var(--pta-violet); background: var(--pta-violet); color: #fff; }
+.kpp__chip--on:hover { background: var(--pta-violet); color: #fff; }
+.kpp__chip--on::after { content: '\00d7'; opacity: .8; }
+.kpp__chip--zero { opacity: .55; }
+.kpp__chip mark { background: none; color: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+.kpp__n { font-size: 10.5px; opacity: .75; }
+.kpp__foot { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 12px; }
+.kpp__foot a, .kpp__foot button { color: var(--pta-ink-faint); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-decoration: none; }
+.kpp__foot a:hover, .kpp__foot button:hover { color: var(--pta-violet-text); text-decoration: underline; }
+.kpp__foot .kpp__more { color: var(--pta-violet-text); font-weight: 600; }
+.kpp__foot .kpp__manage { margin-left: auto; }
+.kpp__none { display: none; font-size: 12.5px; color: var(--pta-ink-faint); margin: 6px 0; }
+.kpp--nomatch .kpp__none { display: block; }
+.kpp__empty { font-size: 12.5px; color: var(--pta-ink-faint); margin: 0; }
+.kpp__hint { color: var(--pta-ink-faint); }
+/* Wide screens: the panel rides along while the table scrolls. */
+@media (min-width: 1024px) { .section.side.kpp-sticky { position: sticky; top: var(--kpp-top, 76px); } }
+.pta-dark .kpp__search { background-color: var(--pta-card-2); }
+
+/* ------------------------- row lists: mobile overflow fix ------------------- */
+/* A grid track of `1fr` is minmax(auto, 1fr): the row's nowrap title made the
+   item's min-content wider than the column, so on phones every list page
+   scrolled sideways. Let the track and the item shrink. */
+.pta-rowlist { grid-template-columns: minmax(0, 1fr); }
+.pta-rowlist > .pta-rowwrap { min-width: 0; }
+.pta-chip { white-space: nowrap; }
+
+@media (max-width: 600px) {
+  /* Titles wrap instead of truncating; the delete affordance drops to the
+     card's bottom-right corner so the chips keep the full width. */
+  .pta-row__title { white-space: normal; line-height: 1.3; }
+  .pta-rowwrap:has(.list-del--card) .pta-row__main { padding-right: 24px; padding-bottom: 30px; }
+  .pta-rowwrap .list-del--card { top: auto; bottom: 8px; right: 12px; transform: none; }
+}
+
+/* ------------------------ test page: live / ready banners ------------------- */
+/* The stock flat blue / pink blocks with a yellow button become gradient
+   cards in the site palette: blue → violet for an upcoming test, crimson for
+   a live one; the chip, title and detail button follow the hero language. */
+
+html.page--contest_main .section--contest {
+  border-radius: var(--pta-radius-lg);
+  border: none;
+  color: #fff;
+  box-shadow: 0 18px 44px -18px rgba(76, 110, 245, 0.55);
+  animation: ptaFadeUp 0.32s var(--pta-ease) backwards;
+}
+
+html.page--contest_main .section--contest.ready {
+  background: linear-gradient(120deg, #1f6fd0 0%, #6b4ce0 100%);
+}
+
+html.page--contest_main .section--contest.live {
+  background: linear-gradient(120deg, #c2255c 0%, #9e2335 100%);
+  box-shadow: 0 18px 44px -18px rgba(194, 37, 92, 0.6);
+}
+
+html.page--contest_main .section--contest .status_title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+
+html.page--contest_main .section--contest h1 { font-weight: 700; letter-spacing: -0.01em; margin: 14px 0; color: #fff; }
+html.page--contest_main .section--contest .info .icon { color: rgba(255, 255, 255, 0.85); }
+html.page--contest_main .section--contest .info li { margin-right: 14px; }
+html.page--contest_main .section--contest .typo.text-center p { color: rgba(255, 255, 255, 0.92); }
+
+html.page--contest_main .section--contest .detail-button,
+html.page--contest_main .section--contest .detail-button:visited {
+  background: rgba(255, 255, 255, 0.94);
+  color: #3d4fc4;
+  font-weight: 600;
+  box-shadow: 0 8px 18px -8px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s var(--pta-ease), box-shadow 0.15s ease, background 0.15s ease;
+}
+
+html.page--contest_main .section--contest.live .detail-button,
+html.page--contest_main .section--contest.live .detail-button:visited { color: #9e2335; }
+
+html.page--contest_main .section--contest .detail-button:hover {
+  background: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.4);
+}
+
+html.page--contest_main .section--contest .detail-button:after { display: none; }
+
+/* ------------------------ problem-set tabs on phones ------------------------ */
+/* Three tabs on one row: tighter chips, equal shares. */
+@media (max-width: 600px) {
+  .ptabs { padding: 4px; gap: 4px; }
+  .ptabs__tab { flex: 1 1 0; min-width: 0; padding: 7px 8px; font-size: 12px; gap: 5px; white-space: nowrap; }
+  .ptabs__count { min-width: 20px; height: 18px; padding: 0 5px; font-size: 10.5px; }
+}
+
+/* ========================================================================== */
+/*  PASS 3b — light / dark parity audit                                       */
+/* ========================================================================== */
+
+/* Native form controls (select popups, scrollbars, date pickers) follow the
+   page theme. Upstream targets `.theme--dark html`, which never matches
+   because `theme--dark` sits on <html> itself. */
+html.theme--dark { color-scheme: dark; }
+html.theme--default { color-scheme: light; }
+
+/* Problem-page info chips that carry an icon class (`problem__tag-item icon
+   icon-book`): the icon font is forced on the whole element, so the text
+   fell back to the browser's serif default. The glyph lives on ::before —
+   keep the font there, and the site font on the text. */
+.problem__tag-item.icon { font-family: inherit !important; }
+.problem__tag-item.icon::before { font-family: 'hydro-icons' !important; }
+
+/* ------------------------- calendar view (list pages) ----------------------- */
+/* Upstream ships no dark rules for the Homework / Test / Self-Learning
+   calendar: light borders, a pale "today" tint and dark day numbers on the
+   dark canvas. Tokens for both themes; the banners keep their own palette. */
+
+.calendar__header { color: var(--pta-ink); }
+.calendar__week-title th { color: var(--pta-ink-faint); }
+.calendar__row__bg td { border-color: var(--pta-line); }
+.calendar__row__bg td.is-current-day { background: var(--pta-blue-soft); }
+.calendar__row__content th { color: var(--pta-ink-soft); }
+.calendar__row__content th.is-current-day { color: var(--pta-blue-text); font-weight: 700; }
+.theme--dark .calendar__row__bg td { border-color: var(--pta-line); }
+.theme--dark .calendar__banner { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+
+/* --------------------- stock surfaces with no dark variant -------------------- */
+
+/* Discussion / comment blocks and the profile tab strip on the dark canvas. */
+.theme--dark .dczcomments__item, .theme--dark .dczcomments__reply { border-top-color: var(--pta-line); }
+.theme--dark .section__tab-container.immersive .section__tab-header-item.selected { background: var(--pta-card); color: var(--pta-ink); }
+
+/* Hint / warn / red / yellow / blue blockquotes (typography.styl paints them
+   on #F8F8F8 with no dark counterpart). */
+.theme--dark blockquote.warn, .theme--dark blockquote.red, .theme--dark blockquote.yellow, .theme--dark blockquote.blue {
+  background: var(--pta-card-2);
+  color: var(--pta-ink-soft);
+}
+
+/* The numbox (date tiles on stock lists) and supplementary text. */
+.theme--dark .numbox__text { color: var(--pta-ink-faint); }
+.theme--dark .supplementary { color: var(--pta-ink-faint); }
+
+/* The legacy-mode banner keeps its warning semantics on the dark canvas. */
+.theme--dark .hint { background: var(--pta-warn-soft); color: var(--pta-warn-text); }
+.theme--dark .calendar__banner, .theme--dark .calendar__banner:visited, .theme--dark .calendar__banner:hover { color: #fff; }
+
+/* --------------------- problem set: page range bar & pager -------------------- */
+/* The list shows at most PROBLEM_LIST_PAGE_SIZE rows (handler/problem.ts), so
+   a range bar above the table says where this page sits in the set, and the
+   pagers at both ends get more room to be the primary navigation. */
+
+.pta-listbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 11px 15px 0;
+  font-size: 12.5px;
+  color: var(--pta-ink-soft);
+}
+
+.pta-listbar__range { font-variant-numeric: tabular-nums; }
+.pta-listbar__range b { color: var(--pta-ink); }
+.pta-listbar__label { margin-left: 4px; color: var(--pta-ink-faint); }
+.pta-listbar__pages { display: inline-flex; align-items: center; gap: 6px; }
+
+.pta-listbar__pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: var(--pta-blue-soft);
+  border: 1px solid var(--pta-blue-line);
+  color: var(--pta-blue-text);
+}
+
+.pta-listbar__pill--dim { background: var(--pta-card-3); border-color: var(--pta-line); color: var(--pta-ink-faint); font-weight: 500; }
+
+html.page--problem_main .pager.pager-top { margin: 4px 0 2px; }
+html.page--problem_main .pager.pager-bottom { margin: 6px 0 4px; }
+html.page--problem_main .pager .pager__item { padding: 6px 12px; }
+html.page--problem_main .pager .pager__item.first,
+html.page--problem_main .pager .pager__item.previous,
+html.page--problem_main .pager .pager__item.next,
+html.page--problem_main .pager .pager__item.last { font-weight: 600; }
+
+@media (max-width: 600px) {
+  .pta-listbar { padding: 10px 12px 0; }
+  .pta-listbar__pages { width: 100%; }
+}
+
+/* ----------------------- objective question builder (.oqb) ------------------ */
+/* pages/objective_builder.page.js: the form that writes an objective task's
+   Markdown and answer key for the teacher. Tokens only, so both themes hold. */
+
+.oqb {
+  margin: 4px 0 14px;
+  padding: 14px 16px 12px;
+  border: 1.5px solid var(--pta-ok-line);
+  border-radius: var(--pta-radius);
+  background: var(--pta-card);
+  box-shadow: 0 10px 24px -18px rgba(12, 166, 120, 0.5);
+  animation: ptaFadeUp 0.26s var(--pta-ease) backwards;
+}
+
+.oqb__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.oqb__title { font-weight: 700; font-size: 14px; color: var(--pta-ink); }
+.oqb__title small { font-weight: 400; color: var(--pta-ink-faint); margin-left: 6px; }
+
+.oqb__toggle,
+.oqb-reopen .oqb__btn,
+.oqb__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--pta-line);
+  background: var(--pta-card);
+  color: var(--pta-ink-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.12s var(--pta-ease);
+}
+
+.oqb__btn:hover, .oqb__toggle:hover { background: var(--pta-card-2); border-color: var(--pta-blue-line); color: var(--pta-blue-text); transform: translateY(-1px); }
+.oqb__btn[disabled] { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+.oqb__types { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 700px) { .oqb__types { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.oqb__type {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1.5px solid var(--pta-line);
+  border-radius: 12px;
+  background: var(--pta-card-2);
+  color: var(--pta-ink-soft);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease, transform 0.12s var(--pta-ease);
+}
+
+.oqb__type input { position: absolute; opacity: 0; pointer-events: none; }
+.oqb__type:hover { border-color: var(--pta-ok-line); transform: translateY(-1px); }
+.oqb__type.is-on { border-color: var(--pta-ok); background: var(--pta-ok-soft); color: var(--pta-ok-text); }
+.oqb__type-icon { font-size: 15px; line-height: 1; opacity: 0.85; margin-right: 8px; }
+.oqb__desc { margin: 8px 0 12px; font-size: 12.5px; color: var(--pta-ink-faint); }
+
+.oqb__label { display: block; margin: 8px 0 6px; font-weight: 600; font-size: 13px; color: var(--pta-ink); }
+.oqb__label small, .oqb__sub small { font-weight: 400; color: var(--pta-ink-faint); margin-left: 6px; }
+.oqb__sub { margin: 12px 0 6px; font-weight: 600; font-size: 13px; color: var(--pta-ink); }
+.oqb__stem { width: 100%; min-height: 96px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.55; resize: vertical; }
+.oqb__tools { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.oqb__muted { font-size: 12.5px; color: var(--pta-ink-faint); }
+
+.oqb__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.oqb__row.is-correct { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); }
+.oqb__row .textbox { flex: 1 1 auto; min-width: 0; margin: 0; }
+.oqb__pick { display: inline-flex; align-items: center; margin: 0; cursor: pointer; }
+.oqb__pick input { margin: 0; width: 16px; height: 16px; cursor: pointer; accent-color: var(--pta-ok); }
+
+.oqb__letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--pta-card-3);
+  color: var(--pta-ink-soft);
+  font: 700 12px/1 ui-monospace, Consolas, monospace;
+}
+
+.oqb__row.is-correct .oqb__letter { background: var(--pta-ok); color: #fff; }
+
+.oqb__del {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--pta-ink-faint);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.oqb__del:hover:not([disabled]) { background: var(--pta-bad-soft); color: var(--pta-bad-text); }
+.oqb__del[disabled] { opacity: 0.3; cursor: not-allowed; }
+
+.oqb__tf { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.oqb__tfopt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 16px;
+  border: 1.5px solid var(--pta-line);
+  border-radius: 999px;
+  background: var(--pta-card-2);
+  color: var(--pta-ink-soft);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.oqb__tfopt input { margin: 0; accent-color: var(--pta-ok); }
+.oqb__tfopt.is-on { border-color: var(--pta-ok); background: var(--pta-ok-soft); color: var(--pta-ok-text); }
+
+.oqb__foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--pta-line-soft); font-size: 12.5px; }
+.oqb__status--ok { color: var(--pta-ok-text); font-weight: 600; }
+.oqb__status--todo { color: var(--pta-warn-text); font-weight: 600; }
+
+.oqb-reopen { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+.oqb-editor-note { margin: 0 0 6px; font-size: 12px; color: var(--pta-violet-text); }
+
+.theme--dark .oqb { box-shadow: 0 10px 24px -18px rgba(0, 0, 0, 0.7); }
+.theme--dark .oqb__row.is-correct .oqb__letter { color: #0b1f17; }
+
+/* Fill-in blanks: accepted-answer lists and matching flags. */
+.oqb__blank { margin: 8px 0 10px; padding: 8px 10px 4px; border: 1px solid var(--pta-line-soft); border-radius: 12px; background: var(--pta-card-2); }
+.oqb__blank-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.oqb__blank-title { font-weight: 600; font-size: 13px; color: var(--pta-ink); flex: 1 1 auto; }
+.oqb__btn--sm { padding: 3px 10px; font-size: 12px; }
+.oqb__row--ans { padding: 3px 4px; margin: 2px 0; }
+.oqb__or { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--pta-ok-text); }
+.oqb__or--first { color: var(--pta-ink-faint); }
+.oqb__match { display: flex; gap: 10px; flex-wrap: wrap; }
+.oqb__flag { display: inline-flex; align-items: center; gap: 7px; margin: 0; padding: 7px 14px; border: 1.5px solid var(--pta-line); border-radius: 999px; background: var(--pta-card-2); color: var(--pta-ink-soft); font-weight: 600; font-size: 13px; cursor: pointer; transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease; }
+.oqb__flag input { margin: 0; accent-color: var(--pta-ok); }
+.oqb__flag small { font-weight: 400; color: var(--pta-ink-faint); font-family: ui-monospace, Consolas, monospace; }
+.oqb__flag.is-on { border-color: var(--pta-ok); background: var(--pta-ok-soft); color: var(--pta-ok-text); }
+.theme--dark .oqb__blank { background: #1d2126; border-color: var(--pta-line); }
+/* `hidden` must win over the display rules above. */
+.oqb[hidden], .oqb-reopen[hidden], .oqb-editor-note[hidden] { display: none !important; }
+
+/* --------------------------- test editor (.tep) ------------------------------ */
+/* contest_edit.html: the paper as four sections — objective sections with a
+   total each, programming tasks with their own points, a running sum. */
+
+.tep__sub { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--pta-line-soft); font-weight: 700; font-size: 14px; color: var(--pta-ink); }
+.tep__note { margin-bottom: 14px; }
+.tep__hint { font-weight: 400; color: var(--pta-ink-faint); margin-left: 6px; }
+
+.tep__sec {
+  margin: 0 0 12px;
+  padding: 12px 14px 4px;
+  border: 1px solid var(--pta-line);
+  border-radius: 12px;
+  background: var(--pta-card-2);
+}
+
+.tep__sec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tep__sec-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: var(--pta-ok-soft); color: var(--pta-ok-text); font-size: 13px; font-weight: 700; }
+.tep__sec-title { font-weight: 700; font-size: 14px; color: var(--pta-ink); flex: 1 1 auto; }
+.tep__sec-stat { font-size: 12.5px; font-weight: 600; color: var(--pta-ink-faint); font-variant-numeric: tabular-nums; }
+.tep__each { min-height: 1.5em; }
+
+.tep__sum {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--pta-line);
+  background: var(--pta-card-2);
+  color: var(--pta-ink-soft);
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.tep__sum.is-ok { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+.tep__sum.is-off { background: var(--pta-warn-soft); border-color: var(--pta-warn-line); color: var(--pta-warn-text); }
+
+.tep__scores { margin: 4px 0 14px; }
+.tep__scores-head { font-weight: 600; font-size: 13px; color: var(--pta-ink); margin: 8px 0 4px; }
+.tep__prow { display: flex; align-items: center; gap: 8px; padding: 5px 8px; margin: 3px 0; border-radius: 10px; background: var(--pta-card-2); border: 1px solid var(--pta-line-soft); }
+.tep__prow-idx { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border-radius: 8px; background: var(--pta-blue-soft); color: var(--pta-blue-text); font: 700 12px/1 ui-monospace, Consolas, monospace; }
+.tep__prow-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--pta-ink); }
+.tep__prow .tep__pscore { width: 90px; margin: 0; text-align: right; }
+.tep__prow-unit { font-size: 12px; color: var(--pta-ink-faint); }
+.theme--dark .tep__sec, .theme--dark .tep__prow { background: #1d2126; border-color: var(--pta-line); }
+
+/* ------------------------- test paper: countdown pill ----------------------- */
+/* pages/contest.page.ts on contest_paper: the remaining time, floating at the
+   top-right of the viewport (below the nav) so scrolling never hides it.
+   Amber in the last ten minutes; red, bigger and pulsing in the last five. */
+
+.paper-timer {
+  position: fixed;
+  top: 60px;
+  right: 24px;
+  z-index: 400;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: linear-gradient(120deg, #1c7ed6 0%, #6b4ce0 100%);
+  color: #fff;
+  font: 700 17px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 10px 26px -10px rgba(76, 110, 245, 0.75), 0 0 0 3px rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  transition: font-size 0.25s var(--pta-ease), padding 0.25s var(--pta-ease), background 0.3s ease;
+}
+
+.theme--dark .paper-timer { box-shadow: 0 10px 26px -10px rgba(0, 0, 0, 0.7), 0 0 0 3px rgba(29, 33, 38, 0.8); }
+.paper-timer__icon { font-size: 0.9em; }
+.paper-timer.is-warn { background: linear-gradient(120deg, #f59f00 0%, #e8590c 100%); box-shadow: 0 10px 26px -10px rgba(232, 89, 12, 0.75), 0 0 0 3px rgba(255, 255, 255, 0.6); }
+
+.paper-timer.is-danger {
+  background: linear-gradient(120deg, #e03131 0%, #c2255c 100%);
+  box-shadow: 0 14px 34px -10px rgba(224, 49, 49, 0.8), 0 0 0 4px rgba(255, 255, 255, 0.7), 0 0 0 8px rgba(224, 49, 49, 0.25);
+  font-size: 26px;
+  padding: 12px 22px;
+  animation: paperTimerPulse 1s ease-in-out infinite;
+}
+
+@keyframes paperTimerPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+@media (max-width: 600px) {
+  .paper-timer { top: 56px; right: 12px; font-size: 14px; padding: 6px 12px; }
+  .paper-timer.is-danger { font-size: 20px; padding: 9px 16px; }
+}
+
+/* Docked at the top of the problems rail (pages that have the rail). */
+.paper-timer--rail { position: static; top: auto; right: auto; width: 100%; justify-content: center; box-sizing: border-box; }
+.paper-timer--rail.is-danger { font-size: 24px; padding: 10px 16px; }
+@keyframes paperTimerPulseRail {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+.paper-timer--rail.is-danger { animation-name: paperTimerPulseRail; }
+
+/* Points of the current task next to its statement title (test pages). */
+.sl-pts-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  vertical-align: middle;
+  background: var(--pta-blue-soft);
+  border: 1px solid var(--pta-blue-line);
+  color: var(--pta-blue-text);
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+@media (prefers-reduced-motion: reduce) { .paper-timer.is-danger { animation: none; } }
+
+/* ------------------------ test paper: sections & points ---------------------- */
+/* objective_paper.html: the score overview, the three objective sections,
+   and each question's running number + points ahead of its content. */
+
+.paper-overview__body { padding: 14px 16px 14px !important; }
+.paper-overview__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.paper-overview__title { font-weight: 700; font-size: 14px; color: var(--pta-ink); }
+.paper-overview__total { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border-radius: 999px; background: var(--pta-grad-btn); color: #fff; font-size: 12.5px; font-weight: 600; }
+.paper-overview__total b { font-size: 15px; }
+.paper-overview__cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+
+.paper-overview__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--pta-line);
+  background: var(--pta-card-2);
+  color: var(--pta-ink);
+  text-decoration: none;
+  transition: border-color 0.12s ease, transform 0.15s var(--pta-ease), box-shadow 0.15s ease;
+}
+
+a.paper-overview__cell:hover { border-color: var(--pta-blue-line); transform: translateY(-1px); box-shadow: var(--pta-shadow-hover); text-decoration: none; }
+.paper-overview__icon { font-size: 15px; color: var(--pta-ok-text); font-weight: 700; }
+.paper-overview__cell--prog .paper-overview__icon { color: var(--pta-blue-text); }
+.paper-overview__name { font-weight: 700; font-size: 13px; }
+.paper-overview__meta { font-size: 12px; color: var(--pta-ink-faint); font-variant-numeric: tabular-nums; }
+.paper-overview__meta b { color: var(--pta-ink); }
+
+.paper-sec { display: flex; align-items: center; gap: 10px; margin: 26px 0 12px; padding: 0 4px; }
+.paper-sec__icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 10px; background: var(--pta-ok-soft); color: var(--pta-ok-text); font-weight: 700; font-size: 14px; box-shadow: inset 0 0 0 1px var(--pta-ok-line); }
+.paper-sec__name { font-weight: 800; font-size: 16px; color: var(--pta-ink); letter-spacing: -0.005em; }
+.paper-sec__meta { margin-left: auto; padding: 3px 11px; border-radius: 999px; background: var(--pta-card-3); border: 1px solid var(--pta-line); color: var(--pta-ink-soft); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.paper-sec__meta b { color: var(--pta-ink); }
+.paper-sec + .paper-q { margin-top: 0; }
+
+.paper-q__lead { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+.paper-q__lead .paper-q__num { margin: 0; }
+.paper-q__pts { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; background: var(--pta-blue-soft); border: 1px solid var(--pta-blue-line); color: var(--pta-blue-text); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.paper-q__lead .paper-q__status { margin-left: auto; }
+.theme--dark .paper-overview__cell { background: #1d2126; border-color: var(--pta-line); }
+
+/* Homework page (students): one card that opens the one-page homework. */
+.hw-paper-cta { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.hw-paper-cta__text { margin: 0; flex: 1 1 320px; color: var(--pta-ink-soft); font-size: 13.5px; line-height: 1.55; }
+.hw-paper-cta__btn { white-space: nowrap; }

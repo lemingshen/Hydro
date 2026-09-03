@@ -12,7 +12,9 @@ import { ContestNotLiveError, ContestNotAttendedError,
 } from '../error';
 import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
-import { ContestDetailBaseHandler } from './contest';
+import { objectiveSubKindOf } from '../lib/objective_markdown';
+import { objectiveTitleOf } from '../lib/objective_title';
+import { ContestDetailBaseHandler, paperOf } from './contest';
 import { convertPenaltyRules, validatePenaltyRules } from './homework';
 import { PROBLEM_KIND_FILTERS } from './problem';
 // Bonus tasks reuse the AI Studio's draft + verification pipeline. (Cross-file
@@ -5436,8 +5438,36 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
 /* ------------------------------------------------------------------------ */
 
 /** Kind + title for each listed problem (config arrives as a raw YAML string). */
-async function activityKinds(domainId: string, pids: number[], uid?: number) {
-    const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'pid', 'title', 'config'], true);
+/**
+ * PTA test paper layout — shared by the paper page and the rail so that
+ * numbers, sections and points agree everywhere: objective tasks in the
+ * order true/false → choice → fill-in (the editor's stored sections, else
+ * classified from content), numbered 1..n across the paper; every task's
+ * points from tdoc.score (default 100).
+ */
+async function paperLayoutOf(domainId: string, tdoc: any, pdocs: Array<{ docId: number, pid?: any, content?: any }>) {
+    const sections = await paperOf(domainId, tdoc);
+    const sectionOf: Record<number, string> = {};
+    for (const key of ['tf', 'choice', 'blank']) for (const pid of sections[key].pids) sectionOf[pid] = key;
+    const objective = pdocs.filter((p) => /^o/i.test(String(p.pid || '')));
+    for (const p of objective) if (!sectionOf[p.docId]) sectionOf[p.docId] = objectiveSubKindOf(p.content) || 'choice';
+    const order: Record<string, number> = { tf: 0, choice: 1, blank: 2 };
+    const original = pdocs.map((p) => p.docId);
+    const ordered = [...objective].sort((a, b) => (order[sectionOf[a.docId]] - order[sectionOf[b.docId]]) || (original.indexOf(a.docId) - original.indexOf(b.docId)));
+    const indexOf: Record<number, number> = {};
+    ordered.forEach((p, k) => { indexOf[p.docId] = k + 1; });
+    const pointsOf: Record<number, number> = {};
+    for (const p of pdocs) {
+        const w = tdoc?.score?.[p.docId];
+        pointsOf[p.docId] = typeof w === 'number' ? w : 100;
+    }
+    return { sectionOf, indexOf, pointsOf, ordered };
+}
+
+async function activityKinds(domainId: string, pids: number[], uid?: number, tdoc?: any) {
+    const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'pid', 'title', 'config', 'content'], true);
+    // Rail sections + running numbers + points of the test paper (see paperLayoutOf).
+    const layout = tdoc ? await paperLayoutOf(domainId, tdoc, pids.map((pid) => pdict[pid]).filter((x) => x)) : null;
     // Rail verdict states: the requester's OWN problem-status docs. The judge
     // updates these for contest/homework submissions too (handler/judge.ts
     // calls problem.updateStatus before contest.updateStatus), so accepted /
@@ -5469,7 +5499,18 @@ async function activityKinds(domainId: string, pids: number[], uid?: number) {
         else if (/^o/i.test(disp)) kind = 'objective';
         else if (/^p/i.test(disp)) kind = 'programming';
         const st = psdict[pid] || {};
-        return { pid, kind, title: p.title || String(pid), status: st.status || 0, score: st.score };
+        return {
+            pid,
+            kind,
+            title: p.title || String(pid),
+            status: st.status || 0,
+            score: st.score,
+            ...(layout ? {
+                group: kind === 'objective' ? (layout.sectionOf[pid] || 'objective') : kind,
+                index: kind === 'objective' ? layout.indexOf[pid] : undefined,
+                points: layout.pointsOf[pid],
+            } : {}),
+        };
     });
 }
 
@@ -5543,7 +5584,7 @@ class ActivityProblemKindsHandler extends Handler {
     async get({ domainId }, tid: ObjectId) {
         const tdoc = await contest.get(domainId, tid);
         if (!tdoc) throw new NotFoundError(tid);
-        this.response.body = { pids: await activityKinds(domainId, tdoc.pids || [], this.user?._id) };
+        this.response.body = { pids: await activityKinds(domainId, tdoc.pids || [], this.user?._id, tdoc) };
     }
 }
 
@@ -7078,14 +7119,40 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
             if (contest.isNotStarted(tdoc)) throw new ContestNotLiveError(domainId, tid);
             if (!this.tsdoc?.attend) throw new ContestNotAttendedError(domainId, tid);
         }
+        /*
+         * The paper is where a student STARTS the test (it replaced the
+         * tabular problem list as the entry point), so it stamps the start
+         * exactly as that page did: `startAt` opens the personal window of a
+         * flexible-duration test and is what the task pages require before
+         * they show a problem inside the container.
+         */
+        if (this.tsdoc?.attend && !this.tsdoc.startAt && contest.isOngoing(tdoc)) {
+            await contest.setStatus(domainId, tid, this.user._id, { startAt: new Date() });
+            this.tsdoc.startAt = new Date();
+        }
         const isHomework = tdoc.rule === 'homework';
         // Verdicts for objective tasks are withheld until the container
         // ends (contest.applyProjection masks the records); tell the paper
         // so it neither polls for results nor pre-colors chips from the
         // student's global problem status — either would leak.
         const resultsWithheld = !canManage && !contest.isDone(tdoc, this.tsdoc);
+        // The countdown on the paper (pages/contest.page.ts) reads the same
+        // fields the contest pages expose: the test's window and, for a
+        // flexible-duration test, the student's own start / end.
+        this.UiContext.tdoc = {
+            docId: tdoc.docId, rule: tdoc.rule, beginAt: tdoc.beginAt, endAt: tdoc.endAt, duration: tdoc.duration || 0, penaltySince: tdoc.penaltySince,
+        };
+        this.UiContext.tsdoc = this.tsdoc ? {
+            attend: this.tsdoc.attend, startAt: this.tsdoc.startAt, ...((tdoc.duration || this.tsdoc.endAt) ? { endAt: this.tsdoc.endAt } : {}),
+        } : null;
         await respondObjectivePaper(this, domainId, {
             resultsWithheld,
+            // Sections (true/false, choice, fill-in) with their points, from
+            // the test editor's layout or classified from the tasks.
+            tdoc,
+            // Attending students answer while the container is live (for
+            // homework that includes the late window); managers only look.
+            canSubmit: !canManage && !!this.tsdoc?.attend && contest.isOngoing(tdoc, this.tsdoc),
             heading: tdoc.title,
             backUrl: this.url(isHomework ? 'homework_detail' : 'contest_detail', { tid }),
             pageName: isHomework ? 'homework_paper' : 'contest_paper',
@@ -7154,27 +7221,77 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
     docIds: number[], submitUrlFor: (docId: number) => string,
     chipHrefFor: (pdoc: any) => string,
     resultsWithheld?: boolean,
+    /** Test / Homework: group the paper into sections and show points. */
+    tdoc?: any,
     /** Self-learning: the paper answers in place (per-task submit + verdicts). */
     canSubmit?: boolean,
     recordUrlFor?: (docId: number) => string,
 }) {
     const pdocs = (await Promise.all((opts.docIds || []).map((docId) => problem.get(domainId, docId))))
         .filter((x) => x);
-    const objective = pdocs.filter((pdoc) => /^o/i.test(String(pdoc.pid || '')));
+    let objective = pdocs.filter((pdoc) => /^o/i.test(String(pdoc.pid || '')));
+    /*
+     * PTA test paper: three objective sections in a fixed order — true/false,
+     * single/multiple choice, fill-in-the-blank — each with its total, and
+     * every task with its own points (tdoc.score, the weights the test editor
+     * writes). Numbering runs through the whole paper. Without a tdoc (the
+     * self-learning paper) there are no sections and no points.
+     */
+    const SECTION_META: Record<string, { name: string, icon: string }> = {
+        tf: { name: 'True / False', icon: '✓✗' },
+        choice: { name: 'Single / Multiple Choice', icon: '◉' },
+        blank: { name: 'Fill in the Blank', icon: '✎' },
+    };
+    let sectionOf: Record<number, string> = {};
+    let pointsOf: Record<number, number> = {};
+    if (opts.tdoc) {
+        const layout = await paperLayoutOf(domainId, opts.tdoc, pdocs);
+        sectionOf = layout.sectionOf;
+        pointsOf = layout.pointsOf;
+        objective = layout.ordered as any;
+    }
     const tasks = objective.map((pdoc, k) => ({
         docId: pdoc.docId,
         pid: pdoc.pid,
         index: k + 1,
+        section: sectionOf[pdoc.docId] || '',
+        points: opts.tdoc ? pointsOf[pdoc.docId] : null,
+        // Handed in already (the masked status keeps the rid while the verdict is withheld).
+        submitted: !!(psdict[pdoc.docId]?.rid),
         title: pdoc.title,
+        // Objective titles are derived from the question text
+        // (lib/objective_title); the paper renders the content right below,
+        // so such a title would only repeat the stem — the template shows
+        // the number and pid alone in that case.
+        titleFromContent: pdoc.title === objectiveTitleOf(pdoc.content || '', pdoc.title),
         submitUrl: opts.submitUrlFor(pdoc.docId),
         recordUrl: opts.recordUrlFor ? opts.recordUrlFor(pdoc.docId) : '',
         content: pdoc.content,
     }));
+    const round2 = (x: number) => Math.round(x * 100) / 100;
+    const groups = opts.tdoc
+        ? ['tf', 'choice', 'blank'].map((key) => ({
+            key,
+            name: SECTION_META[key].name,
+            icon: SECTION_META[key].icon,
+            tasks: tasks.filter((t) => t.section === key),
+            total: round2(tasks.filter((t) => t.section === key).reduce((a, t) => a + (t.points || 0), 0)),
+        })).filter((g) => g.tasks.length)
+        : [{ key: '', name: '', icon: '', tasks, total: 0 }];
+    const programmingPoints = opts.tdoc
+        ? round2(pdocs.filter((p) => !/^[os]/i.test(String(p.pid || ''))).reduce((a, p) => a + (pointsOf[p.docId] || 0), 0))
+        : 0;
+    const objectivePoints = round2(groups.reduce((a, g) => a + g.total, 0));
     h.response.template = 'objective_paper.html';
     h.response.body = {
         heading: opts.heading,
         backUrl: opts.backUrl,
         tasks,
+        groups,
+        showScores: !!opts.tdoc,
+        objectivePoints,
+        programmingPoints,
+        totalPoints: round2(objectivePoints + programmingPoints),
         canSubmit: !!opts.canSubmit,
         othersCount: pdocs.length - objective.length,
         page_name: opts.pageName,
@@ -7192,6 +7309,8 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
      * has to hop back to the detail page to move around.
      */
     const psdict = await problem.getListStatus(domainId, (h as any).user._id, pdocs.map((p) => p.docId));
+    const indexOf: Record<number, number> = {};
+    for (const t of tasks) indexOf[t.docId] = t.index;
     h.UiContext.paperRail = {
         items: pdocs.map((pdoc) => {
             const pidStr = String(pdoc.pid || '');
@@ -7199,6 +7318,13 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
             return {
                 pid: pdoc.pid || pdoc.docId,
                 kind,
+                // Rail sections (auto_scratchpad getRailGroups): the three
+                // objective types, then programming; objective chips carry
+                // the paper's running number.
+                group: kind === 'objective' ? (sectionOf[pdoc.docId] || 'objective') : kind,
+                index: kind === 'objective' ? indexOf[pdoc.docId] : undefined,
+                // Handed in while the verdict is withheld (the masked status keeps the rid).
+                submitted: !!(psdict[pdoc.docId]?.rid),
                 // While results are withheld, objective chips stay neutral:
                 // the global problem status would reveal exactly what the
                 // record mask is hiding.
@@ -7253,7 +7379,7 @@ export async function apply(ctx: Context) {
         if (!tdoc && h.args?.tid) tdoc = await contest.get(h.args.domainId, h.args.tid).catch(() => null);
         if (tdoc && Array.isArray(tdoc.pids) && tdoc.pids.length > 1) {
             try {
-                h.UiContext.tdocKinds = await activityKinds(h.args.domainId, tdoc.pids, h.user?._id);
+                h.UiContext.tdocKinds = await activityKinds(h.args.domainId, tdoc.pids, h.user?._id, tdoc);
                 logger.info('[pta-ui] rail kinds injected via %s: %d problem(s) for tid=%s', source, tdoc.pids.length, tdoc.docId);
             } catch (e) {
                 logger.warn('[pta-ui] rail kinds failed via %s: %s', source, e.message);

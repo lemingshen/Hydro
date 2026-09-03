@@ -23,6 +23,9 @@ import {
 import {
     ProblemDoc, ProblemSearchOptions, ProblemStatusDoc, RecordDoc, User,
 } from '../interface';
+import { objectiveSubKindOf } from '../lib/objective_markdown';
+import { readRawProblemConfig } from '../lib/problem_config';
+import { isObjectivePid, objectiveTitleOf } from '../lib/objective_title';
 import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
@@ -158,6 +161,16 @@ function resolveStatement(content: any, preferLang?: string): string {
     return String(c || '');
 }
 
+/**
+ * PTA UI: the problem set lists AT MOST this many problems per page — the
+ * table then fits one screen beside the knowledge panel and the pager does
+ * the navigating (the same 10-row rhythm as the rest of the course pages).
+ * The `pagination.problem` system setting keeps two jobs: it stays the
+ * ceiling for the autocomplete picker (`quick=true`, which sends its own
+ * `limit`), and a smaller admin value is still honoured for the page itself.
+ */
+export const PROBLEM_LIST_PAGE_SIZE = 10;
+
 export class ProblemMainHandler extends Handler {
     queryContext: QueryContext = {
         query: {},
@@ -181,12 +194,20 @@ export class ProblemMainHandler extends Handler {
     @param('tags', Types.Content, true)
     @param('difficultyMin', Types.UnsignedInt, true)
     @param('difficultyMax', Types.UnsignedInt, true)
+    @param('sub', Types.Range(['tf', 'choice', 'blank']), true)
     async get(
         domainId: string, page = 1, q = '', limit: number, pjax = false, quick = false, sortStrategy = 'default',
-        kind?: string, tags = '', difficultyMin = 0, difficultyMax = 0,
+        kind?: string, tags = '', difficultyMin = 0, difficultyMax = 0, sub?: string,
     ) {
         this.response.template = 'problem_main.html';
-        if (!limit || limit > this.ctx.setting.get('pagination.problem') || page > 1) limit = this.ctx.setting.get('pagination.problem');
+        const maxLimit = +this.ctx.setting.get('pagination.problem') || PROBLEM_LIST_PAGE_SIZE;
+        if (quick) {
+            // Picker rows: upstream behaviour, bounded by the system setting.
+            if (!limit || limit > maxLimit || page > 1) limit = maxLimit;
+        } else {
+            // The page (HTML and its pjax fragments): a fixed, short page.
+            limit = Math.min(PROBLEM_LIST_PAGE_SIZE, maxLimit);
+        }
         this.queryContext.query = buildQuery(this.user);
         if (sortStrategy === 'recent') this.queryContext.hint = 'basic';
         // eslint-disable-next-line ts/no-shadow
@@ -288,7 +309,7 @@ export class ProblemMainHandler extends Handler {
         let [pdocs, ppcount, pcount] = this.queryContext.fail
             ? [[], 0, 0]
             : await this.paginate(
-                problem.getMulti(domainId, query, quick ? QUICK_PROJECTION : undefined)
+                problem.getMulti(domainId, query, quick ? (sub ? [...QUICK_PROJECTION, 'content'] : QUICK_PROJECTION) : undefined)
                     .sort(sortKey).hint(this.queryContext.hint),
                 sort.length ? 1 : page, limit,
             );
@@ -305,6 +326,13 @@ export class ProblemMainHandler extends Handler {
                 (pdoc as any).kind = problemKindOf(pdoc);
                 delete (pdoc as any).config;
             }
+            // Test editor sections: keep only the objective question type asked
+            // for (true/false, choice, fill-in). Content was fetched for the
+            // classification alone and never leaves the server.
+            if (sub) {
+                pdocs = pdocs.filter((pdoc) => (pdoc as any).kind === 'objective' && objectiveSubKindOf(pdoc.content) === sub);
+                for (const pdoc of pdocs) delete (pdoc as any).content;
+            }
         }
         if (this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
             Object.assign(psdict, await problem.getListStatus(
@@ -318,6 +346,7 @@ export class ProblemMainHandler extends Handler {
                 fragments: (await Promise.all([
                     this.renderHTML('partials/problem_list.html', {
                         page, ppcount, pcount, pdocs, psdict, qs: q, sort: sortStrategy, kind,
+                        pageSize: limit, pcountRelation: this.queryContext.pcountRelation,
                     }),
                     this.renderHTML('partials/problem_stat.html', { pcount, pcountRelation: this.queryContext.pcountRelation }),
                     this.renderHTML('partials/problem_lucky.html', { qs: q }),
@@ -328,6 +357,7 @@ export class ProblemMainHandler extends Handler {
                 page,
                 pcount,
                 ppcount,
+                pageSize: limit,
                 pcountRelation: this.queryContext.pcountRelation,
                 pdocs,
                 psdict,
@@ -874,17 +904,6 @@ export class ProblemManageHandler extends ProblemDetailHandler {
 }
 
 
-/** Read the problem's raw config.yaml (verbatim fields, {} when absent). */
-async function readRawProblemConfig(pdoc: ProblemDoc): Promise<any> {
-    const f = (pdoc.data || []).find((i) => i.name.toLowerCase() === 'config.yaml');
-    if (!f) return {};
-    try {
-        const buf = await streamToBuffer(await storage.get(`problem/${pdoc.domainId}/${pdoc.docId}/testdata/${f.name}`));
-        return (yamlLoad(buf.toString()) as any) || {};
-    } catch (e) {
-        return {};
-    }
-}
 
 /**
  * Apply the teacher's allowed-language whitelist to config.yaml via
@@ -899,6 +918,68 @@ async function applyAllowLangs(pdoc: ProblemDoc, owner: number, raw: string) {
     const had = Array.isArray(cfg.langs) && cfg.langs.length;
     if (!langs.length && !had) return; // nothing to change, don't create a file
     if (langs.length) cfg.langs = langs; else delete cfg.langs;
+    await problem.addTestdata(pdoc.domainId, pdoc.docId, 'config.yaml', Buffer.from(yamlDump(cfg)), owner);
+}
+
+/**
+ * PTA UI: the objective question builder (pages/objective_builder.page.js)
+ * posts the answer key it generated as `objectiveConfig` (YAML). Validate it
+ * the way the judge reads it (hydrojudge objective: `answers[id] = [answer,
+ * score]`, answer = option letter(s) or an exact string) and write it into
+ * config.yaml, keeping whatever else the file holds. Empty = leave the key
+ * alone (the teacher edited the Markdown by hand or kept the old key).
+ */
+async function applyObjectiveConfig(pdoc: ProblemDoc, owner: number, raw: string) {
+    if (!raw || !raw.trim()) return;
+    let parsed: any;
+    try {
+        parsed = yamlLoad(raw);
+    } catch {
+        throw new ValidationError('objectiveConfig');
+    }
+    const answers = parsed?.answers;
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new ValidationError('objectiveConfig');
+    const okScore = (x: any) => {
+        const score = Math.round(+x);
+        if (!(score > 0) || score > 1000) throw new ValidationError('objectiveConfig');
+        return score;
+    };
+    const okText = (x: any) => {
+        const text = String(x ?? '').trim();
+        if (!text || text.length > 200) throw new ValidationError('objectiveConfig');
+        return text;
+    };
+    const clean: Record<string, [string | string[], number] | Record<string, number>> = {};
+    for (const [id, v] of Object.entries(answers)) {
+        if (!/^\d+(?:-\d+)?$/.test(id)) throw new ValidationError('objectiveConfig');
+        if (Array.isArray(v)) {
+            if (v.length < 2) throw new ValidationError('objectiveConfig');
+            const score = okScore(v[1]);
+            const ans = v[0];
+            if (Array.isArray(ans)) {
+                const letters = ans.map((x) => String(x).trim().toUpperCase());
+                if (!letters.length || !letters.every((x) => /^[A-Z]$/.test(x))) throw new ValidationError('objectiveConfig');
+                clean[id] = [letters, score];
+            } else clean[id] = [okText(ans), score];
+        } else if (v && typeof v === 'object') {
+            // Several accepted answers for one blank: the judge's map form
+            // `{ answer: score }` — any key that matches scores.
+            const map: Record<string, number> = {};
+            for (const [text, score] of Object.entries(v as Record<string, any>)) map[okText(text)] = okScore(score);
+            if (!Object.keys(map).length || Object.keys(map).length > 10) throw new ValidationError('objectiveConfig');
+            clean[id] = map;
+        } else throw new ValidationError('objectiveConfig');
+    }
+    if (!Object.keys(clean).length) throw new ValidationError('objectiveConfig');
+    // Task-level comparison flags for fill-in blanks (hydrojudge objective).
+    const matching: Record<string, true> = {};
+    if (parsed.matching && typeof parsed.matching === 'object') {
+        for (const flag of ['ignoreCase', 'ignoreSpaces']) if (parsed.matching[flag] === true) matching[flag] = true;
+    }
+    const cfg = await readRawProblemConfig(pdoc);
+    cfg.type = 'objective';
+    cfg.answers = clean;
+    if (Object.keys(matching).length) cfg.matching = matching; else delete cfg.matching;
     await problem.addTestdata(pdoc.domainId, pdoc.docId, 'config.yaml', Buffer.from(yamlDump(cfg)), owner);
 }
 
@@ -961,7 +1042,13 @@ export class ProblemEditHandler extends ProblemManageHandler {
     async get() {
         this.response.body.additional_file = sortFiles(this.pdoc.additional_file || []);
         this.response.body.statementLangs = this.ctx.i18n.langs(false);
-        this.response.body.allowLangs = (await readRawProblemConfig(this.pdoc)).langs || [];
+        const rawCfg = await readRawProblemConfig(this.pdoc);
+        this.response.body.allowLangs = rawCfg.langs || [];
+        // The objective question builder prefills its correct answers from here.
+        if (isObjectivePid(this.pdoc.pid) && rawCfg.answers && typeof rawCfg.answers === 'object') {
+            this.UiContext.objectiveAnswers = rawCfg.answers;
+            if (rawCfg.matching && typeof rawCfg.matching === 'object') this.UiContext.objectiveMatching = rawCfg.matching;
+        }
         this.response.body.knowledgePanel = await buildKnowledgePickPanel(this, this.args.domainId);
         this.response.template = 'problem_edit.html';
     }
@@ -974,18 +1061,23 @@ export class ProblemEditHandler extends ProblemManageHandler {
     @post('tag', Types.Content, true, null, parseCategory)
     @post('difficulty', Types.PositiveInt, (i) => +i <= 10, true)
     @post('allowLangs', Types.String, true)
+    @post('objectiveConfig', Types.Content, true)
     async post(
         domainId: string, pid: string | number, title: string, content: string,
-        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0, allowLangs = '',
+        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0, allowLangs = '', objectiveConfig = '',
     ) {
         if (typeof newPid !== 'string') newPid = `P${newPid}`;
         if (newPid !== this.pdoc.pid && await problem.get(domainId, newPid)) throw new ProblemAlreadyExistError(newPid);
         tag = await registerTags(domainId, tag ?? [], this.user._id);
+        // Objective tasks are titled by their question text; the form's title
+        // box is filled by the same rule client-side (lib/objective_title).
+        if (isObjectivePid(newPid || this.pdoc.pid)) title = objectiveTitleOf(content, title);
         const $update: Partial<ProblemDoc> = {
             title, content, pid: newPid, hidden, tag: tag ?? [], difficulty, html: false,
         };
         const pdoc = await problem.edit(domainId, this.pdoc.docId, $update);
         await applyAllowLangs(this.pdoc, this.user._id, allowLangs);
+        if (isObjectivePid(newPid || this.pdoc.pid)) await applyObjectiveConfig(await problem.get(domainId, this.pdoc.docId), this.user._id, objectiveConfig);
         this.response.redirect = this.url('problem_detail', { pid: newPid || pdoc.docId });
     }
 }
@@ -1462,16 +1554,21 @@ export class ProblemCreateHandler extends Handler {
     @post('difficulty', Types.PositiveInt, (i) => +i <= 10, true)
     @post('tag', Types.Content, true, null, parseCategory)
     @post('allowLangs', Types.String, true)
+    @post('objectiveConfig', Types.Content, true)
     async post(
         domainId: string, title: string, content: string, pid: string | number = '',
-        hidden = false, difficulty = 0, tag: string[] = [], allowLangs = '',
+        hidden = false, difficulty = 0, tag: string[] = [], allowLangs = '', objectiveConfig = '',
     ) {
         if (typeof pid !== 'string') pid = `P${pid}`;
         if (pid && await problem.get(domainId, pid)) throw new ProblemAlreadyExistError(pid);
         tag = await registerTags(domainId, tag ?? [], this.user._id);
+        // Objective tasks are titled by their question text (lib/objective_title).
+        if (isObjectivePid(pid)) title = objectiveTitleOf(content, title);
         const docId = await problem.add(domainId, pid, title, content, this.user._id, tag ?? [], { hidden, difficulty });
         const cleanLangs = [...new Set(allowLangs.split(',').map((i) => i.trim()).filter((i) => i && setting.langs[i]))].slice(0, 64);
         if (cleanLangs.length) await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ langs: cleanLangs })), this.user._id);
+        // The objective question builder's answer key → config.yaml.
+        if (isObjectivePid(pid)) await applyObjectiveConfig(await problem.get(domainId, docId), this.user._id, objectiveConfig);
         const files = new Set(Array.from(content.matchAll(/file:\/\/([\w-]+\.[a-zA-Z0-9]+)/g)).map((i) => i[1]));
         const tasks = [];
         for (const file of files) {

@@ -167,6 +167,12 @@ export default new NamedPage(['contest_paper', 'homework_paper', 'self_learning_
       return (c.id === undefined || c.id === null) ? `${c.subtaskId}` : `${c.subtaskId}-${c.id}`;
     };
 
+    // Questions handed in before this page load: while the verdict is
+    // withheld the card says so instead of looking untouched.
+    if (window.UiContext.paperWithheld) {
+      for (const t of tasks) if (t.submitted) setStatus(t.docId, 'pending', i18n('Submitted — scored after the deadline'));
+    }
+
     function markQuestions(docId, data) {
       const $sec = $(`#q-${docId}`);
       $sec.find('.paper-mk--pass, .paper-mk--fail, .paper-mk--partial')
@@ -211,7 +217,10 @@ export default new NamedPage(['contest_paper', 'homework_paper', 'self_learning_
     if (window.UiContext.paperCanSubmit) $(document).on('click', '.paper-submit', async function onPaperSubmit() {
       const docId = $(this).data('doc');
       const task = taskByDoc[docId];
-      if (!task || !task.recordUrl) return;
+      // Test / Homework papers carry no record URL: their verdicts are
+      // withheld until the deadline, so the answer is posted and confirmed
+      // without polling. Only the self-learning paper polls its record.
+      if (!task || !task.submitUrl) return;
       const m = ans[docId] || {};
       const filled = Object.keys(m).filter((k) => {
         const v = m[k];
@@ -228,6 +237,12 @@ export default new NamedPage(['contest_paper', 'homework_paper', 'self_learning_
         const res = await request.post(task.submitUrl, { lang: '_', code: yaml.dump(m) });
         setHint(docId, '');
         markQuestions(docId, null);
+        if (!task.recordUrl) {
+          setStatus(docId, 'pending', i18n('Submitted — scored after the deadline'));
+          if (window.__ptaRailMark) window.__ptaRailMark(String(task.pid), false, true);
+          Notification.success(i18n('Answer submitted.'));
+          return;
+        }
         const data = await pollRecord(task, res.rid, res.late ? (res.penalty || 0) : 0);
         if (!data) return;
         markQuestions(docId, data);

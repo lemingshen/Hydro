@@ -2,155 +2,20 @@
 {% import "components/paginator.html" as paginator with context %}
 {% block content %}
 {{ set(UiContext, 'docs', calendar) }}
-<style>
-  .sll-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
-  .sll-card { display: flex; flex-direction: column; gap: 8px; position: relative; border: 1px solid var(--pta-line); border-radius: var(--pta-radius); background: var(--pta-card); padding: 14px 16px 12px; text-decoration: none; color: inherit; box-shadow: var(--pta-shadow); transition: transform .16s var(--pta-ease), box-shadow .16s ease, border-color .16s ease; overflow: hidden; animation: ptaFadeUp .3s var(--pta-ease) backwards; }
-  .sll-card:nth-child(1) { animation-delay: .02s; }
-  .sll-card:nth-child(2) { animation-delay: .05s; }
-  .sll-card:nth-child(3) { animation-delay: .08s; }
-  .sll-card:nth-child(4) { animation-delay: .11s; }
-  .sll-card:nth-child(5) { animation-delay: .14s; }
-  .sll-card:nth-child(6) { animation-delay: .17s; }
-  .sll-card:nth-child(7) { animation-delay: .2s; }
-  .sll-card:nth-child(8) { animation-delay: .23s; }
-  .sll-card::before { content: ''; position: absolute; left: 0; top: 0; right: 0; height: 4px; background: var(--pta-grad); opacity: .9; }
-  .sll-card:hover { transform: translateY(-3px); border-color: var(--pta-blue-line); box-shadow: 0 14px 30px -12px rgba(28, 126, 214, .35); }
-  .theme--dark .sll-card:hover { box-shadow: 0 14px 30px -12px rgba(0, 0, 0, .6); }
-  .sll-card__top { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
-  .sll-card__emblem { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 11px; font-size: 19px; background: linear-gradient(135deg, #e7f2fd, #efe9fd); box-shadow: inset 0 0 0 1px rgba(76, 110, 245, .14); transition: transform .2s var(--pta-ease); }
-  .sll-card:hover .sll-card__emblem { transform: rotate(-6deg) scale(1.06); }
-  .theme--dark .sll-card__emblem { background: linear-gradient(135deg, #1e2b3c, #281f3e); box-shadow: inset 0 0 0 1px rgba(120, 150, 255, .18); }
-  .sll-card__count { font-size: 11.5px; font-weight: bold; color: var(--pta-blue-text); background: var(--pta-blue-soft); border: 1px solid var(--pta-blue-line); border-radius: 999px; padding: 2px 10px; }
-  .sll-card__title { font-size: 14.5px; font-weight: bold; color: var(--pta-ink); line-height: 1.35; word-break: break-word; transition: color .16s ease; }
-  .sll-card:hover .sll-card__title { color: var(--pta-blue-text); }
-  .sll-card__meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
-  .sll-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 999px; padding: 2px 9px; }
-  .sll-chip .time { color: inherit; }
-  .sll-card__go { position: absolute; right: 12px; bottom: 10px; font-size: 15px; color: var(--pta-ink-faint); transition: transform .16s var(--pta-ease), color .16s ease; }
-  .sll-card:hover .sll-card__go { color: var(--pta-blue-text); transform: translateX(3px); }
-  .sll-hero { position: relative; border-radius: var(--pta-radius); overflow: hidden; background: linear-gradient(135deg, #1f6fd0 0%, #6b4ce0 100%); color: #fff; padding: 18px 16px 16px; box-shadow: 0 14px 34px -14px rgba(76, 110, 245, .6); animation: ptaFadeUp .3s var(--pta-ease) .1s backwards; }
-  .sll-hero__icon { font-size: 26px; margin-bottom: 8px; }
-  .sll-hero p { color: rgba(255, 255, 255, .94); font-size: 13px; line-height: 1.6; margin: 0 0 14px; }
-  .sll-hero .button { box-shadow: 0 8px 18px -8px rgba(0, 0, 0, .35); }
-  .sll-hero .button.primary { background: rgba(255, 255, 255, .94); color: #3d4fc4; border: none; }
-  .sll-hero .button.primary:hover { background: #fff; color: #3d4fc4; filter: none; transform: translateY(-1px); }
-
-  /* ---- integration repair + polish (wrapper era) ------------------------
-     The delete affordance wrapped every card in .sll-cardwrap, which broke
-     two assumptions of the rules above: the stagger targeted
-     .sll-card:nth-child(n) (now always the wrapper's first child), and the
-     card's top-right corner — where the count chip lives — was covered by
-     the absolutely-positioned Delete button. Repairs live here, at the end
-     of the cascade, instead of rewriting the block above. */
-  .sll-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-  .sll-cardwrap { position: relative; display: flex; }
-  .sll-cardwrap .sll-card { flex: 1 1 auto; height: 100%; animation-delay: 0s; }
-  .sll-grid > .sll-cardwrap:nth-child(1) .sll-card { animation-delay: .02s; }
-  .sll-grid > .sll-cardwrap:nth-child(2) .sll-card { animation-delay: .05s; }
-  .sll-grid > .sll-cardwrap:nth-child(3) .sll-card { animation-delay: .08s; }
-  .sll-grid > .sll-cardwrap:nth-child(4) .sll-card { animation-delay: .11s; }
-  .sll-grid > .sll-cardwrap:nth-child(5) .sll-card { animation-delay: .14s; }
-  .sll-grid > .sll-cardwrap:nth-child(6) .sll-card { animation-delay: .17s; }
-  .sll-grid > .sll-cardwrap:nth-child(7) .sll-card { animation-delay: .2s; }
-  .sll-grid > .sll-cardwrap:nth-child(8) .sll-card { animation-delay: .23s; }
-  /* Delete sits in the top-right; when it is present, the card's header row
-     leaves room for it so the count chip never hides underneath. */
-  .list-del--card { top: 12px; right: 12px; margin: 0; }
-  .sll-cardwrap:has(.list-del--card) .sll-card__top { padding-right: 96px; }
-  .sll-cardwrap .list-del__btn { padding: 3px 10px; font-size: 11.5px; border-radius: 999px; background: var(--pta-card); }
-  .sll-card__title { font-size: 15px; min-height: 2.7em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .sll-card__meta { padding-right: 20px; }
-  /* ---- hero call-to-action: self-contained, immune to global .button ---- */
-  .sll-hero__cta { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 10px 14px; border-radius: 12px; background: #fff; color: #4338ca; font-weight: 700; font-size: 13.5px; text-decoration: none; box-shadow: 0 10px 22px -10px rgba(0, 0, 0, .45); transition: transform .15s var(--pta-ease), box-shadow .15s ease; }
-  .sll-hero__cta:hover { transform: translateY(-1px); color: #4338ca; box-shadow: 0 14px 26px -10px rgba(0, 0, 0, .5); }
-  .sll-hero__cta:active { transform: translateY(0); }
-.sll-phase--notStarted { background: var(--pta-blue-soft) !important; border-color: var(--pta-blue-line) !important; color: var(--pta-blue-text) !important; }
-.sll-phase--running { background: var(--pta-ok-soft) !important; border-color: var(--pta-ok-line) !important; color: var(--pta-ok-text) !important; }
-.sll-phase--extension { background: var(--pta-gold-soft) !important; border-color: var(--pta-gold-line) !important; color: var(--pta-gold-text) !important; }
-.sll-phase--ended { opacity: .8; }
-
-  /* ---- layout, final -----------------------------------------------------
-     Rows, toolbar and spacing in ONE section at the end of the cascade.
-     Written after discovering the FIFTH stylesheet era: pta_theme.page.styl
-     ships `.sll-cardwrap .sll-card { display: block }` (delete-affordance
-     era) — display:block silently disables the base rule's flex at higher
-     specificity, which is why flex-direction alone could never win. So this
-     section restates display ITSELF and every layout property rows depend
-     on: equal-or-higher specificity, later in document order, single source
-     of truth. The cascade prover in the build harness now checks BOTH files. */
-  .sll-grid { grid-template-columns: 1fr; gap: 12px; margin-top: 2px; }
-  .sll-cardwrap { width: 100%; }
-  .sll-cardwrap .sll-card {
-    display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center;
-    width: 100%; gap: 16px; padding: 13px 18px 13px 14px;
-  }
-  .sll-card__side { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; min-width: 64px; }
-  .sll-datebox { text-align: center; min-width: 60px; padding: 5px 10px; border-radius: 10px; background: var(--pta-card-3); border: 1px solid var(--pta-line-soft); }
-  .sll-datebox__num { font-size: 23px; font-weight: bold; line-height: 1.1; color: var(--pta-ink); }
-  .sll-datebox__sub { font-size: 10.5px; color: var(--pta-ink-faint); letter-spacing: .03em; }
-  .sll-card__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
-  .sll-card__titlerow { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .sll-card__titlerow .sll-card__title { font-size: 16px; min-height: 0; display: block; -webkit-line-clamp: unset; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sll-cardwrap .sll-card__meta { margin-top: 0; gap: 7px; }
-  /* Arrow rides the vertical center of the row (base put it bottom-right). */
-  .sll-cardwrap .sll-card__go { top: 50%; bottom: auto; transform: translateY(-50%); }
-  .sll-cardwrap .sll-card:hover .sll-card__go { transform: translateY(-50%) translateX(3px); }
-  /* Delete joins the right edge at the row's vertical center, before the
-     arrow; only rows that HAVE it reserve the extra clearance. */
-  .sll-cardwrap .list-del--card { top: 50%; transform: translateY(-50%); right: 44px; }
-  .sll-cardwrap .sll-card__main { padding-right: 30px; }
-  .sll-cardwrap:has(.list-del--card) .sll-card__main { padding-right: 116px; }
-  .sll-cardwrap:has(.list-del--card) .sll-card__titlerow { padding-right: 0; }
-  /* Breathing room under the list for the pager and the calendar. */
-  .section__body .pager { margin: 14px 0 2px; }
-  div[name="calendar_entry"] { margin-top: 14px; }
-
-  /* ---- header toolbar (Test-page parity) --------------------------------- */
-  .section__header { flex-wrap: wrap; row-gap: 10px; }
-  .section__tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-  .sll-viewpick { display: inline-flex; align-items: center; gap: 6px; color: var(--pta-ink-soft); font-size: 13px; }
-  .section__tools form[name="filter-form"] { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
-  .section__tools .textbox { width: 190px; }
-  @media (max-width: 900px) {
-    .section__tools { width: 100%; }
-    .section__tools .textbox { flex: 1 1 120px; width: auto; min-width: 0; }
-  }
-
-  /* ---- hero CTA -----------------------------------------------------------
-     The dark pass recolors anchors at (0,1,1)+, which washed the label to
-     pale gray over the white pill. Restated here at the cascade end, under
-     both dark-mode classes, so the indigo-on-white CTA holds in every theme. */
-  .sll-hero .sll-hero__cta,
-  .pta-dark .sll-hero .sll-hero__cta,
-  .theme--dark .sll-hero .sll-hero__cta { background: #fff; color: #4338ca; }
-  .sll-hero .sll-hero__cta:hover,
-  .pta-dark .sll-hero .sll-hero__cta:hover,
-  .theme--dark .sll-hero .sll-hero__cta:hover { background: #fff; color: #4338ca; }
-  @media (max-width: 600px) {
-    .sll-cardwrap .sll-card { gap: 10px; padding: 11px 12px; }
-    .sll-card__side { min-width: 48px; }
-    .sll-datebox { min-width: 46px; }
-    .sll-datebox__num { font-size: 18px; }
-    .sll-card__titlerow { flex-wrap: wrap; }
-    .sll-cardwrap .sll-card__main { padding-right: 24px; }
-    .sll-cardwrap:has(.list-del--card) .sll-card__main { padding-right: 92px; }
-    .sll-cardwrap .list-del--card { right: 36px; }
-  }
-</style>
 <div class="row">
   <div class="medium-9 columns">
     <div class="section">
       <div class="section__header">
         <h1 class="section__title">{{ _('self_learning') }}</h1>
         <div class="section__tools">
-          <span class="nojs--hide sll-viewpick">
+          <span class="nojs--hide">
             {{ _('View') }}:
             <select class="inline compact select" name="sl_display">
               <option value="calendar">{{ _('Calendar View') }}</option>
               <option value="list" selected>{{ _('List View') }}</option>
             </select>
           </span>
-          <form method="get" name="filter-form">
+          <form method="get" class="filter-form" name="filter-form">
             <input type="text" class="inline compact textbox" name="q" value="{{ q }}" placeholder="{{ _('Search sessions...') }}">
             <select class="inline compact select" name="phase">
               <option value=""{% if not phase %} selected{% endif %}>{{ _('All') }}</option>
@@ -160,7 +25,7 @@
               <option value="ended"{% if phase == 'ended' %} selected{% endif %}>{{ _('Ended') }}</option>
               <option value="open"{% if phase == 'open' %} selected{% endif %}>{{ _('Always open') }}</option>
             </select>
-            <button type="submit" class="compact button">{{ _('Search') }}</button>
+            <button type="submit" class="compact button hasjs--hide">{{ _('Search') }}</button>
           </form>
         </div>
       </div>
@@ -168,43 +33,49 @@
         {% if not sdocs.length %}
           {{ nothing.render('There are no self-learning sessions yet.') }}
         {% else %}
-        <div class="sll-grid">
+        {#-
+          The same row component as the Homework and Test lists
+          (pta_theme.page.styl: .pta-rowlist / .pta-row). `sll-grid` stays on
+          the list only as the hook self_learning_main.page.js toggles
+          between the list and the calendar view.
+        -#}
+        <ol class="section__list pta-rowlist sll-grid">
           {%- for sdoc in sdocs -%}
-          <div class="sll-cardwrap">
-          <a class="sll-card" href="{{ url('self_learning_detail', ssid=sdoc.docId) }}">
+          <li class="section__list__item pta-rowwrap">
+          <a class="pta-row" href="{{ url('self_learning_detail', ssid=sdoc.docId) }}">
             {#- Homework-style date tile: the deadline day, large. Sessions
                 without a schedule keep the graduation emblem instead. -#}
-            <div class="sll-card__side">
+            <div class="pta-row__side">
               {%- if sdoc.endAt -%}
-              <div class="sll-datebox">
-                <div class="sll-datebox__num">{{ datetimeSpan(sdoc.endAt, false, 'D')|safe }}</div>
-                <div class="sll-datebox__sub">{{ datetimeSpan(sdoc.endAt, false, 'YYYY-M')|safe }}</div>
+              <div class="pta-datebox">
+                <div class="pta-datebox__num">{{ datetimeSpan(sdoc.endAt, false, 'D')|safe }}</div>
+                <div class="pta-datebox__sub">{{ datetimeSpan(sdoc.endAt, false, 'YYYY-M')|safe }}</div>
               </div>
               {%- else -%}
-              <span class="sll-card__emblem">🎓</span>
+              <span class="pta-row__emblem">🎓</span>
               {%- endif -%}
             </div>
-            <div class="sll-card__main">
-            <div class="sll-card__titlerow">
-              <span class="sll-card__title">{{ sdoc.title }}</span>
-              <span class="sll-card__count">{{ sdoc.pids|length }} {{ _('Problems') }}</span>
+            <div class="pta-row__main">
+              <div class="pta-row__titlerow">
+                <span class="pta-row__title">{{ sdoc.title }}</span>
+                <span class="pta-row__count">{{ sdoc.pids|length }} {{ _('Problems') }}</span>
+              </div>
+              <div class="pta-row__meta">
+                <span class="pta-chip" title="{{ _('Owner') }}">👤 {{ udict[sdoc.owner].uname }}</span>
+                <span class="pta-chip" title="{{ _('Created') }}">🕒 {{ datetimeSpan(sdoc._id)|safe }}</span>
+                {%- set ph = sPhase[sdoc.docId|string] if sPhase else 'open' -%}
+                {%- if ph == 'notStarted' -%}
+                <span class="pta-chip pta-chip--blue">🕒 {{ _('Starts') }} {{ datetimeSpan(sdoc.beginAt)|safe }}</span>
+                {%- elif ph == 'running' -%}
+                <span class="pta-chip pta-chip--ok">⏳ {{ _('Due') }} {{ datetimeSpan(sdoc.endAt)|safe }}</span>
+                {%- elif ph == 'extension' -%}
+                <span class="pta-chip pta-chip--gold">⚠️ {{ _('Late window') }} −{{ sPenalty[sdoc.docId|string] }}%</span>
+                {%- elif ph == 'ended' -%}
+                <span class="pta-chip pta-chip--dim">🔒 {{ _('Ended') }}</span>
+                {%- endif -%}
+              </div>
             </div>
-            <div class="sll-card__meta">
-              <span class="sll-chip" title="{{ _('Owner') }}">👤 {{ udict[sdoc.owner].uname }}</span>
-              <span class="sll-chip" title="{{ _('Created') }}">🕒 {{ datetimeSpan(sdoc._id)|safe }}</span>
-              {%- set ph = sPhase[sdoc.docId|string] if sPhase else 'open' -%}
-              {%- if ph == 'notStarted' -%}
-              <span class="sll-chip sll-phase sll-phase--notStarted">🕒 {{ _('Starts') }} {{ datetimeSpan(sdoc.beginAt)|safe }}</span>
-              {%- elif ph == 'running' -%}
-              <span class="sll-chip sll-phase sll-phase--running">⏳ {{ _('Due') }} {{ datetimeSpan(sdoc.endAt)|safe }}</span>
-              {%- elif ph == 'extension' -%}
-              <span class="sll-chip sll-phase sll-phase--extension">⚠️ {{ _('Late window') }} −{{ sPenalty[sdoc.docId|string] }}%</span>
-              {%- elif ph == 'ended' -%}
-              <span class="sll-chip sll-phase sll-phase--ended">🔒 {{ _('Ended') }}</span>
-              {%- endif -%}
-            </div>
-            </div>
-            <span class="sll-card__go">→</span>
+            <span class="pta-row__go">→</span>
           </a>
             {% if sdoc.owner == handler.user._id or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) %}
             <form class="list-del list-del--card" method="post" action="{{ url('self_learning_edit', ssid=sdoc.docId) }}" onsubmit="return confirm('{{ _('Permanently delete this? Submissions already made are kept, but the item itself cannot be recovered.') }}')">
@@ -212,9 +83,9 @@
               <button type="submit" class="list-del__btn">🗑 {{ _('Delete') }}</button>
             </form>
             {% endif %}
-          </div>
+          </li>
           {%- endfor -%}
-        </div>
+        </ol>
         {{ paginator.render(page, spcount, add_qs=qs) }}
         <div name="calendar_entry"></div>
         {% endif %}
@@ -222,11 +93,11 @@
     </div>
   </div>
   <div class="medium-3 columns">
-    <div class="sll-hero">
-      <div class="sll-hero__icon">🤖✨</div>
+    <div class="pta-side-hero">
+      <div class="pta-side-hero__icon">🤖✨</div>
       <p>{{ _('Practice problems at your own pace. When a submission is not accepted, an AI Socratic tutor will guide you to find and fix the mistake yourself.') }}</p>
       {% if canCreate %}
-      <a href="{{ url('self_learning_create') }}" class="sll-hero__cta">＋ {{ _('Create Self-Learning Session') }}</a>
+      <a href="{{ url('self_learning_create') }}" class="pta-side-hero__cta">＋ {{ _('Create Self-Learning Session') }}</a>
       {% endif %}
     </div>
   </div>
