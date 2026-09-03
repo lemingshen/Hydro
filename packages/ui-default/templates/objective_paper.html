@@ -80,15 +80,31 @@
         </div>
         {{ t.content|content(handler.user.viewLang|default(''), false)|safe }}
       </div>
-      {%- if canSubmit -%}
+      {%- if canSubmit and not showScores -%}
       <div class="section__body paper-q__foot">
         <button type="button" class="rounded primary button paper-submit" data-doc="{{ t.docId }}">📨 {{ _('Submit this answer') }}</button>
         <span class="paper-q__hint" data-hint-for="{{ t.docId }}"></span>
       </div>
+      {%- elif canSubmit -%}
+      <div class="paper-q__hintrow"><span class="paper-q__hint" data-hint-for="{{ t.docId }}"></span></div>
       {%- endif -%}
     </div>
     {%- endfor -%}
     {%- endfor -%}
   </div>
 </div>
+{%- if canSubmit and showScores and tasks.length -%}
+{#-
+  Test / Homework: ONE button hands in every answered question of the paper.
+  Answers are drafted locally as the student types; "Save All" submits each
+  answered task, whose verdict stays withheld until the deadline
+  (pages/objective_paper.page.js).
+-#}
+<div class="paper-savebar" id="paper-savebar">
+  <div class="paper-savebar__inner">
+    <span class="paper-savebar__text" id="paper-savebar-text">{{ _('Answers are drafted on this device; save to hand them in.') }}</span>
+    <button type="button" class="rounded primary button paper-save-all" id="paper-save-all">💾 {{ _('Save All') }}</button>
+  </div>
+</div>
+{%- endif -%}
 {% endblock %}

@@ -7114,7 +7114,8 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
     @param('tid', Types.ObjectId)
     async get(domainId: string, tid: ObjectId) {
         const tdoc = this.tdoc!;
-        const canManage = this.user.own(tdoc) || this.user.hasPerm(PERM.PERM_EDIT_CONTEST) || this.user.role === 'root';
+        const canManage = this.user.own(tdoc) || this.user.role === 'root'
+            || this.user.hasPerm(tdoc.rule === 'homework' ? PERM.PERM_EDIT_HOMEWORK : PERM.PERM_EDIT_CONTEST);
         if (!canManage) {
             if (contest.isNotStarted(tdoc)) throw new ContestNotLiveError(domainId, tid);
             if (!this.tsdoc?.attend) throw new ContestNotAttendedError(domainId, tid);
@@ -7142,6 +7143,7 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
         this.UiContext.tdoc = {
             docId: tdoc.docId, rule: tdoc.rule, beginAt: tdoc.beginAt, endAt: tdoc.endAt, duration: tdoc.duration || 0, penaltySince: tdoc.penaltySince,
         };
+        this.UiContext.canManageContest = canManage;
         this.UiContext.tsdoc = this.tsdoc ? {
             attend: this.tsdoc.attend, startAt: this.tsdoc.startAt, ...((tdoc.duration || this.tsdoc.endAt) ? { endAt: this.tsdoc.endAt } : {}),
         } : null;
@@ -7153,6 +7155,7 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
             // Attending students answer while the container is live (for
             // homework that includes the late window); managers only look.
             canSubmit: !canManage && !!this.tsdoc?.attend && contest.isOngoing(tdoc, this.tsdoc),
+            submittedOf: (docId) => !!(this.tsdoc?.detail?.[docId]?.rid || (this.tsdoc?.journal || []).some((j) => j.pid === docId)),
             heading: tdoc.title,
             backUrl: this.url(isHomework ? 'homework_detail' : 'contest_detail', { tid }),
             pageName: isHomework ? 'homework_paper' : 'contest_paper',
@@ -7223,6 +7226,8 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
     resultsWithheld?: boolean,
     /** Test / Homework: group the paper into sections and show points. */
     tdoc?: any,
+    /** Test / Homework: whether the viewer already handed in an answer for the task. */
+    submittedOf?: (docId: number) => boolean,
     /** Self-learning: the paper answers in place (per-task submit + verdicts). */
     canSubmit?: boolean,
     recordUrlFor?: (docId: number) => string,
@@ -7256,8 +7261,9 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
         index: k + 1,
         section: sectionOf[pdoc.docId] || '',
         points: opts.tdoc ? pointsOf[pdoc.docId] : null,
-        // Handed in already (the masked status keeps the rid while the verdict is withheld).
-        submitted: !!(psdict[pdoc.docId]?.rid),
+        // Handed in already: the student's contest status keeps the record
+        // id even while the verdict is withheld (Test / Homework papers).
+        submitted: !!opts.submittedOf?.(pdoc.docId),
         title: pdoc.title,
         // Objective titles are derived from the question text
         // (lib/objective_title); the paper renders the content right below,
@@ -7323,8 +7329,8 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
                 // the paper's running number.
                 group: kind === 'objective' ? (sectionOf[pdoc.docId] || 'objective') : kind,
                 index: kind === 'objective' ? indexOf[pdoc.docId] : undefined,
-                // Handed in while the verdict is withheld (the masked status keeps the rid).
-                submitted: !!(psdict[pdoc.docId]?.rid),
+                // Handed in while the verdict is withheld (see tasks above).
+                submitted: !!opts.submittedOf?.(pdoc.docId),
                 // While results are withheld, objective chips stay neutral:
                 // the global problem status would reveal exactly what the
                 // record mask is hiding.

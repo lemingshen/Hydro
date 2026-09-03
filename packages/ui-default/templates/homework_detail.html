@@ -14,6 +14,46 @@
         {{ tdoc['content']|markdown|safe }}
       </div>
     </div>
+    {%- if myResults -%}
+    {#- PTA: after the deadline the attendee sees the detailed scores here —
+        the same sections and points as the paper, with the points earned. -#}
+    <div class="section pta-results">
+      <div class="section__header">
+        <h1 class="section__title">📊 {{ _('Your results') }}</h1>
+        <div class="section__tools"><span class="pta-results__total"><b>{{ myResults.earned }}</b> / {{ myResults.total }} {{ _('pts') }}</span></div>
+      </div>
+      <div class="section__body">
+        {%- for g in myResults.groups -%}
+        <div class="pta-results__group">
+          <div class="pta-results__ghead">
+            <span class="pta-results__gicon">{{ g.icon }}</span>
+            <span class="pta-results__gname">{{ _(g.name) }}</span>
+            <span class="pta-results__gscore"><b>{{ g.earned }}</b> / {{ g.total }} {{ _('pts') }}</span>
+          </div>
+          <table class="data-table pta-results__table">
+            <colgroup><col class="col--idx"><col class="col--task"><col class="col--status"><col class="col--pts"></colgroup>
+            <tbody>
+            {%- for t in g.tasks -%}
+              <tr class="{% if t.status == 1 %}is-pass{% elif t.submitted %}is-fail{% else %}is-none{% endif %}">
+                <td class="col--idx"><span class="pta-results__idx">{{ t.index }}</span></td>
+                <td class="col--task">{% if g.key == 'prog' %}<a href="{{ url('problem_detail', pid=t.docId, query={tid:tdoc.docId}) }}">{{ t.title }}</a>{% else %}{{ t.title }}{% endif %}</td>
+                <td class="col--status">
+                  {%- if not t.submitted -%}<span class="pta-chip pta-chip--dim">{{ _('Not answered') }}</span>
+                  {%- elif t.status == 1 -%}<span class="pta-chip pta-chip--ok">✓ {{ _('Correct') if g.key != 'prog' else _('Accepted') }}</span>
+                  {%- elif t.score -%}<span class="pta-chip pta-chip--gold">{{ _('Partial') }} · {{ t.score }}%</span>
+                  {%- else -%}<span class="pta-chip pta-chip--bad">✗ {{ _('Incorrect') if g.key != 'prog' else _('Not accepted') }}</span>
+                  {%- endif -%}
+                </td>
+                <td class="col--pts"><b>{{ t.earned }}</b> <span class="pta-results__of">/ {{ t.points }}</span>{% if t.late %} <span class="pta-chip pta-chip--gold" title="{{ _('Late submission — penalty applied') }}">{{ _('late') }}</span>{% endif %}</td>
+              </tr>
+            {%- endfor -%}
+            </tbody>
+          </table>
+        </div>
+        {%- endfor -%}
+      </div>
+    </div>
+    {%- endif -%}
     {%- set _hwManager = handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) -%}
     {%- if pdict and not _hwManager -%}
     {#- PTA: students work on the one-page paper (objective sections inline,

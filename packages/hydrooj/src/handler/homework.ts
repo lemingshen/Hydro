@@ -20,7 +20,7 @@ import {
     Handler, param, post, Types,
 } from '../service/server';
 import {
-    ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, evaluateContainerResults, hasObjectiveTask, paperOf, parsePaper, resolveAllowedLangs,
+    ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, evaluateContainerResults, hasObjectiveTask, myResultsOf, paperOf, parsePaper, resolveAllowedLangs,
 } from './contest';
 
 export const validatePenaltyRules = (input: string) => {
@@ -111,6 +111,8 @@ class HomeworkDetailHandler extends Handler {
         this.response.body = {
             tdoc: this.tdoc, tsdoc, udict, ddocs, page, dpcount, dcount,
         };
+        // PTA: the client-side deadline hand-off never moves managers.
+        this.UiContext.canManageContest = this.user.own(this.tdoc) || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK);
         this.response.body.tdoc.content = this.response.body.tdoc.content
             .replace(/\(file:\/\//g, `(./${this.tdoc.docId}/file/public/`)
             .replace(/="file:\/\//g, `="./${this.tdoc.docId}/file/public/`);
@@ -137,6 +139,17 @@ class HomeworkDetailHandler extends Handler {
             }
         }
         Object.assign(this.response.body, { pdict, psdict, rdict });
+        // PTA: after the hard deadline the attendee's detailed scores
+        // (homework_detail.html "Your results"), evaluating first if the
+        // end-of-container task has not run yet.
+        if (tsdoc?.attend && contest.isDone(this.tdoc, tsdoc)) {
+            let mine = tsdoc;
+            if (!(this.tdoc as any).objectiveSynced) {
+                await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
+                mine = await contest.getStatus(domainId, tid, this.user._id) || tsdoc;
+            }
+            this.response.body.myResults = await myResultsOf(domainId, this.tdoc, mine.detail || {});
+        }
     }
 
     async postAttend({ domainId }) {

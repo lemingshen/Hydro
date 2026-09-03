@@ -1,6 +1,7 @@
 import $ from 'jquery';
 import { formatSeconds } from '@hydrooj/utils/lib/common';
 import NProgress from 'nprogress';
+import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { addSpeculationRules, i18n, tpl } from 'vj/utils';
 
@@ -16,7 +17,7 @@ function formatLeft(seconds: number) {
 export default new NamedPage([
   'contest_detail', 'contest_problemlist', 'contest_detail_problem', 'contest_scoreboard', 'contest_paper',
   'homework_detail', 'homework_detail_problem', 'homework_paper',
-], () => {
+], (pagename) => {
   if (!UiContext.tdoc) return;
   const isHomework = UiContext.tdoc.rule === 'homework' || !!UiContext.tdoc.penaltySince;
   const beginAt = new Date((UiContext.tdoc.duration && UiContext.tsdoc?.startAt) || UiContext.tdoc.beginAt).getTime();
@@ -35,6 +36,28 @@ export default new NamedPage([
    */
   const $pill = $(tpl`<span class="paper-timer" role="timer" aria-live="off"><span class="paper-timer__icon">⏱</span><span class="paper-timer__text"></span></span>`).appendTo(document.body);
   let docked = false;
+  /*
+   * PTA: when the deadline passes while a student is working, the page is
+   * sent back to the test's own page, which now shows the detailed scores
+   * (contest_detail "Your results"); on that page a reload reveals them.
+   * Managers are never moved. Only a transition observed live triggers it —
+   * a page opened after the end stays where it is (review).
+   */
+  const isManager = !!(UiContext.canManageContest);
+  const containerUrl = (() => {
+    const base = window.location.pathname.replace(/\/(contest|homework)\/[^/]+.*$/, '').replace(/\/p\/.*$/, '');
+    return `${base}/${isHomework ? 'homework' : 'contest'}/${UiContext.tdoc.docId}`;
+  })();
+  let wasLive = false;
+  function onDeadline() {
+    if (isManager) return;
+    if (pagename === 'contest_detail' || pagename === 'homework_detail') {
+      window.location.reload();
+      return;
+    }
+    Notification.info(i18n('Time is up — returning to the test page.'));
+    setTimeout(() => { window.location.href = containerUrl; }, 1200);
+  }
   function dock() {
     const slot = document.getElementById('sl-rail-timer');
     const railOpen = !!slot && $('#sl-rail').is(':visible');
@@ -50,6 +73,11 @@ export default new NamedPage([
     const now = Date.now();
     contestTimer.hide();
     dock();
+    const live = isHomework ? (now >= beginAt && now < endAt) : (beginAt <= now && now <= endAt);
+    if (wasLive && !live) {
+      wasLive = false;
+      onDeadline();
+    } else if (live) wasLive = true;
     if (isHomework) {
       /*
        * Homework: the deadline (penaltySince) first — "Due in …" — then the

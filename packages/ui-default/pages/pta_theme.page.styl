@@ -2954,3 +2954,49 @@ a.paper-overview__cell:hover { border-color: var(--pta-blue-line); transform: tr
 .hw-paper-cta { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .hw-paper-cta__text { margin: 0; flex: 1 1 320px; color: var(--pta-ink-soft); font-size: 13.5px; line-height: 1.55; }
 .hw-paper-cta__btn { white-space: nowrap; }
+
+/* ---------------------- test paper: the "Save All" bar ---------------------- */
+/* objective_paper.html on Test / Homework papers: one fixed bar at the bottom
+   of the viewport hands in every answered question. */
+
+.paper-savebar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 390;
+  padding: 10px 24px 12px;
+  background: var(--pta-card);
+  border-top: 1px solid var(--pta-line);
+  box-shadow: 0 -12px 30px -18px rgba(15, 23, 42, 0.35);
+}
+
+.paper-savebar__inner { display: flex; align-items: center; justify-content: flex-end; gap: 16px; max-width: 1300px; margin: 0 auto; padding-right: 76px; /* clear of the floating search button */ }
+.paper-savebar__text { font-size: 13px; color: var(--pta-ink-soft); font-variant-numeric: tabular-nums; }
+.paper-save-all { min-width: 160px; font-weight: 700; }
+.paper-save-all.is-busy { opacity: 0.7; cursor: progress; }
+html.page--contest_paper .main, html.page--homework_paper .main { padding-bottom: 96px; }
+.paper-q__hintrow { padding: 0 15px 10px; }
+.paper-q__hintrow:empty { display: none; }
+.theme--dark .paper-savebar { background: #1d2126; border-top-color: var(--pta-line); box-shadow: 0 -12px 30px -18px rgba(0, 0, 0, 0.7); }
+@media (max-width: 600px) { .paper-savebar { padding: 8px 12px 10px; } .paper-savebar__inner { justify-content: space-between; gap: 10px; padding-right: 64px; } .paper-save-all { min-width: 0; } }
+
+/* ------------------------- test page: "Your results" ------------------------ */
+.pta-results__total { display: inline-flex; align-items: center; gap: 5px; padding: 5px 14px; border-radius: 999px; background: var(--pta-grad-btn); color: #fff; font-size: 13px; font-weight: 600; }
+.pta-results__total b { font-size: 17px; }
+.pta-results__group { margin: 0 0 16px; }
+.pta-results__ghead { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+.pta-results__gicon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 9px; background: var(--pta-ok-soft); color: var(--pta-ok-text); font-weight: 700; font-size: 13px; }
+.pta-results__gname { font-weight: 700; font-size: 14px; color: var(--pta-ink); flex: 1 1 auto; }
+.pta-results__gscore { font-size: 12.5px; color: var(--pta-ink-soft); font-variant-numeric: tabular-nums; }
+.pta-results__gscore b { color: var(--pta-ink); font-size: 14px; }
+.pta-results__table { border-radius: 12px; overflow: hidden; border: 1px solid var(--pta-line); }
+.pta-results__table td { padding: 8px 12px; vertical-align: middle; }
+.pta-results__table .col--idx { width: 48px; }
+.pta-results__table .col--status { width: 190px; }
+.pta-results__table .col--pts { width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+.pta-results__idx { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 6px; border-radius: 8px; background: var(--pta-card-3); color: var(--pta-ink-soft); font: 700 12px/1 ui-monospace, Consolas, monospace; }
+.pta-results__table tr.is-pass .pta-results__idx { background: var(--pta-ok); color: #fff; }
+.pta-results__table tr.is-fail .pta-results__idx { background: var(--pta-bad-soft); color: var(--pta-bad-text); }
+.pta-results__of { color: var(--pta-ink-faint); }
+.theme--dark .pta-results__table { border-color: var(--pta-line); }

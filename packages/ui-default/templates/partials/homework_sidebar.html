@@ -90,6 +90,9 @@
   <div class="section__body typo">
     <dl class="large horizontal">
       <dt>{{ _('Status') }}</dt><dd>{{ _(model.contest.statusText(tdoc)) }}</dd>
+      {%- if myResults -%}
+      <dt>{{ _('Your score') }}</dt><dd><span class="pta-chip pta-chip--ok"><b>{{ myResults.earned }}</b>&nbsp;/ {{ myResults.total }} {{ _('pts') }}</span></dd>
+      {%- endif -%}
       <dt>{{ _('Problem') }}</dt><dd>{{ tdoc['pids']|length }}</dd>
       {#- 🌐 the homework's allowed submission languages -#}
       <dt>{{ _('Languages') }}</dt><dd title="{{ _('Every programming problem here can only be submitted in these languages.') if (tdoc.langs and tdoc.langs.length) else _('Every judge language is allowed.') }}">{% if tdoc.langs and tdoc.langs.length %}{% for l in tdoc.langs %}{{ model.setting.langs[l].display if model.setting.langs[l] else l }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ _('any') }}{% endif %}</dd>

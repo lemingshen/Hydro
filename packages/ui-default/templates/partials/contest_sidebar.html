@@ -144,6 +144,11 @@
           ({{ _('Attended') }})
         {% endif %}
       </dd>
+      {%- if myResults -%}
+      {#- PTA: after the end the attendee's total sits next to the status. -#}
+      <dt>{{ _('Your score') }}</dt>
+      <dd><span class="pta-chip pta-chip--ok"><b>{{ myResults.earned }}</b>&nbsp;/ {{ myResults.total }} {{ _('pts') }}</span></dd>
+      {%- endif -%}
       <dt>{{ _('Problem') }}</dt><dd>{{ tdoc.pids.length }}</dd>
       {#- 🌐 the test's allowed submission languages -#}
       <dt>{{ _('Languages') }}</dt><dd title="{{ _('Every programming problem here can only be submitted in these languages.') if (tdoc.langs and tdoc.langs.length) else _('Every judge language is allowed.') }}">{% if tdoc.langs and tdoc.langs.length %}{% for l in tdoc.langs %}{{ model.setting.langs[l].display if model.setting.langs[l] else l }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ _('any') }}{% endif %}</dd>

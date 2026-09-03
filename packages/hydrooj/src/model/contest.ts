@@ -654,7 +654,8 @@ const homework = buildContestRule({
         }
 
         function penaltyScore(jdoc) {
-            const rate = (tdoc.score?.[jdoc.pid] || 100) / 100;
+            // PTA: the task's points come from the homework editor verbatim (0 means 0).
+            const rate = (tdoc.score?.[jdoc.pid] ?? 100) / 100;
             const exceedSeconds = Math.floor(
                 (jdoc.rid.getTimestamp().getTime() - tdoc.penaltySince.getTime()) / 1000,
             );

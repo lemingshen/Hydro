@@ -173,6 +173,160 @@ export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
     await syncObjectiveStatus(domainId, tdoc);
 }
 
+/* ------------------------------------------------------------------ */
+/*  PTA test editor: the paper as four sections                        */
+/* ------------------------------------------------------------------ */
+const PAPER_SECTIONS = ['tf', 'choice', 'blank'] as const;
+export interface PaperSections {
+    tf: { total: number, pids: number[] };
+    choice: { total: number, pids: number[] };
+    blank: { total: number, pids: number[] };
+    prog: { pids: number[], scores: Record<number, number> };
+}
+
+const round2 = (x: number) => Math.round(x * 100) / 100;
+
+/**
+ * The stored sections of a test, or — for a test saved before this editor
+ * existed — its problems classified by kind and question type, with the
+ * stored per-problem weights (default 100 each) as the points.
+ */
+export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSections> {
+    const empty: PaperSections = { tf: { total: 0, pids: [] }, choice: { total: 0, pids: [] }, blank: { total: 0, pids: [] }, prog: { pids: [], scores: {} } };
+    if (!tdoc) return empty;
+    const stored = (tdoc as any).sections;
+    if (stored && typeof stored === 'object') {
+        for (const k of PAPER_SECTIONS) {
+            empty[k].total = +stored[k]?.total || 0;
+            empty[k].pids = (stored[k]?.pids || []).map((x) => +x).filter((x) => x);
+        }
+        empty.prog.pids = (stored.prog?.pids || []).map((x) => +x).filter((x) => x);
+        empty.prog.scores = stored.prog?.scores || {};
+        return empty;
+    }
+    const pdict = await problem.getList(domainId, tdoc.pids, true, false, ['docId', 'pid', 'content'] as any, true);
+    for (const pid of tdoc.pids) {
+        const pdoc = pdict[pid];
+        const weight = tdoc.score?.[pid] ?? 100;
+        if (pdoc && /^o/i.test(String(pdoc.pid || ''))) {
+            const sub = objectiveSubKindOf(pdoc.content) || 'choice';
+            empty[sub].pids.push(pid);
+            empty[sub].total = round2(empty[sub].total + weight);
+        } else {
+            empty.prog.pids.push(pid);
+            empty.prog.scores[pid] = weight;
+        }
+    }
+    return empty;
+}
+
+/**
+ * Validate the editor's paper JSON and turn it into the problem order, the
+ * per-problem weights and the sections to store. Objective sections split
+ * their total evenly over their tasks (10 points over 5 true/false tasks =
+ * 2 each); programming tasks carry the points the teacher typed.
+ */
+export async function parsePaper(domainId: string, raw: string, viewer: any) {
+    let j: any;
+    try {
+        j = JSON.parse(raw);
+    } catch {
+        throw new ValidationError('paper');
+    }
+    if (!j || typeof j !== 'object') throw new ValidationError('paper');
+    const ids = (v: any) => [...new Set((Array.isArray(v) ? v : String(v || '').split(',')).map((x) => +x).filter((x) => Number.isInteger(x) && x > 0))];
+    const points = (v: any) => {
+        const n = Math.round((+v || 0) * 100) / 100;
+        if (!(n >= 0) || n > 1000) throw new ValidationError('paper');
+        return n;
+    };
+    const sections: PaperSections = {
+        tf: { total: points(j.tf?.total), pids: ids(j.tf?.pids) },
+        choice: { total: points(j.choice?.total), pids: ids(j.choice?.pids) },
+        blank: { total: points(j.blank?.total), pids: ids(j.blank?.pids) },
+        prog: { pids: ids(j.prog?.pids), scores: {} },
+    };
+    for (const pid of sections.prog.pids) sections.prog.scores[pid] = points(j.prog?.scores?.[pid]);
+    const all = [...sections.tf.pids, ...sections.choice.pids, ...sections.blank.pids, ...sections.prog.pids];
+    const pids = [...new Set(all)];
+    const pdict = await problem.getList(domainId, pids, viewer.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || viewer._id, false, ['docId', 'pid'] as any, true);
+    for (const pid of pids) if (!pdict[pid]) throw new ValidationError('paper', `problem ${pid}`);
+    // Kind guard: objective sections hold O-tasks, the programming section P-tasks.
+    for (const k of PAPER_SECTIONS) for (const pid of sections[k].pids) if (!/^o/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not an objective task`);
+    for (const pid of sections.prog.pids) if (/^[os]/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a programming task`);
+    const score: Record<number, number> = {};
+    for (const k of PAPER_SECTIONS) {
+        const n = sections[k].pids.length;
+        for (const pid of sections[k].pids) score[pid] = n ? round2(sections[k].total / n) : 0;
+    }
+    for (const pid of sections.prog.pids) score[pid] = sections.prog.scores[pid];
+    return { pids, score, sections };
+}
+
+/**
+ * PTA: the student's detailed results, shown on the test page once the
+ * container has ended (contest_detail.html "Your results"): the objective
+ * sections and the programming tasks with, per task, the points it is
+ * worth and the points earned (weight × judged score / 100), plus totals.
+ */
+export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<number, any>) {
+    const sections = await paperOf(domainId, tdoc);
+    const pdict = await problem.getList(domainId, tdoc.pids, true, false, ['docId', 'pid', 'title', 'content'] as any, true);
+    const sectionOf: Record<number, string> = {};
+    for (const key of PAPER_SECTIONS) for (const pid of sections[key].pids) sectionOf[pid] = key;
+    for (const pid of tdoc.pids) {
+        const pdoc = pdict[pid];
+        if (pdoc && /^o/i.test(String(pdoc.pid || '')) && !sectionOf[pid]) sectionOf[pid] = objectiveSubKindOf(pdoc.content) || 'choice';
+    }
+    const weightOf = (pid: number) => (typeof tdoc.score?.[pid] === 'number' ? tdoc.score[pid] : 100);
+    const rowOf = (pid: number, index: number) => {
+        const d = detail?.[pid];
+        const judged = !!d?.rid && d.status !== STATUS.STATUS_WAITING;
+        const score = judged ? (d.score || 0) : 0;
+        const full = (weightOf(pid) * score) / 100;
+        // Homework: the rule stores the penalised, weighted points per task
+        // (penaltyScore) — that is what the scoreboard totals, so it is what
+        // the student sees; a reduced value is flagged as late.
+        const earned = judged && typeof d.penaltyScore === 'number' ? d.penaltyScore : full;
+        return {
+            docId: pid,
+            pid: pdict[pid]?.pid,
+            title: pdict[pid]?.title || String(pid),
+            index,
+            points: round2(weightOf(pid)),
+            earned: round2(earned),
+            late: judged && earned < full - 1e-9,
+            score: judged ? score : null,
+            status: d?.status ?? null,
+            submitted: !!d?.rid,
+            rid: d?.rid,
+        };
+    };
+    const meta: Record<string, { name: string, icon: string }> = {
+        tf: { name: 'True / False', icon: '✓✗' }, choice: { name: 'Single / Multiple Choice', icon: '◉' }, blank: { name: 'Fill in the Blank', icon: '✎' },
+    };
+    let n = 0;
+    const objective = PAPER_SECTIONS.map((key) => {
+        const pids = tdoc.pids.filter((pid) => sectionOf[pid] === key);
+        const tasks = pids.map((pid) => rowOf(pid, ++n));
+        return {
+            key, name: meta[key].name, icon: meta[key].icon, tasks,
+            total: round2(tasks.reduce((a, t) => a + t.points, 0)), earned: round2(tasks.reduce((a, t) => a + t.earned, 0)),
+        };
+    }).filter((g) => g.tasks.length);
+    const progPids = tdoc.pids.filter((pid) => !sectionOf[pid] && !/^s/i.test(String(pdict[pid]?.pid || '')));
+    const programming = progPids.map((pid, i) => rowOf(pid, i + 1));
+    const groups = [...objective, ...(programming.length ? [{
+        key: 'prog', name: 'Programming', icon: '⌨', tasks: programming,
+        total: round2(programming.reduce((a, t) => a + t.points, 0)), earned: round2(programming.reduce((a, t) => a + t.earned, 0)),
+    }] : [])];
+    return {
+        groups,
+        total: round2(groups.reduce((a, g) => a + g.total, 0)),
+        earned: round2(groups.reduce((a, g) => a + g.earned, 0)),
+    };
+}
+
 export class ContestListHandler extends Handler {
     @param('rule', Types.Range(contest.RULES), true)
     @param('group', Types.Name, true)
@@ -251,6 +405,8 @@ export class ContestDetailBaseHandler extends Handler {
 
     @param('tid', Types.ObjectId, true)
     async after(domainId: string, tid: ObjectId) {
+        // PTA: the client-side deadline hand-off never moves managers.
+        if (this.tdoc) this.UiContext.canManageContest = this.user.own(this.tdoc) || this.user.hasPerm(PERM.PERM_EDIT_CONTEST);
         if (!tid || this.tdoc.rule === 'homework') return;
         if (this.request.json || !this.response.template) return;
         const pdoc = 'pdoc' in this ? (this as any).pdoc : {};
@@ -321,6 +477,19 @@ export class ContestDetailHandler extends ContestDetailBaseHandler {
         this.response.body.tdoc.content = this.response.body.tdoc.content
             .replace(/\(file:\/\//g, `(./${this.tdoc.docId}/file/public/`)
             .replace(/="file:\/\//g, `="./${this.tdoc.docId}/file/public/`);
+        /*
+         * PTA: once the test has ended — this page is where students land
+         * at the deadline — make sure the end-of-test evaluation has run
+         * (fallback for the schedule task), then show the attendee's
+         * detailed scores (contest_detail.html "Your results").
+         */
+        if (contest.isDone(this.tdoc, this.tsdoc)) {
+            if (!(this.tdoc as any).objectiveSynced) {
+                await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
+                this.tsdoc = await contest.getStatus(domainId, tid, this.user._id) || this.tsdoc;
+            }
+            if (this.tsdoc?.attend) this.response.body.myResults = await myResultsOf(domainId, this.tdoc, this.tsdoc.detail || {});
+        }
     }
 
     @param('tid', Types.ObjectId)
@@ -532,96 +701,6 @@ export class ContestProblemListHandler extends ContestDetailBaseHandler {
         }
         this.back();
     }
-}
-
-/* ------------------------------------------------------------------ */
-/*  PTA test editor: the paper as four sections                        */
-/* ------------------------------------------------------------------ */
-const PAPER_SECTIONS = ['tf', 'choice', 'blank'] as const;
-export interface PaperSections {
-    tf: { total: number, pids: number[] };
-    choice: { total: number, pids: number[] };
-    blank: { total: number, pids: number[] };
-    prog: { pids: number[], scores: Record<number, number> };
-}
-
-const round2 = (x: number) => Math.round(x * 100) / 100;
-
-/**
- * The stored sections of a test, or — for a test saved before this editor
- * existed — its problems classified by kind and question type, with the
- * stored per-problem weights (default 100 each) as the points.
- */
-export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSections> {
-    const empty: PaperSections = { tf: { total: 0, pids: [] }, choice: { total: 0, pids: [] }, blank: { total: 0, pids: [] }, prog: { pids: [], scores: {} } };
-    if (!tdoc) return empty;
-    const stored = (tdoc as any).sections;
-    if (stored && typeof stored === 'object') {
-        for (const k of PAPER_SECTIONS) {
-            empty[k].total = +stored[k]?.total || 0;
-            empty[k].pids = (stored[k]?.pids || []).map((x) => +x).filter((x) => x);
-        }
-        empty.prog.pids = (stored.prog?.pids || []).map((x) => +x).filter((x) => x);
-        empty.prog.scores = stored.prog?.scores || {};
-        return empty;
-    }
-    const pdict = await problem.getList(domainId, tdoc.pids, true, false, ['docId', 'pid', 'content'] as any, true);
-    for (const pid of tdoc.pids) {
-        const pdoc = pdict[pid];
-        const weight = tdoc.score?.[pid] ?? 100;
-        if (pdoc && /^o/i.test(String(pdoc.pid || ''))) {
-            const sub = objectiveSubKindOf(pdoc.content) || 'choice';
-            empty[sub].pids.push(pid);
-            empty[sub].total = round2(empty[sub].total + weight);
-        } else {
-            empty.prog.pids.push(pid);
-            empty.prog.scores[pid] = weight;
-        }
-    }
-    return empty;
-}
-
-/**
- * Validate the editor's paper JSON and turn it into the problem order, the
- * per-problem weights and the sections to store. Objective sections split
- * their total evenly over their tasks (10 points over 5 true/false tasks =
- * 2 each); programming tasks carry the points the teacher typed.
- */
-export async function parsePaper(domainId: string, raw: string, viewer: any) {
-    let j: any;
-    try {
-        j = JSON.parse(raw);
-    } catch {
-        throw new ValidationError('paper');
-    }
-    if (!j || typeof j !== 'object') throw new ValidationError('paper');
-    const ids = (v: any) => [...new Set((Array.isArray(v) ? v : String(v || '').split(',')).map((x) => +x).filter((x) => Number.isInteger(x) && x > 0))];
-    const points = (v: any) => {
-        const n = Math.round((+v || 0) * 100) / 100;
-        if (!(n >= 0) || n > 1000) throw new ValidationError('paper');
-        return n;
-    };
-    const sections: PaperSections = {
-        tf: { total: points(j.tf?.total), pids: ids(j.tf?.pids) },
-        choice: { total: points(j.choice?.total), pids: ids(j.choice?.pids) },
-        blank: { total: points(j.blank?.total), pids: ids(j.blank?.pids) },
-        prog: { pids: ids(j.prog?.pids), scores: {} },
-    };
-    for (const pid of sections.prog.pids) sections.prog.scores[pid] = points(j.prog?.scores?.[pid]);
-    const all = [...sections.tf.pids, ...sections.choice.pids, ...sections.blank.pids, ...sections.prog.pids];
-    const pids = [...new Set(all)];
-    const pdict = await problem.getList(domainId, pids, viewer.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || viewer._id, false, ['docId', 'pid'] as any, true);
-    for (const pid of pids) if (!pdict[pid]) throw new ValidationError('paper', `problem ${pid}`);
-    // Kind guard: objective sections hold O-tasks, the programming section P-tasks.
-    for (const k of PAPER_SECTIONS) for (const pid of sections[k].pids) if (!/^o/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not an objective task`);
-    for (const pid of sections.prog.pids) if (/^[os]/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a programming task`);
-    const score: Record<number, number> = {};
-    for (const k of PAPER_SECTIONS) {
-        const n = sections[k].pids.length;
-        for (const pid of sections[k].pids) score[pid] = n ? round2(sections[k].total / n) : 0;
-    }
-    for (const pid of sections.prog.pids) score[pid] = sections.prog.scores[pid];
-    return { pids, score, sections };
 }
 
 export class ContestEditHandler extends Handler {

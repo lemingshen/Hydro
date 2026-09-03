@@ -214,6 +214,59 @@ export default new NamedPage(['contest_paper', 'homework_paper', 'self_learning_
       return null;
     }
 
+    const answeredKeys = (docId) => Object.keys(ans[docId] || {}).filter((k) => {
+      const v = ans[docId][k];
+      return Array.isArray(v) ? v.length : (v !== undefined && v !== null && String(v).trim());
+    });
+
+    /**
+     * Test / Homework: "Save All" hands in every answered task in one go.
+     * Each task is still its own submission (the record the evaluation grades
+     * after the deadline); verdicts stay withheld, so the cards only confirm.
+     */
+    const $saveAll = $('#paper-save-all');
+    const saveText = (t) => $('#paper-savebar-text').text(t);
+    const refreshSaveBar = () => {
+      if (!$saveAll.length) return;
+      const answered = tasks.filter((t) => answeredKeys(t.docId).length).length;
+      saveText(`${answered} / ${tasks.length} ${i18n('answered')} — ${i18n('save to hand them in; scored after the deadline.')}`);
+    };
+    refreshSaveBar();
+    $(document).on('change input', '.objective-input', () => setTimeout(refreshSaveBar, 0));
+    if ($saveAll.length) {
+      $saveAll.on('click', async () => {
+      const todo = tasks.filter((t) => t.submitUrl && answeredKeys(t.docId).length);
+      if (!todo.length) {
+        Notification.warn(i18n('Please answer at least one question before submitting.'));
+        return;
+      }
+      $saveAll.prop('disabled', true).addClass('is-busy');
+      let ok = 0;
+      const failed = [];
+      for (const task of todo) {
+        setHint(task.docId, i18n('Submitting...'));
+        setStatus(task.docId, 'pending', i18n('Waiting'));
+        try {
+          await request.post(task.submitUrl, { lang: '_', code: yaml.dump(ans[task.docId]) }); // eslint-disable-line no-await-in-loop
+          ok += 1;
+          setHint(task.docId, '');
+          markQuestions(task.docId, null);
+          setStatus(task.docId, 'pending', i18n('Submitted — scored after the deadline'));
+          if (window.__ptaRailMark) window.__ptaRailMark(String(task.pid), false, true);
+        } catch (e) {
+          failed.push(task);
+          setHint(task.docId, e.message || i18n('Failed'));
+          setStatus(task.docId, 'fail', i18n('Not saved'));
+        }
+      }
+      $saveAll.prop('disabled', false).removeClass('is-busy');
+      const unanswered = tasks.length - todo.length;
+      if (failed.length) Notification.error(`${i18n('Saved {0} answer(s); {1} could not be saved — try again.').replace('{0}', ok).replace('{1}', failed.length)}`);
+      else Notification.success(`${i18n('Saved {0} answer(s).').replace('{0}', ok)}${unanswered ? ` ${i18n('{0} question(s) still unanswered.').replace('{0}', unanswered)}` : ''}`);
+      saveText(`${i18n('Last saved')} ${new Date().toLocaleTimeString()} — ${ok} / ${tasks.length} ${i18n('handed in')}`);
+      });
+    }
+
     if (window.UiContext.paperCanSubmit) $(document).on('click', '.paper-submit', async function onPaperSubmit() {
       const docId = $(this).data('doc');
       const task = taskByDoc[docId];

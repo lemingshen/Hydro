@@ -577,6 +577,8 @@ async function getRailGroups() {
 function squeezeContent(width) {
   if (railMode === 'page') {
     $('.main, .footer').css('margin-left', width ? `${width}px` : '');
+    // The paper's fixed "Save All" bar starts where the rail ends.
+    $('.paper-savebar').css('left', width ? `${width}px` : '');
   } else {
     $('.scratchpad-container').css({ left: `${width}px`, width: `calc(100% - ${width}px)` });
     window.dispatchEvent(new Event('resize')); // let Monaco and the split panes relayout
@@ -587,6 +589,7 @@ export function removeRail() {
   $('#sl-rail, #sl-rail-expander').remove();
   $('.scratchpad-container').css({ left: '0px', width: '100%' });
   $('.main, .footer').css('margin-left', '');
+  $('.paper-savebar').css('left', '');
   railMode = null;
 }
 
