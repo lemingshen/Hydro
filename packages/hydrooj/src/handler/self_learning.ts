@@ -12,7 +12,9 @@ import { ContestNotLiveError, ContestNotAttendedError,
 } from '../error';
 import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
+import { activityPids } from '../lib/activity_pids';
 import { paperFeedbackFor } from '../lib/objective_feedback';
+import { seesEveryProblem } from './problem';
 import {
     ACTIVITY_JOB_STALE_MS, activityReportContext, buildActivityCorpus, renderActivityStudent, runActivityReportJob,
 } from '../lib/activity_report';
@@ -7655,10 +7657,18 @@ export async function apply(ctx: Context) {
             if (typeof cur !== 'number') return;
             const canViewHidden = h.user.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN);
             const vis: any = canViewHidden ? {} : { hidden: false };
+            /*
+             * PTA fork: the problem-set rail is the problem set — tasks that
+             * belong to a homework / test / session are left out of it for
+             * students, exactly as they are left out of the list.
+             */
+            const ownedByActivity = seesEveryProblem(h) ? [] : [...await activityPids(h.args.domainId)];
+            if (ownedByActivity.length) vis.docId = { $nin: ownedByActivity };
+            const around = (range: any) => ({ ...vis, docId: { ...(vis.docId || {}), ...range } });
             const [before, after] = await Promise.all([
-                problem.getMulti(h.args.domainId, { ...vis, docId: { $lt: cur } })
+                problem.getMulti(h.args.domainId, around({ $lt: cur }))
                     .sort({ docId: -1 }).limit(12).project({ docId: 1 }).toArray(),
-                problem.getMulti(h.args.domainId, { ...vis, docId: { $gte: cur } })
+                problem.getMulti(h.args.domainId, around({ $gte: cur }))
                     .sort({ docId: 1 }).limit(13).project({ docId: 1 }).toArray(),
             ]);
             const pids = [...before.reverse(), ...after].map((p: any) => p.docId);

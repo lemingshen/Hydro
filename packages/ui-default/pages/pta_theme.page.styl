@@ -2112,6 +2112,23 @@ label.checkbox, label.radiobox { color: var(--pta-ink); font-weight: 400; }
 /* The 1..10 difficulty reads as a graded chip (green → red) instead of a
    bare number; the AC / Tried column keeps the numbers but muted the tried. */
 
+.pta-inact {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 7px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--pta-warn-soft);
+  border: 1px solid var(--pta-warn-line);
+  color: var(--pta-warn-text);
+  cursor: help;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .pta-diff {
   display: inline-flex;
   align-items: center;

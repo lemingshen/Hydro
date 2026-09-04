@@ -26,6 +26,7 @@ import {
 import { objectiveSubKindOf } from '../lib/objective_markdown';
 import { readRawProblemConfig } from '../lib/problem_config';
 import { isObjectivePid, objectiveTitleOf } from '../lib/objective_title';
+import { activityOwners, activityPids, applyActivityPidsCache, entitledToActivityTask } from '../lib/activity_pids';
 import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
@@ -45,6 +46,30 @@ import {
 import { ContestDetailBaseHandler } from './contest';
 
 export const parseCategory = (value: string) => value.replace(/，/g, ',').split(',').map((e) => e.trim());
+
+/**
+ * PTA fork — a task that belongs to a homework / test / self-learning
+ * session is that activity's material: students never see it in the
+ * problem set, and cannot open or submit to it there. Staff (problem
+ * authors and editors, teachers who assemble the activities, domain roots)
+ * keep the full view, and the task stays fully reachable INSIDE its
+ * activity for everyone entitled to it.
+ */
+export function seesEveryProblem(handler: { user: User }): boolean {
+    const u = handler.user;
+    return u.role === 'root'
+        || u.hasPriv(PRIV.PRIV_EDIT_SYSTEM)
+        || u.hasPerm(PERM.PERM_EDIT_PROBLEM)
+        || u.hasPerm(PERM.PERM_CREATE_PROBLEM)
+        || u.hasPerm(PERM.PERM_EDIT_HOMEWORK)
+        || u.hasPerm(PERM.PERM_CREATE_HOMEWORK);
+}
+
+/** The pids a STUDENT must not meet in the problem set (empty for staff). */
+export async function hiddenActivityPids(handler: { user: User }, domainId: string): Promise<number[]> {
+    if (seesEveryProblem(handler)) return [];
+    return [...await activityPids(domainId)];
+}
 
 function buildQuery(udoc: User) {
     const q: Filter<ProblemDoc> = {};
@@ -209,6 +234,14 @@ export class ProblemMainHandler extends Handler {
             limit = Math.min(PROBLEM_LIST_PAGE_SIZE, maxLimit);
         }
         this.queryContext.query = buildQuery(this.user);
+        /*
+         * PTA fork: tasks owned by a homework / test / session are not
+         * problem-set material — students never see them here (staff do).
+         * This runs BEFORE the tag / difficulty filters and the per-tab
+         * counts, so every number on the page agrees with the list.
+         */
+        const hiddenPids = await hiddenActivityPids(this, domainId);
+        if (hiddenPids.length) this.queryContext.query.docId = { $nin: hiddenPids };
         if (sortStrategy === 'recent') this.queryContext.hint = 'basic';
         // eslint-disable-next-line ts/no-shadow
         const query = this.queryContext.query;
@@ -240,7 +273,11 @@ export class ProblemMainHandler extends Handler {
             total = result.total;
             this.queryContext.pcountRelation = result.countRelation;
             if (!result.hits.length) this.queryContext.fail = true;
-            query.docId = { $in: result.hits.map((t) => +t.split('/')[1]) };
+            const hitIds = result.hits.map((t) => +t.split('/')[1]);
+            // Keep the activity exclusion when a text search narrows the set.
+            query.docId = hiddenPids.length
+                ? { $in: hitIds.filter((id) => !hiddenPids.includes(id)) }
+                : { $in: hitIds };
             this.queryContext.hint = 'basic';
             this.queryContext.sort = result.hits;
         }
@@ -340,12 +377,27 @@ export class ProblemMainHandler extends Handler {
                 pdocs.map((i) => i.docId),
             ));
         }
+        /*
+         * PTA fork: a task picked into a homework / test / session is
+         * invisible to students (hiddenActivityPids above). On the STAFF
+         * list every such row says so — which activity holds it — so a
+         * teacher can see at a glance what the problem set no longer
+         * offers, exactly like the built-in (Hidden) flag.
+         */
+        const inActivity: Record<number, any[]> = {};
+        if (seesEveryProblem(this) && pdocs.length) {
+            const owners = await activityOwners(domainId);
+            for (const pdoc of pdocs) {
+                const list = owners.get(pdoc.docId);
+                if (list?.length) inActivity[pdoc.docId] = list;
+            }
+        }
         if (pjax) {
             this.response.body = {
                 title: this.renderTitle(this.translate('problem_main')),
                 fragments: (await Promise.all([
                     this.renderHTML('partials/problem_list.html', {
-                        page, ppcount, pcount, pdocs, psdict, qs: q, sort: sortStrategy, kind,
+                        page, ppcount, pcount, pdocs, psdict, qs: q, sort: sortStrategy, kind, inActivity,
                         pageSize: limit, pcountRelation: this.queryContext.pcountRelation,
                     }),
                     this.renderHTML('partials/problem_stat.html', { pcount, pcountRelation: this.queryContext.pcountRelation }),
@@ -357,6 +409,7 @@ export class ProblemMainHandler extends Handler {
                 page,
                 pcount,
                 ppcount,
+                inActivity,
                 pageSize: limit,
                 pcountRelation: this.queryContext.pcountRelation,
                 pdocs,
@@ -588,6 +641,19 @@ export class ProblemDetailHandler extends ContestDetailBaseHandler {
             delete this.pdoc.stats;
         } else if (!problem.canViewBy(this.pdoc, this.user)) {
             throw new PermissionError(PERM.PERM_VIEW_PROBLEM_HIDDEN);
+        } else if (!seesEveryProblem(this) && (await activityPids(domainId)).has(this.pdoc.docId)) {
+            /*
+             * PTA fork: opened from the PROBLEM SET (no tid) but the task
+             * belongs to a homework / test / session — a student must meet
+             * it there, so it does not exist here. Two exceptions keep the
+             * rest of the fork working: inside its activity (tid present)
+             * nothing changes, and a student who TOOK an activity that owns
+             * the task may still reach it once that activity is over — the
+             * correction / practice path, whose submissions no longer count.
+             */
+            if (!await entitledToActivityTask(domainId, this.user._id, this.pdoc.docId)) {
+                throw new ProblemNotFoundError(domainId, pid);
+            }
         }
         let ddoc = this.domain;
         if (this.pdoc.reference) {
@@ -1632,6 +1698,8 @@ declare module '@hydrooj/framework' {
 }
 
 export async function apply(ctx: Context) {
+    // PTA fork: keep the activity-owned pid cache fresh (lib/activity_pids).
+    applyActivityPidsCache(ctx);
     ctx.Route('problem_main', '/p', ProblemMainHandler, PERM.PERM_VIEW_PROBLEM);
     ctx.Route('problem_random', '/problem/random', ProblemRandomHandler, PERM.PERM_VIEW_PROBLEM);
     ctx.Route('problem_detail', '/p/:pid', ProblemDetailHandler);

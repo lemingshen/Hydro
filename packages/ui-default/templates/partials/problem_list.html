@@ -75,6 +75,19 @@
         {% endif %}
         <td class="col--name col--problem-name" data-star-action="{{ url('problem_detail', pid=pdoc.docId) }}" {% if handler.user.hasPriv(PRIV.PRIV_USER_PROFILE) %} data-star="{{ psdoc.star }}"{% endif %}>
           {{ problem.render_problem_title(pdoc) }}
+          {#-
+            PTA fork: this task belongs to a homework / test / self-learning
+            session, so students do not see it in the problem set at all
+            (handler/problem.ts hiddenActivityPids). Teachers get the badge
+            instead — hover for the activities that hold it.
+          -#}
+          {%- set _act = inActivity[pdoc.docId] if inActivity else none -%}
+          {%- if _act -%}
+          <span class="pta-inact" title="{{ _('Hidden from students: this task belongs to') }} {{ _act|join(', ', 'title') }}">🔒 {{ _('In') }}
+            {%- for a in _act -%}{% if loop.index0 %},{% endif %} {% if a.kind == 'homework' %}{{ _('Homework') }}{% elif a.kind == 'test' %}{{ _('Test') }}{% else %}{{ _('Self-Learning') }}{% endif %}{%- if loop.index0 < 1 %} “{{ a.title|truncate(28, true, '…') }}”{% endif %}{%- endfor -%}
+            {%- if _act.length > 2 %} +{{ _act.length - 2 }}{% endif -%}
+          </span>
+          {%- endif -%}
         </td>
         <td class="col--ac-tried"><span class="pta-ratio"><span class="pta-ratio__ac">{{ pdoc.nAccept }}</span><span class="pta-ratio__sep">/</span><span class="pta-ratio__tried">{{ pdoc.nSubmit }}</span></span></td>
         {#- PTA fork: the 1..10 difficulty as a graded chip (pta_theme.page.styl .pta-diff). -#}
