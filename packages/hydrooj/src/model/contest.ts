@@ -636,6 +636,96 @@ const ledo = buildContestRule({
     },
 }, oi);
 
+/* ------------------- PTA fork: teacher score overrides ------------------- */
+
+/** One manual adjustment: what the teacher set, what the system had computed, why, who, when. */
+export interface ScoreOverrideEntry {
+    score: number;
+    computed: number | null;
+    reason: string;
+    by: number;
+    at: Date;
+}
+/**
+ * A student's manual score adjustments in one activity, stored NEXT to the
+ * computed values so a re-evaluation can never wipe them: per task (raw
+ * 0..100, the judge's scale) and/or the final total. Every change is also
+ * appended to `log` for the record.
+ */
+export interface ScoreOverride {
+    tasks?: Record<string, ScoreOverrideEntry>;
+    total?: ScoreOverrideEntry;
+    log?: { kind: 'task' | 'total', pid?: number, from: number | null, to: number | null, reason: string, by: number, at: Date }[];
+}
+
+/**
+ * Homework's tiered late coefficient for a submission made at `at`
+ * (penaltySince + penaltyRules, "hours: coefficient", largest elapsed
+ * tier wins) — shared by the rule's stat() and the override so an
+ * adjusted score is penalized exactly like the judged one it replaces.
+ */
+export function homeworkPenaltyCoefficient(tdoc: Tdoc, at: Date): number {
+    if (!tdoc.penaltySince || !tdoc.penaltyRules) return 1;
+    const exceedSeconds = Math.floor((at.getTime() - tdoc.penaltySince.getTime()) / 1000);
+    if (exceedSeconds < 0) return 1;
+    let coefficient = 1;
+    const keys = Object.keys(tdoc.penaltyRules).map(Number.parseFloat).sort((a, b) => a - b);
+    for (const i of keys) {
+        if (i * 3600 <= exceedSeconds) coefficient = tdoc.penaltyRules[i];
+        else break;
+    }
+    return coefficient;
+}
+
+/**
+ * Materialize a student's overrides into the homework stat() output: an
+ * adjusted task replaces the judged score (weighted and late-penalized
+ * like the judged one; a task the student never submitted — e.g. a
+ * subjective task graded by hand — gets a synthetic detail entry), the
+ * totals are re-summed, and an adjusted total replaces penaltyScore.
+ * Every replaced value is kept as `override.computed` on the entry, so the
+ * results page and the scoreboard can show "adjusted from X". Only the
+ * homework rule applies overrides.
+ */
+export function applyScoreOverride(tdoc: Tdoc, stats: any, override?: ScoreOverride | null) {
+    if (tdoc.rule !== 'homework' || !override) return stats;
+    const hasTasks = override.tasks && Object.keys(override.tasks).length;
+    if (!hasTasks && !override.total) return stats;
+    const detail: Record<string, any> = { ...(stats.detail || {}) };
+    for (const [pidStr, o] of Object.entries(override.tasks || {})) {
+        const pid = +pidStr;
+        if (!tdoc.pids.includes(pid) || !o || typeof o.score !== 'number') continue;
+        const prev = detail[pid];
+        const rate = (tdoc.score?.[pid] ?? 100) / 100;
+        const score = Math.min(100, Math.max(0, o.score));
+        const coefficient = prev?.rid ? homeworkPenaltyCoefficient(tdoc, prev.rid.getTimestamp()) : 1;
+        detail[pid] = {
+            ...(prev || { pid, time: 0 }),
+            status: score >= 100 ? STATUS.STATUS_ACCEPTED : (prev?.status && prev.status !== STATUS.STATUS_ACCEPTED ? prev.status : STATUS.STATUS_WRONG_ANSWER),
+            score,
+            penaltyScore: rate * score * coefficient,
+            override: {
+                computed: prev ? prev.score : null, reason: o.reason, by: o.by, at: o.at,
+            },
+        };
+    }
+    const rows = Object.values(detail);
+    const out: any = {
+        ...stats,
+        detail,
+        score: sumBy(rows, 'score'),
+        penaltyScore: sumBy(rows, 'penaltyScore'),
+    };
+    if (override.total && typeof override.total.score === 'number') {
+        out.computedPenaltyScore = out.penaltyScore;
+        out.penaltyScore = Math.max(0, override.total.score);
+        out.totalOverride = {
+            computed: out.computedPenaltyScore, reason: override.total.reason, by: override.total.by, at: override.total.at,
+        };
+    }
+    return out;
+}
+
 const homework = buildContestRule({
     TEXT: 'Assignment',
     hidden: true,
@@ -656,17 +746,7 @@ const homework = buildContestRule({
         function penaltyScore(jdoc) {
             // PTA: the task's points come from the homework editor verbatim (0 means 0).
             const rate = (tdoc.score?.[jdoc.pid] ?? 100) / 100;
-            const exceedSeconds = Math.floor(
-                (jdoc.rid.getTimestamp().getTime() - tdoc.penaltySince.getTime()) / 1000,
-            );
-            if (exceedSeconds < 0) return rate * jdoc.score;
-            let coefficient = 1;
-            const keys = Object.keys(tdoc.penaltyRules).map(Number.parseFloat).sort((a, b) => a - b);
-            for (const i of keys) {
-                if (i * 3600 <= exceedSeconds) coefficient = tdoc.penaltyRules[i];
-                else break;
-            }
-            return rate * jdoc.score * coefficient;
+            return rate * jdoc.score * homeworkPenaltyCoefficient(tdoc, jdoc.rid.getTimestamp());
         }
         const detail = [];
         for (const j in effective) {
@@ -744,7 +824,13 @@ const homework = buildContestRule({
             row.push({ type: 'string', value: udoc.displayName || '' });
             row.push({ type: 'string', value: udoc.studentId || '' });
         }
-        row.push({ type: 'string', value: (tsdoc.penaltyScore || 0).toString() });
+        // PTA fork: ✎ marks a teacher-adjusted total (hover shows the reason).
+        const tov = (tsdoc as any).totalOverride;
+        row.push({
+            type: 'string',
+            value: `${(tsdoc.penaltyScore || 0).toString()}${tov && !config.isExport ? ' ✎' : ''}`,
+            ...(tov ? { hover: `${_('Adjusted by the teacher')}: ${tov.reason || ''} (${_('computed')} ${tov.computed ?? '-'})` } : {}),
+        });
         if (config.isExport) {
             row.push({ type: 'string', value: (tsdoc.score || 0).toString() });
         }
@@ -771,12 +857,14 @@ const homework = buildContestRule({
                     { type: 'time', value: colTime },
                 );
             } else {
+                // PTA fork: ✎ marks a task score the teacher adjusted.
+                const adj = tsddict[pid]?.override ? ' ✎' : '';
                 row.push({
                     type: 'record',
                     score: tsddict[pid]?.score,
-                    value: colScore === colOriginalScore
+                    value: (colScore === colOriginalScore
                         ? '{0}\n{1}'.format(colScore, colTimeStr)
-                        : '{0} / {1}\n{2}'.format(colScore, colOriginalScore, colTimeStr),
+                        : '{0} / {1}\n{2}'.format(colScore, colOriginalScore, colTimeStr)) + adj,
                     raw: rid,
                 });
             }
@@ -957,8 +1045,26 @@ export async function updateStatus(
         rid, pid, status, score, subtasks, lang,
     }, 'rid');
     const journal = _getStatusJournal(tsdoc);
-    const stats = RULES[tdoc.rule].stat(tdoc, journal);
+    // PTA fork: a teacher's adjustments survive every recalculation.
+    const stats = applyScoreOverride(tdoc, RULES[tdoc.rule].stat(tdoc, journal), (tsdoc as any).override);
     return await document.revSetStatus(tdoc.domainId, document.TYPE_CONTEST, tdoc.docId, uid, tsdoc.rev, { journal, ...stats });
+}
+
+/**
+ * PTA fork: recompute ONE student's status from their journal (and their
+ * overrides) — what the teacher's score adjustment calls after saving.
+ * A student without a status document (never attended, e.g. a hand-graded
+ * subjective task only) gets one.
+ */
+export async function recalcUserStatus(domainId: string, tid: ObjectId, uid: number) {
+    const tdoc = await get(domainId, tid);
+    const tsdoc: any = await document.getStatus(domainId, document.TYPE_CONTEST, tid, uid);
+    const journal = tsdoc?.journal ? _getStatusJournal(tsdoc) : [];
+    const stats = applyScoreOverride(tdoc, RULES[tdoc.rule].stat(tdoc, journal), tsdoc?.override);
+    const $unset: any = {};
+    if (!stats.totalOverride) $unset.totalOverride = '';
+    if (stats.computedPenaltyScore === undefined) $unset.computedPenaltyScore = '';
+    return await document.setStatus(domainId, document.TYPE_CONTEST, tid, uid, { journal, ...stats }, $unset);
 }
 
 export async function getListStatus(domainId: string, uid: number, tids: ObjectId[]) {
@@ -1021,9 +1127,9 @@ export async function recalcStatus(domainId: string, tid: ObjectId) {
     ]);
     const tasks = [];
     for (const tsdoc of tsdocs || []) {
-        if (tsdoc.journal) {
-            const journal = _getStatusJournal(tsdoc);
-            const stats = RULES[tdoc.rule].stat(tdoc, journal);
+        if (tsdoc.journal || (tsdoc as any).override) {
+            const journal = tsdoc.journal ? _getStatusJournal(tsdoc) : [];
+            const stats = applyScoreOverride(tdoc, RULES[tdoc.rule].stat(tdoc, journal), (tsdoc as any).override);
             tasks.push(
                 document.revSetStatus(
                     domainId, document.TYPE_CONTEST, tid,
@@ -1240,6 +1346,9 @@ global.Hydro.model.contest = {
     setStatus,
     getAndListStatus,
     recalcStatus,
+    recalcUserStatus,
+    homeworkPenaltyCoefficient,
+    applyScoreOverride,
     unlockScoreboard,
     getBalloon,
     addBalloon,

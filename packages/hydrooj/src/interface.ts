@@ -287,6 +287,14 @@ export interface Tdoc extends Document {
     // For homework
     penaltySince?: Date;
     penaltyRules?: PenaltyRules;
+    /**
+     * PTA fork: the "Check Code Similarity" tick box of the homework editor.
+     * When set, the code students submit to the PROGRAMMING tasks of this
+     * homework is to be compared across the class for suspiciously similar
+     * submissions. This field only records the teacher's choice; the
+     * comparison itself is a separate feature that keys off it.
+     */
+    checkSimilarity?: boolean;
 
     // For training
     description?: string;

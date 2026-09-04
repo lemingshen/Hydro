@@ -1045,3 +1045,13 @@ You've already claimed this homework.: 您已認領該功課。
 You've already voted.: 您已經投過票。
 Your permission: 您的許可權
 Your role: 您的角色
+homework_similarity: "作業程式碼相似度"
+setting_similarity: "程式碼相似度檢查"
+similarity.enabled: "啟用程式碼相似度檢查"
+similarity.dolos_path: "Dolos 命令"
+similarity.threshold: "標記閾值（0-1）"
+similarity.min_store: "保留下限（0-1）"
+similarity.max_pairs: "每組最多保留配對數"
+similarity.timeout: "Dolos 逾時（秒）"
+similarity.extra_args: "Dolos 額外參數"
+grade_center: "成績中心"

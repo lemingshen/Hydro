@@ -4,11 +4,12 @@ import moment from 'moment-timezone';
 import { ObjectId } from 'mongodb';
 import { sortFiles, Time } from '@hydrooj/utils/lib/utils';
 import {
-    ContestNotFoundError, FileLimitExceededError, FileUploadError, HomeworkNotLiveError, NotAssignedError, ValidationError,
+    ContestNotFoundError, FileLimitExceededError, FileUploadError, HomeworkNotLiveError, NotAssignedError, PermissionError, ValidationError,
 } from '../error';
 import { PenaltyRules, Tdoc } from '../interface';
 import { PERM } from '../model/builtin';
 import * as contest from '../model/contest';
+import type { ScoreOverride } from '../model/contest';
 import * as discussion from '../model/discussion';
 import problem from '../model/problem';
 import record from '../model/record';
@@ -22,6 +23,8 @@ import {
 import {
     ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, evaluateContainerResults, hasObjectiveTask, myResultsOf, paperOf, parsePaper, resolveAllowedLangs,
 } from './contest';
+import { applyObjectiveFeedback } from '../lib/objective_feedback';
+import { scheduleSimilarityCheck } from './similarity';
 
 export const validatePenaltyRules = (input: string) => {
     try {
@@ -148,7 +151,7 @@ class HomeworkDetailHandler extends Handler {
                 await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
                 mine = await contest.getStatus(domainId, tid, this.user._id) || tsdoc;
             }
-            this.response.body.myResults = await myResultsOf(domainId, this.tdoc, mine.detail || {});
+            this.response.body.myResults = await myResultsOf(domainId, this.tdoc, mine.detail || {}, this.user._id);
         }
     }
 
@@ -209,11 +212,13 @@ class HomeworkEditHandler extends Handler {
     @param('assign', Types.CommaSeperatedArray, true)
     @param('langs', Types.CommaSeperatedArray, true)
     @param('paper', Types.Content, true)
+    @param('checkSimilarity', Types.Boolean)
     async postUpdate(
         domainId: string, tid: ObjectId, beginAtDate: string, beginAtTime: string,
         penaltySinceDate: string, penaltySinceTime: string, extensionDays: number,
         penaltyRules: PenaltyRules, title: string, content: string, _pids: string, rated = false,
         maintainer: number[] = [], assign: string[] = [], langs: string[] = [], paper = '',
+        checkSimilarity = false,
     ) {
         // PTA homework editor: objective sections with a total each, programming
         // tasks with their own points → problem order + tdoc.score weights.
@@ -237,9 +242,14 @@ class HomeworkEditHandler extends Handler {
             // `langs` (and `maintainer`) used to be dropped on CREATE and only
             // stored on a later edit — the picker on the creation page had no
             // effect until the homework was saved a second time.
+            // `checkSimilarity` is the homework editor's "Check Code Similarity"
+            // tick box — stored on the homework so the editor round-trips it
+            // and the similarity check can key off it.
             tid = await contest.add(domainId, title, content, this.user._id,
                 'homework', beginAt.toDate(), endAt.toDate(), pids, rated,
-                { penaltySince: penaltySince.toDate(), penaltyRules, assign, maintainer, langs });
+                {
+                    penaltySince: penaltySince.toDate(), penaltyRules, assign, maintainer, langs, checkSimilarity,
+                });
         } else {
             await contest.edit(domainId, tid, {
                 title,
@@ -253,6 +263,7 @@ class HomeworkEditHandler extends Handler {
                 maintainer,
                 assign,
                 langs,
+                checkSimilarity,
             });
             if (tdoc.beginAt !== beginAt.toDate()
                 || tdoc.endAt !== endAt.toDate()
@@ -274,6 +285,11 @@ class HomeworkEditHandler extends Handler {
             const fresh = await contest.get(domainId, tid);
             if (fresh) await evaluateContainerResults(domainId, { ...fresh, objectiveSynced: false } as any);
         }
+        // Code similarity (PTA fork, handler/similarity.ts): while the box is
+        // ticked and the homework is still open, a deadline task compares the
+        // programming submissions once it ends; a homework that has already
+        // ended is checked right away, once. Unticking withdraws the task.
+        await scheduleSimilarityCheck(domainId, tid, checkSimilarity, endAt.toDate());
         this.response.body = { tid };
         this.response.redirect = this.url('homework_detail', { tid });
     }
@@ -346,6 +362,111 @@ export class HomeworkFilesHandler extends Handler {
     }
 }
 
+/**
+ * PTA fork: TEACHER SCORE ADJUSTMENT for a homework — when a student
+ * argues a score, the owner (or a homework editor) can set a task's score
+ * (raw 0..100, weighted and late-penalized exactly like a judged one) or
+ * the final total, with a mandatory reason. Adjustments live on the
+ * student's status document (`override`, model/contest.ts ScoreOverride)
+ * next to the computed values, so every recalculation re-applies them and
+ * "computed → adjusted" stays visible on the scoreboard, in the student's
+ * results and in the evidence pop-ups. Grading a subjective task by hand
+ * is the same operation on an S-task.
+ */
+class HomeworkScoreOverrideHandler extends Handler {
+    tdoc: Tdoc;
+
+    @param('tid', Types.ObjectId)
+    async prepare(domainId: string, tid: ObjectId) {
+        this.tdoc = await contest.get(domainId, tid);
+        if (this.tdoc.rule !== 'homework') throw new ValidationError('tid');
+        if (!this.user.own(this.tdoc) && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)) throw new PermissionError(PERM.PERM_EDIT_HOMEWORK);
+    }
+
+    /** The student's current adjustments (for the dialog). */
+    @param('tid', Types.ObjectId)
+    @param('uid', Types.Int)
+    async get(domainId: string, tid: ObjectId, uid: number) {
+        const tsdoc: any = await contest.getStatus(domainId, tid, uid);
+        this.response.body = {
+            override: tsdoc?.override || null,
+            detail: tsdoc?.detail || {},
+            score: tsdoc?.score ?? null,
+            penaltyScore: tsdoc?.penaltyScore ?? null,
+            computedPenaltyScore: tsdoc?.computedPenaltyScore ?? null,
+        };
+    }
+
+    @param('tid', Types.ObjectId)
+    @param('uid', Types.Int)
+    @param('pid', Types.Int, true)
+    @param('score', Types.Float)
+    @param('reason', Types.Content)
+    async postSet(domainId: string, tid: ObjectId, uid: number, pid: number | undefined, score: number, reason: string) {
+        if (pid !== undefined && !this.tdoc.pids.includes(pid)) throw new ValidationError('pid');
+        if (!Number.isFinite(score) || score < 0) throw new ValidationError('score');
+        if (pid !== undefined && score > 100) throw new ValidationError('score');
+        const why = String(reason || '').trim().slice(0, 500);
+        if (!why) throw new ValidationError('reason');
+        const tsdoc: any = (await contest.getStatus(domainId, tid, uid)) || {};
+        const override: ScoreOverride = { ...(tsdoc.override || {}) };
+        override.tasks = { ...(override.tasks || {}) };
+        override.log = [...(override.log || [])].slice(-50);
+        const at = new Date();
+        if (pid !== undefined) {
+            const computed = tsdoc.detail?.[pid]?.override ? tsdoc.detail[pid].override.computed : (tsdoc.detail?.[pid]?.score ?? null);
+            override.tasks[String(pid)] = {
+                score, computed, reason: why, by: this.user._id, at,
+            };
+            override.log.push({
+                kind: 'task', pid, from: tsdoc.detail?.[pid]?.score ?? null, to: score, reason: why, by: this.user._id, at,
+            });
+        } else {
+            const computed = tsdoc.totalOverride ? tsdoc.totalOverride.computed : (tsdoc.penaltyScore ?? null);
+            override.total = {
+                score, computed, reason: why, by: this.user._id, at,
+            };
+            override.log.push({
+                kind: 'total', from: tsdoc.penaltyScore ?? null, to: score, reason: why, by: this.user._id, at,
+            });
+        }
+        await contest.setStatus(domainId, tid, uid, { override });
+        const fresh: any = await contest.recalcUserStatus(domainId, tid, uid);
+        this.response.body = {
+            ok: true, override, score: fresh.score, penaltyScore: fresh.penaltyScore, detail: fresh.detail,
+        };
+    }
+
+    @param('tid', Types.ObjectId)
+    @param('uid', Types.Int)
+    @param('pid', Types.Int, true)
+    async postClear(domainId: string, tid: ObjectId, uid: number, pid?: number) {
+        const tsdoc: any = await contest.getStatus(domainId, tid, uid);
+        const override: ScoreOverride = { ...(tsdoc?.override || {}) };
+        override.tasks = { ...(override.tasks || {}) };
+        override.log = [...(override.log || [])].slice(-50);
+        const at = new Date();
+        if (pid !== undefined) {
+            if (override.tasks[String(pid)]) {
+                override.log.push({
+                    kind: 'task', pid, from: override.tasks[String(pid)].score, to: null, reason: 'adjustment removed', by: this.user._id, at,
+                });
+            }
+            delete override.tasks[String(pid)];
+        } else if (override.total) {
+            override.log.push({
+                kind: 'total', from: override.total.score, to: null, reason: 'adjustment removed', by: this.user._id, at,
+            });
+            delete override.total;
+        }
+        await contest.setStatus(domainId, tid, uid, { override });
+        const fresh: any = await contest.recalcUserStatus(domainId, tid, uid);
+        this.response.body = {
+            ok: true, override, score: fresh.score, penaltyScore: fresh.penaltyScore, detail: fresh.detail,
+        };
+    }
+}
+
 export async function apply(ctx) {
     ctx.Route('homework_main', '/homework', HomeworkMainHandler, PERM.PERM_VIEW_HOMEWORK);
     ctx.Route('homework_create', '/homework/create', HomeworkEditHandler);
@@ -357,5 +478,9 @@ export async function apply(ctx) {
     await ctx.inject(['scoreboard'], ({ Route }) => {
         Route('homework_scoreboard', '/homework/:tid/scoreboard', ContestScoreboardHandler, PERM.PERM_VIEW_HOMEWORK_SCOREBOARD);
         Route('homework_scoreboard_view', '/homework/:tid/scoreboard/:view', ContestScoreboardHandler, PERM.PERM_VIEW_HOMEWORK_SCOREBOARD);
+        // PTA fork: the teacher's score adjustments (owner / homework editors; checked in the handler).
+        Route('homework_score_override', '/homework/:tid/score-override', HomeworkScoreOverrideHandler, PERM.PERM_VIEW_HOMEWORK);
     });
+    // PTA fork: the student's AI review of objective answers after the deadline (route + page card).
+    applyObjectiveFeedback(ctx);
 }

@@ -130,3 +130,13 @@ user_register: Register
 user_sudo: Entering Sudo Mode
 wiki_about: About
 wiki_help: Help
+homework_similarity: "Code Similarity"
+setting_similarity: "Code Similarity Check"
+similarity.enabled: "Enable Similarity Check"
+similarity.dolos_path: "Dolos Command"
+similarity.threshold: "Flag Threshold (0-1)"
+similarity.min_store: "Storage Floor (0-1)"
+similarity.max_pairs: "Max Pairs Kept per Group"
+similarity.timeout: "Dolos Timeout (seconds)"
+similarity.extra_args: "Extra Dolos Arguments"
+grade_center: "Grade Center"

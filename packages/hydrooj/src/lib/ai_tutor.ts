@@ -1593,6 +1593,160 @@ export async function runSessionReport(contextBlock: string): Promise<string> {
     );
 }
 
+/* ---------------- student-facing review of objective answers ---------------- */
+
+/**
+ * 📘 After a homework has ended, the student asks for a review of their
+ * OBJECTIVE answers: for every question they got wrong or skipped — the
+ * correct answer, why it is correct, what their own choice suggests they
+ * misunderstood, and a tip; then what to review. The homework is over,
+ * so the answers are no longer secret.
+ */
+export const OBJECTIVE_FEEDBACK_SYSTEM_PROMPT = `You are a patient, encouraging programming teacher explaining ONE objective task (true/false, single/multiple choice, or fill-in-the-blank) to ONE student, after the homework has ended. You receive the task's knowledge points and, for each of its questions: the question text, its options, the CORRECT answer, and the STUDENT'S answer marked correct, partially correct, wrong or unanswered.
+
+ENGLISH ONLY — write the whole explanation in English even when the question itself is written in another language (you may quote the original wording of the question or an option when it helps, but every sentence you write is English).
+
+Pure Markdown, no top-level heading. For EACH question that is wrong, partially correct or unanswered, in order:
+### Q<n> — <the question in a few words>
+- **Correct answer:** <the key; for a choice question give the letter AND the option text>
+- **Your answer:** <what the student answered, or "left blank">
+- **Why the correct answer is right:** <2-4 sentences reasoning about the actual concept or code in the question — be concrete and technically accurate about C/C++ (or whichever language the question uses)>
+- **Where your answer goes wrong:** <what choosing that answer suggests the student believed, and precisely why that belief fails; for an unanswered question, explain what to look at to decide>
+- **Remember:** <one short rule, trick or check that prevents this mistake next time>
+
+Then close with:
+**What to review:** <two or three sentences: the knowledge points behind these mistakes (use the names given) and one concrete thing to re-read or a tiny exercise to try>
+
+If EVERY question of the task is correct, instead write two or three sentences confirming the answer and explaining briefly why it is right — nothing else.
+
+Rules: use only the questions, options and answers given; never invent a question or change a key; never mention grades, other students or hidden tests; be encouraging, never scolding; keep the whole explanation under 400 words.`;
+
+export async function runObjectiveFeedback(contextBlock: string): Promise<string> {
+    return await callProvider(
+        OBJECTIVE_FEEDBACK_SYSTEM_PROMPT,
+        [{ role: 'user', content: contextBlock }],
+        { temperature: 0.4, timeoutMs: 240000 },
+    );
+}
+
+/* ---------------- resilience for the long report jobs ---------------- */
+
+/** Errors worth retrying: rate limits, provider-side failures, timeouts, network hiccups. */
+export function isTransientProviderError(e: any): boolean {
+    const msg = String(e?.message || e || '');
+    if (/HTTP (?:408|409|425|429|5\d\d)\b/.test(msg)) return true;
+    if (/timed out|Cannot reach the AI provider|ECONNRESET|EAI_AGAIN|socket hang up|fetch failed|overloaded/i.test(msg)) return true;
+    return false;
+}
+
+/**
+ * ⏳ A class-wide cooldown: when any call is rate-limited (HTTP 429), every
+ * caller in this process waits it out before the next attempt — three
+ * workers each backing off on their own would keep hammering the limit.
+ */
+let cooldownUntil = 0;
+const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * Run `fn` with retries on transient provider errors (exponential backoff
+ * with jitter, honouring the shared cooldown). Non-transient errors — a
+ * malformed reply, an oversized request — surface at once so the caller
+ * can shrink the batch instead of repeating it.
+ */
+export async function callWithRetry<T>(fn: () => Promise<T>, opts: { attempts?: number, baseMs?: number, label?: string } = {}): Promise<T> {
+    const attempts = Math.max(1, opts.attempts ?? 4);
+    const baseMs = opts.baseMs ?? 4000;
+    let lastErr: any;
+    for (let i = 0; i < attempts; i++) {
+        const wait = cooldownUntil - Date.now();
+        if (wait > 0) await sleep(wait);
+        try {
+            return await fn();
+        } catch (e) {
+            lastErr = e;
+            if (!isTransientProviderError(e) || i === attempts - 1) throw e;
+            const backoff = Math.round(baseMs * 2 ** i * (0.75 + Math.random() * 0.5));
+            if (/HTTP 429/.test(String(e?.message || ''))) cooldownUntil = Math.max(cooldownUntil, Date.now() + Math.min(60000, backoff));
+            logger.warn('%s: transient provider error (attempt %d/%d, retrying in %d ms): %s', opts.label || 'ai call', i + 1, attempts, backoff, String(e?.message || e).slice(0, 160));
+            await sleep(backoff);
+        }
+    }
+    throw lastErr;
+}
+
+/* ---------------- homework / test ACTIVITY report (map → reduce) ---------------- */
+
+/**
+ * 📊 MAP stage of the homework/test report. One batch of students with
+ * EVERYTHING they did in the activity: every judged submission on every
+ * task in order, the code of their accepted (or last failing) attempt on
+ * programming tasks, and — question by question — the answers they gave
+ * on objective tasks against the answer key. The tasks arrive first with
+ * their statements, options, keys and knowledge points. Students are
+ * S-tokens; the model never sees a name.
+ */
+export const ACTIVITY_MAP_SYSTEM_PROMPT = `You are the MAP stage of a two-stage analysis of a HOMEWORK or TEST (students answer objective questions — true/false, choice, fill-in — and solve programming tasks; some activities also have subjective, teacher-graded tasks). You receive the tasks (with statements, the options and ANSWER KEY of every objective question, and each task's KNOWLEDGE POINTS), then ONE batch of students (S-tokens) with their complete record: every submission in order, the code of the accepted or last failing attempt, and every objective answer marked ✓ or ✗ against the key.
+Extract evidence for the final report. Reply with ONLY JSON:
+{"students":[{"s":"S1","summary":"<2 sentences: how this student did — objective and programming>","struggles":[{"concept":"<a knowledge point from the task list, exact name>","evidence":"<one short, specific observation citing the task label>"}],"level":"strong|middle|weak|absent","attention":true|false,"reason":"<why attention or not, one phrase>"}],
+ "errors":[{"category":"<short error class, e.g. 'Off-by-one loop bound', 'Integer division where float needed', 'Wrong loop condition', 'Output format mismatch', 'Missing edge case', 'Uninitialized accumulator'>","concept":"<the knowledge point it belongs to, exact name>","kind":"programming|objective","tasks":["P7"],"students":["S1","S4"],"evidence":"<what the code / verdicts / answers show, one sentence>"}],
+ "misconceptions":[{"task":"O3","question":"2","chosen":"B","students":["S2","S9"],"reveals":"<what choosing this wrong option reveals about their understanding>"}],
+ "notes":["<batch-level observation, at most 3>"]}
+Rules:
+- "errors" are CLASSIFIED common mistakes: merge the same mistake across students into one entry with all their S-tokens; be concrete (what went wrong in the code or in the reasoning), not a verdict name.
+- "misconceptions": for objective questions, group the students who chose the SAME wrong option and say what that option reveals (use the option text and the key); skip questions everyone got right.
+- "level": strong = solved nearly everything with few attempts; middle = solid but with some gaps; weak = many failures or much left unsolved; absent = no submissions.
+- "attention": true when the student is stuck, gave up, thrashed (many rapid resubmissions), submitted nothing, or shows a misconception recurring across tasks — say which.
+- Use ONLY the S-tokens and task labels given. Use knowledge-point names EXACTLY as listed. Never invent data; if a student has no submissions, say so in "summary".
+- English only. JSON only.`;
+
+/**
+ * 📊 REDUCE stage: the comprehensive teacher report of a homework/test —
+ * statistics, per-task and per-question analysis, classified error
+ * categories, knowledge-point mastery, submission behaviour, student
+ * groups, an overall assessment and plain-language teaching suggestions.
+ */
+export const ACTIVITY_REPORT_SYSTEM_PROMPT = `You are an experienced CS instructor's analytics assistant. Write the CLASS REPORT of one HOMEWORK or TEST for its TEACHER. You receive: the tasks with their statements, answer keys and knowledge points; deterministic statistics (participation, the scoreboard distribution, per task, per objective question, per knowledge point, the submission timeline and late work); and the merged findings of a per-student analysis that read EVERY submission and EVERY answer (students appear as S-tokens).
+
+OUTPUT CONTRACT — English only, pure Markdown, starting EXACTLY with "# AI Class Report — " followed by the activity title given in the context, then these sections in this order:
+## 1. At a Glance
+  A short paragraph (participation, mean/median score, what went well, what did not), then a Markdown TABLE of the score distribution (range | students) and a TABLE per task: task | kind | attempted | solved | mean best score | median attempts. Use ONLY numbers from the statistics — never invent, estimate or recompute.
+## 2. Objective Questions
+  For each objective task, the questions with the lowest accuracy: the question, its key, the wrong option(s) most chosen and what that choice reveals (from the findings). Then the questions that worked well, in one sentence. Skip this section entirely (write "No objective tasks.") if there are none.
+## 3. Programming Tasks
+  One block per programming task: dominant failure modes (from verdict and first-failure numbers), how long students needed, what the accepted solutions looked like, where students got stuck.
+## 4. Error Categories, Classified
+  The classified mistakes grouped by KNOWLEDGE POINT (### <knowledge point> sub-headings, most affected first): for each error category, how many students, on which tasks, what the evidence showed, and the likely misunderstanding behind it.
+## 5. Knowledge-Point Mastery
+  A table: knowledge point | tasks | solved rate | mean best score | verdict (mastered / shaky / weak), from the per-point statistics. If the tasks carry no knowledge points, say so and group by task instead.
+## 6. Submission Behaviour
+  When students worked (the timeline against the deadline, the last-24-hours share), late work, thrashing, giving up, students who never submitted.
+## 7. Students
+  Three lists by S-token only: "Needs attention" (one-phrase reason each), "On track", "Ready for more".
+## 8. Overall Assessment
+  How the activity went as a whole — difficulty fit, balance between objective and programming parts, whether the deadline and weights worked — in 5-8 sentences, honest and kind.
+## 9. Suggestions for Teaching Adjustment
+  6-8 concrete, plain-language, immediately usable suggestions: what to re-teach and HOW (a worked example, a mini-exercise, a common-error walkthrough), which knowledge points to revisit, how to adjust task difficulty, order or weights, which students to talk to, what to keep because it worked. Each suggestion: one bold lead-in phrase, then one or two sentences.
+
+MACHINE-READABLE TRAILER (mandatory): end the document with EXACTLY ONE fenced code block whose info string is json:concepts, containing strict JSON: {"concepts":[{"name":"<knowledge point, exact catalog name (or a 2-6 word error concept when the tasks carry no points)>","problems":{"P7":<affected student count>},"students":["S3","S7"]}]} — 3 to 8 concepts ranked by affected students, counts consistent with the findings and statistics, only the given task labels and S-tokens, nothing else inside or after the block.
+
+RULES: cite evidence inline as (P7, S3). Use only the given task labels and S-tokens; never guess names. Never reveal hidden test data. Knowledge-point names EXACTLY as in the task list. If part of the analysis failed, the context says so — state it plainly in section 1. Total length 1400-2200 words.`;
+
+export async function runActivityMapBatch(contextBlock: string): Promise<string> {
+    return await callProvider(
+        ACTIVITY_MAP_SYSTEM_PROMPT,
+        [{ role: 'user', content: contextBlock }],
+        { temperature: 0.2, timeoutMs: 300000 },
+    );
+}
+
+export async function runActivityReport(contextBlock: string): Promise<string> {
+    return await callProvider(
+        ACTIVITY_REPORT_SYSTEM_PROMPT,
+        [{ role: 'user', content: contextBlock }],
+        { temperature: 0.3, timeoutMs: 420000 },
+    );
+}
+
 export async function runClassReport(contextBlock: string): Promise<string> {
     return await callProvider(
         CLASS_REPORT_SYSTEM_PROMPT,

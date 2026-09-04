@@ -1,0 +1,163 @@
+{% extends "layout/basic.html" %}
+{% block content %}
+{#-
+  PTA fork — GRADE CENTER (teachers and root; handler/grade_center.ts).
+  `book.activities` = every homework / test / self-learning session of the
+  domain, clustered by kind and chronological within a cluster, each with
+  its percentage; `book.students` = every participating student with the
+  final score (/100) of each activity and the course grade (/100), the
+  weighted mean by those percentages; `book.means` = class means.
+  grade_center.page.js makes the percentages editable (live recomputation,
+  cluster split, save / reset), filters and sorts the table.
+-#}
+<style>
+  .gc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--pta-line); border-radius: 12px; background: var(--pta-card-2); font-size: 12.5px; }
+  .gc-toolbar .spacer { flex: 1 1 auto; }
+  .gc-count { color: var(--pta-ink-soft); }
+  .gc-sum { font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--pta-ok-soft); color: var(--pta-ok-text); border: 1px solid var(--pta-ok-line); font-variant-numeric: tabular-nums; }
+  .gc-sum.is-off { background: var(--pta-warn-soft); color: var(--pta-warn-text); border-color: var(--pta-warn-line); }
+  .gc-mode { color: var(--pta-ink-faint); }
+  .gc-mode.is-dirty { color: var(--pta-warn-text); font-weight: 600; }
+  .gc-filter { padding: 5px 10px 5px 28px; border: 1px solid var(--pta-line); border-radius: 999px; background: var(--pta-card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") 9px center no-repeat; color: var(--pta-ink); font-size: 12.5px; width: 200px; }
+  .gc-btn { border: 1px solid var(--pta-line); background: var(--pta-card); color: var(--pta-ink); border-radius: 999px; padding: 5px 14px; font-size: 12.5px; cursor: pointer; text-decoration: none; }
+  .gc-btn:hover { border-color: var(--pta-violet-line, var(--pta-line)); color: var(--pta-violet-text); }
+  .gc-btn--primary { background: var(--pta-violet, #7048e8); border-color: transparent; color: #fff; }
+  .gc-btn--primary:hover { color: #fff; filter: brightness(1.06); }
+  .gc-btn:disabled { opacity: .5; cursor: default; filter: none; }
+  .gc-wrap { overflow: auto; max-height: 72vh; border: 1px solid var(--pta-line); border-radius: 12px; background: var(--pta-card); }
+  .gc-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; color: var(--pta-ink); }
+  .gc-table th, .gc-table td { padding: 8px 12px; white-space: nowrap; border-bottom: 1px solid var(--pta-line-soft, var(--pta-line)); vertical-align: middle; }
+  .gc-table thead th { position: sticky; z-index: 3; background: var(--pta-card-2); font-size: 11.5px; font-weight: 600; letter-spacing: .03em; color: var(--pta-ink-faint); text-align: center; }
+  .gc-table thead tr:first-child th { top: 0; }
+  .gc-table thead tr:last-child th { top: 34px; border-bottom: 2px solid var(--pta-line); }
+  .gc-table thead th[rowspan] { top: 0; vertical-align: middle; }
+  .gc-table th:first-child, .gc-table td:first-child { position: sticky; left: 0; z-index: 2; background: var(--pta-card); text-align: left; min-width: 190px; box-shadow: 2px 0 0 var(--pta-line-soft, var(--pta-line)); }
+  .gc-table thead th:first-child { z-index: 4; background: var(--pta-card-2); }
+  .gc-table tbody tr:nth-child(even) td { background: var(--pta-card-2); }
+  .gc-table tbody tr:hover td { background: var(--pta-violet-soft); }
+  .gc-table tbody tr.is-hidden { display: none; }
+  .gc-table td.num { text-align: center; font-variant-numeric: tabular-nums; }
+  .gc-table td.is-none { color: var(--pta-ink-faint); }
+  .gc-table td.gc-final, .gc-table th.gc-final { background: var(--pta-violet-soft); }
+  .gc-table td.gc-final { font-weight: 700; color: var(--pta-violet-text); font-size: 14px; min-width: 92px; }
+  .gc-table tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--pta-card-2); border-top: 2px solid var(--pta-line); border-bottom: none; font-size: 12px; color: var(--pta-ink-soft); font-weight: 600; }
+  .gc-table tfoot td:first-child { z-index: 3; }
+  /* score tints — quick visual scan of the board */
+  .gc-table td.gc-lvl-1 { box-shadow: inset 3px 0 0 var(--pta-fail, #e03131); }
+  .gc-table td.gc-lvl-2 { box-shadow: inset 3px 0 0 var(--pta-warn-text, #e8590c); }
+  .gc-table td.gc-lvl-3 { box-shadow: inset 3px 0 0 var(--pta-blue-text, #1c7ed6); }
+  .gc-table td.gc-lvl-4 { box-shadow: inset 3px 0 0 var(--pta-ok-text, #2f9e44); }
+  /* clusters */
+  .gc-group { text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 700; border-left: 2px solid var(--pta-line); }
+  .gc-group small { font-weight: normal; opacity: .85; }
+  .gc-group--homework { background: var(--pta-blue-soft) !important; color: var(--pta-blue-text); }
+  .gc-group--test { background: var(--pta-gold-soft) !important; color: var(--pta-gold-text); }
+  .gc-group--session { background: var(--pta-violet-soft) !important; color: var(--pta-violet-text); }
+  .gc-group__set { margin-left: 6px; border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 999px; padding: 0 7px; font-size: 11px; line-height: 16px; cursor: pointer; opacity: .8; }
+  .gc-group__set:hover { opacity: 1; }
+  .gc-table th.gc-col--first, .gc-table td.gc-col--first { border-left: 2px solid var(--pta-line); }
+  /* activity header */
+  .gc-head { display: flex; flex-direction: column; gap: 3px; align-items: center; min-width: 150px; max-width: 210px; text-transform: none; letter-spacing: 0; }
+  .gc-head__title { font-weight: 700; font-size: 12.5px; color: var(--pta-ink); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gc-head__title:hover { color: var(--pta-violet-text); }
+  .gc-head__dates { font-weight: normal; font-size: 10.5px; color: var(--pta-ink-faint); }
+  .gc-head__state { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; font-size: 10.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--pta-line); background: var(--pta-card-3); color: var(--pta-ink-soft); }
+  .gc-head__state--live { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+  .gc-head__state--none { background: var(--pta-warn-soft); border-color: var(--pta-warn-line); color: var(--pta-warn-text); }
+  .gc-w { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 2px 8px 2px 4px; border: 1px solid var(--pta-line); border-radius: 999px; background: var(--pta-card); font-weight: 600; color: var(--pta-ink-soft); }
+  .gc-w input { width: 52px; padding: 2px 4px; border: none; background: transparent; color: var(--pta-ink); font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; outline: none; }
+  .gc-w:focus-within { border-color: var(--pta-violet, #7048e8); box-shadow: 0 0 0 2px rgba(112,72,232,.15); }
+  .gc-w.is-changed { border-color: var(--pta-violet, #7048e8); background: var(--pta-violet-soft); }
+  .gc-w.is-zero { opacity: .6; }
+  /* sorting */
+  .gc-sortable { cursor: pointer; user-select: none; }
+  .gc-sortable:hover { color: var(--pta-blue-text) !important; }
+  .gc-arrow { display: inline-block; width: 1em; margin-left: 2px; opacity: .45; font-size: .9em; }
+  .gc-arrow::after { content: '⇅'; }
+  .gc-sortable[data-dir] { color: var(--pta-blue-text) !important; }
+  .gc-sortable[data-dir] .gc-arrow { opacity: 1; }
+  .gc-sortable[data-dir="asc"] .gc-arrow::after { content: '▲'; }
+  .gc-sortable[data-dir="desc"] .gc-arrow::after { content: '▼'; }
+  .gc-name { color: var(--pta-ink-faint); font-size: 11.5px; margin-left: 4px; }
+  .gc-legend { margin-top: 8px; font-size: 11.5px; color: var(--pta-ink-faint); line-height: 1.5; }
+  .gc-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; vertical-align: middle; margin: 0 3px 0 6px; }
+</style>
+{%- macro lvl(v) -%}{% if v is number %}{% if v >= 80 %}gc-lvl-4{% elif v >= 60 %}gc-lvl-3{% elif v >= 40 %}gc-lvl-2{% else %}gc-lvl-1{% endif %}{% endif %}{%- endmacro -%}
+<div class="row">
+  <div class="medium-12 columns">
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">🎯 {{ _('Grade Center') }}</h1>
+      </div>
+      <div class="section__body">
+        {% if not book.activities.length %}
+        <div class="pta-note">{{ _('No self-learning session, homework or test exists in this domain yet.') }}</div>
+        {% else %}
+        <div class="gc-toolbar">
+          <span class="gc-count">{{ _('{0} students · {1} activities').replace('{0}', book.students.length).replace('{1}', book.activities.length) }}</span>
+          <span class="gc-sum{% if (book.weightSum - 100)|abs > 0.05 %} is-off{% endif %}" id="gc-sum" title="{{ _('The course grade is the weighted mean of the activity scores; percentages that do not add up to 100 are normalized.') }}">Σ {{ book.weightSum }}%</span>
+          <span class="gc-mode" id="gc-mode">{% if book.stored %}{{ _('custom percentages') }}{% else %}{{ _('equal percentages (default)') }}{% endif %}</span>
+          <span class="spacer"></span>
+          <input type="search" class="gc-filter" id="gc-filter" placeholder="{{ _('Filter by student ID or name…') }}">
+          <button type="button" class="gc-btn" id="gc-reset">{{ _('Reset to equal') }}</button>
+          <button type="button" class="gc-btn gc-btn--primary" id="gc-save" disabled>{{ _('Save percentages') }}</button>
+          <a class="gc-btn" href="{{ url('grade_center') }}?export=csv">⬇ {{ _('Export CSV') }}</a>
+        </div>
+        <div class="gc-wrap">
+        <table class="gc-table" id="gc-table">
+          <thead>
+            <tr>
+              <th class="gc-sortable" data-sort="uname" rowspan="2" title="{{ _('Sort by student ID') }}">{{ _('Student') }}<span class="gc-arrow"></span></th>
+              {#- One heading per kind spanning its activities; its percentage is the cluster's sum (live), and ≡ splits a cluster total equally over the cluster. -#}
+              {% for g in book.groups %}
+              <th class="gc-group gc-group--{{ g.kind }}" colspan="{{ g.count }}" data-group="{{ g.kind }}">{% if g.kind == 'session' %}🎓 {{ _('Self-Learning') }}{% elif g.kind == 'homework' %}📝 {{ _('Homework') }}{% else %}🧪 {{ _('Test') }}{% endif %} <small>· {{ g.count }} · <span class="gc-group__w">{{ g.weight }}</span>%</small><button type="button" class="gc-group__set" data-group="{{ g.kind }}" title="{{ _('Give this cluster a total percentage, split equally over its activities') }}">≡</button></th>
+              {% endfor %}
+              <th class="gc-final gc-sortable" data-sort="final" rowspan="2" title="{{ _('Sort by final score') }}">{{ _('Final') }} <small>/100</small><span class="gc-arrow"></span></th>
+            </tr>
+            <tr>
+              {% for a in book.activities %}
+              <th data-key="{{ a.key }}" class="gc-sortable{% if loop.index0 == 0 or book.activities[loop.index0 - 1].kind != a.kind %} gc-col--first{% endif %}" data-sort="{{ a.key }}" title="{{ _('Sort by this score') }}">
+                <div class="gc-head">
+                  <a class="gc-head__title" title="{{ a.title }}" href="{% if a.kind == 'session' %}{{ url('self_learning_detail', ssid=a.id) }}{% elif a.kind == 'homework' %}{{ url('homework_detail', tid=a.id) }}{% else %}{{ url('contest_detail', tid=a.id) }}{% endif %}">{{ a.title }}<span class="gc-arrow"></span></a>
+                  <span class="gc-head__dates">{% if a.beginAt %}{{ datetimeSpan(a.beginAt, false, 'YYYY-M-D')|safe }}{% endif %}{% if a.endAt %} → {{ datetimeSpan(a.endAt, false, 'YYYY-M-D')|safe }}{% endif %}</span>
+                  {% if not a.hasResults %}<span class="gc-head__state gc-head__state--none">{% if a.kind == 'session' %}⏳ {{ _('not evaluated') }}{% else %}{{ _('no participants') }}{% endif %}</span>
+                  {% elif not a.ended %}<span class="gc-head__state gc-head__state--live">● {{ _('in progress') }} · {{ a.participants }}</span>
+                  {% else %}<span class="gc-head__state">✓ {{ a.participants }} {{ _('students') }}</span>{% endif %}
+                  <span class="gc-w{% if not a.weight %} is-zero{% endif %}"><input type="number" class="gc-weight" data-key="{{ a.key }}" data-kind="{{ a.kind }}" min="0" max="1000" step="0.5" value="{{ a.weight }}" data-original="{{ a.weight }}" title="{{ _('Percentage of the course grade') }}"><span>%</span></span>
+                </div>
+              </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+          {% for s in book.students %}
+            <tr data-uid="{{ s.uid }}" data-uname="{{ s.uname }}" data-search="{{ (s.uname ~ ' ' ~ s.name)|lower }}" data-final="{{ s.final if s.final is number else '' }}">
+              <td><a href="{{ url('user_detail', uid=s.uid) }}">{{ s.uname }}</a>{% if s.name %}<span class="gc-name">{{ s.name }}</span>{% endif %}</td>
+              {% for a in book.activities %}{% set v = s.scores[a.key] %}
+              <td class="num {{ lvl(v) }}{% if v is not number %} is-none{% endif %}{% if loop.index0 == 0 or book.activities[loop.index0 - 1].kind != a.kind %} gc-col--first{% endif %}" data-key="{{ a.key }}" data-score="{{ v if v is number else '' }}"{% if v is not number %} title="{{ _('No score — counts 0 in the final grade') }}"{% endif %}>{% if v is number %}{{ v }}{% else %}—{% endif %}</td>
+              {% endfor %}
+              <td class="num gc-final {{ lvl(s.final) }}"><b>{% if s.final is number %}{{ s.final }}{% else %}—{% endif %}</b></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td>{{ _('Class mean') }}</td>
+              {% for a in book.activities %}{% set m = book.means[a.key] %}
+              <td class="num{% if loop.index0 == 0 or book.activities[loop.index0 - 1].kind != a.kind %} gc-col--first{% endif %}" data-mean-key="{{ a.key }}">{% if m is number %}{{ m }}{% else %}—{% endif %}</td>
+              {% endfor %}
+              <td class="num gc-final" id="gc-mean-final">{% if book.means.final is number %}{{ book.means.final }}{% else %}—{% endif %}</td>
+            </tr>
+          </tfoot>
+        </table>
+        </div>
+        <div class="gc-legend">
+          {{ _('Every activity is shown as its final score out of 100: a session by its evaluated total, a homework by its penalized scoreboard points and a test by its scoreboard score, each mapped onto 100 by the paper’s full score; teacher adjustments are included. The Final column is the weighted mean by the percentages above (a missing score counts 0; a 0% activity is shown but does not count). By default the percentages are split equally over the activities that already have results. Staff never appear as rows.') }}
+          <br><i style="background:var(--pta-ok-text,#2f9e44)"></i>≥ 80 <i style="background:var(--pta-blue-text,#1c7ed6)"></i>60–79 <i style="background:var(--pta-warn-text,#e8590c)"></i>40–59 <i style="background:var(--pta-fail,#e03131)"></i>&lt; 40 · {{ _('Click a column heading to sort; click ≡ on a cluster to set its total percentage.') }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

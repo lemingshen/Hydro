@@ -406,6 +406,12 @@ const ProblemSelectAutoComplete = forwardRef<AutoCompleteHandle<ProblemDoc>, Pro
           allowEmptyQuery: true,
           freeSolo: false,
           freeSoloConverter: (input) => input,
+          // PTA fork: a picked task leaves the dropdown at once and comes
+          // back when its tag is removed (multi pickers: the test / homework
+          // / session editors). Pass hideSelected: false to get the upstream
+          // check-mark list back.
+          hideSelected: true,
+          emptyHint: i18n('All matching tasks are already selected.'),
           ...props,
         }}
       />
@@ -425,6 +431,8 @@ ProblemSelectAutoComplete.propTypes = {
   freeSoloConverter: PropTypes.func,
   lockKind: PropTypes.string,
   lockSub: PropTypes.string,
+  hideSelected: PropTypes.bool,
+  emptyHint: PropTypes.string,
 };
 
 ProblemSelectAutoComplete.displayName = 'ProblemSelectAutoComplete';

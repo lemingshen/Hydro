@@ -312,7 +312,19 @@ const page = new NamedPage(['problem_detail', 'contest_detail_problem', 'homewor
 
     if (cnt) {
       await loadAns();
-      $('.problem-content .typo').append(document.getElementsByClassName('nav__item--round').length
+      /*
+       * PTA fork: inside a contest / homework that has ENDED an objective
+       * task can no longer be answered — the server refuses a late
+       * submission, so the sheet is shown read-only (the student's own
+       * answers stay visible for review) instead of offering a button that
+       * would fail. Outside a container, and while one is live, nothing
+       * changes.
+       */
+      const objectiveLocked = !!(UiContext.tdoc && UiContext.objectiveLocked);
+      if (objectiveLocked) {
+        $('.objective-input').prop('disabled', true).attr('aria-disabled', 'true');
+        $('.problem-content .typo').append(`<blockquote class="note">🔒 ${i18n('This activity has ended — the answers below are the ones you handed in and can no longer be changed.')}</blockquote>`);
+      } else $('.problem-content .typo').append(document.getElementsByClassName('nav__item--round').length
         ? `<input type="submit" disabled class="button rounded primary disabled" value="${i18n('Login to Submit')}" />`
         : `<input type="submit" class="button rounded primary" value="${i18n('Submit')}" />`);
       $('.objective-input[type!=checkbox]').on('input', (e: JQuery.TriggeredEvent<HTMLInputElement>) => {

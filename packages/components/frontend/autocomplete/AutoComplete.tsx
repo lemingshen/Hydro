@@ -49,6 +49,17 @@ export interface AutoCompleteProps<Item> {
   allowEmptyQuery?: boolean;
   freeSolo?: boolean;
   freeSoloConverter?: (value: string) => string;
+  /**
+   * Multi mode: keep items that are already selected OUT of the dropdown
+   * (upstream lists them with a check mark and toggles them off on click).
+   * Picking an item removes it from the list at once; removing its tag puts
+   * it back. When everything the query returned is already selected, the
+   * dropdown shows `emptyHint` instead of nothing. Consumers that omit it
+   * are unaffected.
+   */
+  hideSelected?: boolean;
+  /** Text of the single row shown when `hideSelected` leaves nothing to pick. */
+  emptyHint?: string;
 }
 
 export interface AutoCompleteHandle<Item> {
@@ -103,6 +114,7 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
     multi = false, width = '100%', height = 'auto',
     freeSolo = false, allowEmptyQuery = false, listStyle = {},
     disabled = false, disabledHint = '', draggable = multi,
+    hideSelected = false, emptyHint = '',
   } = props;
   const queryItems = props.queryItems ?? (() => []);
   const renderItem = props.renderItem ?? ((item) => item);
@@ -120,6 +132,23 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+
+  /*
+   * The rows actually on screen. With `hideSelected` (multi mode) the
+   * selected items drop out of the query result as they are picked and
+   * return as their tags are removed — the query result itself is left
+   * intact, so no re-query is needed either way. Everything that walks the
+   * dropdown (keyboard, mouse, preview, render) goes through this list.
+   */
+  const hidingSelected = hideSelected && multi;
+  const visibleList = hidingSelected ? itemList.filter((item) => !selectedKeys.includes(itemKey(item))) : itemList;
+  const allSelected = hidingSelected && itemList.length > 0 && visibleList.length === 0;
+  useEffect(() => {
+    // Keep the highlighted row inside the visible list after it shrinks or grows.
+    if (!hidingSelected) return;
+    if (currentItem !== null && currentItem >= visibleList.length) setCurrentItem(visibleList.length ? visibleList.length - 1 : null);
+    else if (currentItem === null && visibleList.length && !freeSolo) setCurrentItem(0);
+  }, [visibleList.length, hidingSelected]);
 
   let [queryCache, valueCache] = [useRef({}).current, useRef({}).current];
   if (props.cacheKey) {
@@ -227,8 +256,8 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
     }
     if (key === 'Enter' || key === ',') {
       e.preventDefault();
-      if (currentItem !== null) {
-        toggleItem(itemList[currentItem]);
+      if (currentItem !== null && visibleList[currentItem] !== undefined) {
+        toggleItem(visibleList[currentItem]);
         return;
       }
       if (freeSolo && target.value !== '') {
@@ -245,20 +274,20 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
     }
     if (key === 'ArrowUp') {
       e.preventDefault();
-      if (itemList.length === 0) return;
+      if (visibleList.length === 0) return;
       const idx = (currentItem ?? 0) - 1;
-      const newIdx = idx < 0 ? itemList.length - 1 : idx;
+      const newIdx = idx < 0 ? visibleList.length - 1 : idx;
       setCurrentItem(newIdx);
-      listRef.current.children[newIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      listRef.current?.children[newIdx]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       return;
     }
     if (key === 'ArrowDown') {
       e.preventDefault();
-      if (itemList.length === 0) return;
-      const idx = (currentItem ?? itemList.length - 1) + 1;
-      const newIdx = idx >= itemList.length ? 0 : idx;
+      if (visibleList.length === 0) return;
+      const idx = (currentItem ?? visibleList.length - 1) + 1;
+      const newIdx = idx >= visibleList.length ? 0 : idx;
       setCurrentItem(newIdx);
-      listRef.current.children[newIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      listRef.current?.children[newIdx]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       // eslint-disable-next-line no-useless-return
       return;
     }
@@ -300,7 +329,7 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
   const [previewPos, setPreviewPos] = useState<{ top: number, left: number, maxHeight: number } | null>(null);
 
   useEffect(() => {
-    if (!props.renderPreview || currentItem === null || !itemList.length) {
+    if (!props.renderPreview || currentItem === null || !visibleList.length) {
       setPreviewIndex(null);
       return () => { };
     }
@@ -308,7 +337,7 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
     // mount (and fire a request for) a preview of every row it passes.
     const timer = setTimeout(() => setPreviewIndex(currentItem), PREVIEW_DELAY);
     return () => clearTimeout(timer);
-  }, [currentItem, itemList, !props.renderPreview]);
+  }, [currentItem, itemList, visibleList.length, !props.renderPreview]);
 
   const positionPreview = useCallback(() => {
     const rect = listRef.current?.getBoundingClientRect();
@@ -334,7 +363,7 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
     };
   }, [previewIndex, positionPreview]);
 
-  const previewItem = previewIndex === null ? null : itemList[previewIndex];
+  const previewItem = previewIndex === null ? null : (visibleList[previewIndex] ?? null);
 
   const move = (dragId: string, hoverId: string) => {
     if (dragId === hoverId || !draggable) return;
@@ -405,9 +434,14 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
           value={disabledHint}
         />
       )}
-      {focused && itemList.length > 0 && (
+      {focused && allSelected && (
+        <ul className="autocomplete-list" style={listStyle} onMouseDown={(e) => e.preventDefault()}>
+          <li data-empty="true" style={{ opacity: 0.65, cursor: 'default' }}><div>{emptyHint || 'All matching items are already selected.'}</div></li>
+        </ul>
+      )}
+      {focused && visibleList.length > 0 && (
         <ul ref={listRef} className="autocomplete-list" style={listStyle} onMouseDown={(e) => e.preventDefault()}>
-          {itemList.map((item, idx) => {
+          {visibleList.map((item, idx) => {
             const inner = renderItem(item);
             if (!inner) return null;
             return <li
@@ -423,7 +457,7 @@ const AutoComplete = forwardRef(function Impl<T>(props: AutoCompleteProps<T>, re
           })}
         </ul>
       )}
-      {focused && itemList.length > 0 && previewItem && previewPos && createPortal(
+      {focused && visibleList.length > 0 && previewItem && previewPos && createPortal(
         <div
           className="autocomplete-preview"
           style={{

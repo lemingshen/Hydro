@@ -838,7 +838,7 @@ button:focus-visible {
 .slm__k { color: var(--pta-ink-faint); font-size: 11px; font-weight: bold; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px; }
 .slm__v { color: var(--pta-ink); font-size: 13.5px; font-weight: 500; word-break: break-word; }
 .slm__st { font-weight: bold; }
-.slm__msg { color: var(--pta-ink-faint); font: 11.5px/1.45 ui-monospace, Consolas, monospace; font-weight: normal; margin-top: 3px; white-space: pre-wrap; word-break: break-word; max-width: 430px; }
+.slm__msg { color: var(--pta-ink-faint); font: 11.5px/1.45 var(--font-family); font-variant-numeric: tabular-nums; font-weight: normal; margin-top: 3px; white-space: pre-wrap; word-break: break-word; max-width: 430px; }
 
 .slm__sect { margin-top: 16px; border: 1px solid var(--pta-line); border-radius: 12px; overflow: hidden; box-shadow: var(--pta-shadow); animation: ptaFadeUp 0.26s var(--pta-ease) both; }
 .theme--dark .slm__sect { box-shadow: none; }
@@ -1347,7 +1347,7 @@ html.layout--immersive .supplementary a:hover { color: #fff; }
 .sl-attempts__best.pass { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
 
 .sl-attempt summary { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 12px 13px; }
-.sl-attempt__num { font: 600 11.5px/1 ui-monospace, Consolas, monospace; color: var(--pta-ink-faint); flex: 0 0 auto; }
+.sl-attempt__num { font: 600 11.5px/1 var(--font-family); font-variant-numeric: tabular-nums; color: var(--pta-ink-faint); flex: 0 0 auto; }
 .sl-attempt__meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pta-ink-faint); font-size: 12px; }
 .sl-attempt__score { flex: 0 0 auto; font-weight: 700; font-size: 13px; color: var(--pta-ink-soft); font-variant-numeric: tabular-nums; }
 .sl-attempt__score.pass { color: var(--pta-ok-text); }
@@ -1399,7 +1399,7 @@ html.page--user_detail .up-name {
   color: #fff;
 }
 html.page--user_detail .up-id {
-  font: 600 12.5px/1 ui-monospace, Consolas, monospace;
+  font: 600 12.5px/1 var(--font-family); font-variant-numeric: tabular-nums;
   letter-spacing: .04em;
   color: #efeaff;
   background: rgba(255, 255, 255, .14);
@@ -1474,11 +1474,11 @@ html.page--contest_paper .paper-q__num, html.page--homework_paper .paper-q__num,
   border-radius: 8px;
   background: #0ca678;
   color: #fff;
-  font: bold 13px/1 ui-monospace, Consolas, monospace;
+  font: bold 13px/1 var(--font-family); font-variant-numeric: tabular-nums;
   margin-right: 6px;
 }
 html.page--contest_paper .paper-q__pid, html.page--homework_paper .paper-q__pid, html.page--training_paper .paper-q__pid, html.page--self_learning_paper .paper-q__pid {
-  font: 600 11.5px/1 ui-monospace, Consolas, monospace;
+  font: 600 11.5px/1 var(--font-family); font-variant-numeric: tabular-nums;
   color: var(--pta-ink-faint);
   margin-left: 8px;
 }
@@ -1491,11 +1491,11 @@ html.page--contest_paper .paper-verdict--bad, html.page--homework_paper .paper-v
 html.page--contest_paper .paper-nav__num, html.page--homework_paper .paper-nav__num, html.page--training_paper .paper-nav__num, html.page--self_learning_paper .paper-nav__num {
   display: inline-block;
   min-width: 20px;
-  font: bold 12px/1.6 ui-monospace, Consolas, monospace;
+  font: bold 12px/1.6 var(--font-family); font-variant-numeric: tabular-nums;
   color: var(--pta-ink-soft);
 }
 html.page--contest_paper .paper-nav__pid, html.page--homework_paper .paper-nav__pid, html.page--training_paper .paper-nav__pid, html.page--self_learning_paper .paper-nav__pid {
-  font: 12px/1.6 ui-monospace, Consolas, monospace;
+  font: 12px/1.6 var(--font-family); font-variant-numeric: tabular-nums;
 }
 html.page--contest_paper .paper-nav__state, html.page--homework_paper .paper-nav__state, html.page--training_paper .paper-nav__state, html.page--self_learning_paper .paper-nav__state {
   float: right;
@@ -2687,7 +2687,7 @@ html.page--problem_main .pager .pager__item.last { font-weight: 600; }
 .oqb__label { display: block; margin: 8px 0 6px; font-weight: 600; font-size: 13px; color: var(--pta-ink); }
 .oqb__label small, .oqb__sub small { font-weight: 400; color: var(--pta-ink-faint); margin-left: 6px; }
 .oqb__sub { margin: 12px 0 6px; font-weight: 600; font-size: 13px; color: var(--pta-ink); }
-.oqb__stem { width: 100%; min-height: 96px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.55; resize: vertical; }
+.oqb__stem { width: 100%; min-height: 96px; font-family: var(--font-family); font-size: 13px; line-height: 1.55; resize: vertical; }
 .oqb__tools { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
 .oqb__muted { font-size: 12.5px; color: var(--pta-ink-faint); }
 
@@ -2717,7 +2717,7 @@ html.page--problem_main .pager .pager__item.last { font-weight: 600; }
   border-radius: 8px;
   background: var(--pta-card-3);
   color: var(--pta-ink-soft);
-  font: 700 12px/1 ui-monospace, Consolas, monospace;
+  font: 700 12px/1 var(--font-family); font-variant-numeric: tabular-nums;
 }
 
 .oqb__row.is-correct .oqb__letter { background: var(--pta-ok); color: #fff; }
@@ -2778,7 +2778,7 @@ html.page--problem_main .pager .pager__item.last { font-weight: 600; }
 .oqb__match { display: flex; gap: 10px; flex-wrap: wrap; }
 .oqb__flag { display: inline-flex; align-items: center; gap: 7px; margin: 0; padding: 7px 14px; border: 1.5px solid var(--pta-line); border-radius: 999px; background: var(--pta-card-2); color: var(--pta-ink-soft); font-weight: 600; font-size: 13px; cursor: pointer; transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease; }
 .oqb__flag input { margin: 0; accent-color: var(--pta-ok); }
-.oqb__flag small { font-weight: 400; color: var(--pta-ink-faint); font-family: ui-monospace, Consolas, monospace; }
+.oqb__flag small { font-weight: 400; color: var(--pta-ink-faint); font-family: var(--font-family); }
 .oqb__flag.is-on { border-color: var(--pta-ok); background: var(--pta-ok-soft); color: var(--pta-ok-text); }
 .theme--dark .oqb__blank { background: #1d2126; border-color: var(--pta-line); }
 /* `hidden` must win over the display rules above. */
@@ -2825,7 +2825,7 @@ html.page--problem_main .pager .pager__item.last { font-weight: 600; }
 .tep__scores { margin: 4px 0 14px; }
 .tep__scores-head { font-weight: 600; font-size: 13px; color: var(--pta-ink); margin: 8px 0 4px; }
 .tep__prow { display: flex; align-items: center; gap: 8px; padding: 5px 8px; margin: 3px 0; border-radius: 10px; background: var(--pta-card-2); border: 1px solid var(--pta-line-soft); }
-.tep__prow-idx { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border-radius: 8px; background: var(--pta-blue-soft); color: var(--pta-blue-text); font: 700 12px/1 ui-monospace, Consolas, monospace; }
+.tep__prow-idx { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border-radius: 8px; background: var(--pta-blue-soft); color: var(--pta-blue-text); font: 700 12px/1 var(--font-family); font-variant-numeric: tabular-nums; }
 .tep__prow-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--pta-ink); }
 .tep__prow .tep__pscore { width: 90px; margin: 0; text-align: right; }
 .tep__prow-unit { font-size: 12px; color: var(--pta-ink-faint); }
@@ -2848,7 +2848,7 @@ html.page--problem_main .pager .pager__item.last { font-weight: 600; }
   border-radius: 999px;
   background: linear-gradient(120deg, #1c7ed6 0%, #6b4ce0 100%);
   color: #fff;
-  font: 700 17px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 700 17px/1 var(--font-family); font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
   box-shadow: 0 10px 26px -10px rgba(76, 110, 245, 0.75), 0 0 0 3px rgba(255, 255, 255, 0.6);
@@ -2995,7 +2995,7 @@ html.page--contest_paper .main, html.page--homework_paper .main { padding-bottom
 .pta-results__table .col--idx { width: 48px; }
 .pta-results__table .col--status { width: 190px; }
 .pta-results__table .col--pts { width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
-.pta-results__idx { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 6px; border-radius: 8px; background: var(--pta-card-3); color: var(--pta-ink-soft); font: 700 12px/1 ui-monospace, Consolas, monospace; }
+.pta-results__idx { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 6px; border-radius: 8px; background: var(--pta-card-3); color: var(--pta-ink-soft); font: 700 12px/1 var(--font-family); font-variant-numeric: tabular-nums; }
 .pta-results__table tr.is-pass .pta-results__idx { background: var(--pta-ok); color: #fff; }
 .pta-results__table tr.is-fail .pta-results__idx { background: var(--pta-bad-soft); color: var(--pta-bad-text); }
 .pta-results__of { color: var(--pta-ink-faint); }

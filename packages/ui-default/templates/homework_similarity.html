@@ -1,0 +1,219 @@
+{% extends "layout/basic.html" %}
+{% import "components/homework.html" as homework with context %}
+{% block content %}
+{{ set(UiContext, 'tdoc', tdoc) }}
+{#-
+  PTA fork — CODE SIMILARITY REPORT of a homework (staff only; the route is
+  gated in handler/similarity.ts). `report` is the client-shaped view of the
+  stored Dolos report (also in UiContext.similarity for the page script):
+  status / progress, a summary, and per task one group per language with
+  the compared files and the pairs at or above the storage floor. The page
+  script (homework_similarity.page.js) runs and polls the check, filters the
+  pair tables by a threshold slider, and opens the side-by-side code view.
+-#}
+<style>
+  .sim-state { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .sim-state__text { flex: 1 1 260px; }
+  .sim-spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--pta-blue-line); border-top-color: var(--pta-primary-2, #1c7ed6); border-radius: 50%; animation: simSpin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes simSpin { to { transform: rotate(360deg); } }
+  .sim-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 0 0 16px; }
+  .sim-kpi { border: 1px solid var(--pta-line); border-radius: 12px; background: var(--pta-card-2); padding: 10px 12px; }
+  .sim-kpi__num { font-size: 22px; font-weight: bold; color: var(--pta-ink); line-height: 1.15; }
+  .sim-kpi__num.bad { color: var(--pta-bad-text); }
+  .sim-kpi__num.ok { color: var(--pta-ok-text); }
+  .sim-kpi__label { font-size: 11.5px; color: var(--pta-ink-soft); margin-top: 3px; }
+  .sim-meta { font-size: 12px; color: var(--pta-ink-faint); margin: -8px 0 16px; }
+  .sim-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 9px 12px; border: 1px solid var(--pta-line); border-radius: 12px; background: var(--pta-card-2); margin-bottom: 16px; font-size: 12.5px; }
+  .sim-filter input[type=range] { width: 200px; vertical-align: middle; }
+  .sim-filter__val { font-weight: bold; min-width: 42px; display: inline-block; }
+  .sim-task { margin-bottom: 22px; }
+  .sim-task__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .sim-task__title { font-weight: bold; font-size: 15px; color: var(--pta-ink); }
+  .sim-group { margin: 10px 0 14px; border: 1px solid var(--pta-line); border-radius: 12px; overflow: hidden; background: var(--pta-card); }
+  .sim-group__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; background: var(--pta-card-2); border-bottom: 1px solid var(--pta-line); font-size: 12.5px; }
+  .sim-group__head b { color: var(--pta-ink); }
+  .sim-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .sim-table th, .sim-table td { padding: 7px 10px; border-bottom: 1px solid var(--pta-line); text-align: left; vertical-align: middle; }
+  .sim-table th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--pta-ink-faint); font-weight: bold; background: var(--pta-card); }
+  .sim-table tr:last-child td { border-bottom: none; }
+  .sim-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sim-table th.num { text-align: right; }
+  .sim-row--flag td { background: var(--pta-bad-soft); }
+  .sim-row--flag td:first-child { box-shadow: inset 3px 0 0 var(--pta-fail, #e03131); }
+  .sim-row--hidden { display: none; }
+  .sim-who { display: inline-flex; flex-direction: column; line-height: 1.25; }
+  .sim-who small { color: var(--pta-ink-faint); font-size: 11px; }
+  .sim-bar { display: inline-flex; align-items: center; gap: 8px; min-width: 130px; }
+  .sim-bar__track { flex: 1 1 70px; height: 7px; border-radius: 4px; background: var(--pta-card-3); border: 1px solid var(--pta-line); overflow: hidden; }
+  .sim-bar__fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #4dabf7, #845ef7); }
+  .sim-row--flag .sim-bar__fill { background: linear-gradient(90deg, #ff922b, #e03131); }
+  .sim-bar__pct { font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; font-weight: bold; }
+  .sim-empty { padding: 12px; font-size: 12.5px; color: var(--pta-ink-faint); }
+  .sim-files summary { cursor: pointer; font-size: 12.5px; color: var(--pta-ink-soft); padding: 8px 12px; border-top: 1px solid var(--pta-line); }
+  .sim-log { max-height: 160px; overflow: auto; font-family: var(--font-family); font-size: 11.5px; background: var(--pta-card-3); border-radius: 8px; padding: 8px; margin: 6px 12px 10px; white-space: pre-wrap; }
+  .sim-btn { border: 1px solid var(--pta-blue-line); background: var(--pta-blue-soft); color: var(--pta-blue-text); border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .sim-btn:hover { filter: brightness(.97); }
+  /* ---- side-by-side code view ---- */
+  .sim-cmp { position: fixed; inset: 0; z-index: 1200; background: rgba(15, 23, 42, .55); display: flex; align-items: center; justify-content: center; padding: 18px; }
+  .sim-cmp__box { width: min(1500px, 100%); height: min(92vh, 100%); background: var(--pta-card); color: var(--pta-ink); border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.35); display: flex; flex-direction: column; overflow: hidden; }
+  .sim-cmp__head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--pta-line); background: var(--pta-card-2); font-size: 13px; }
+  .sim-cmp__head b { font-size: 14px; }
+  .sim-cmp__close { margin-left: auto; border: none; background: transparent; font-size: 20px; cursor: pointer; color: var(--pta-ink-soft); line-height: 1; }
+  .sim-cmp__panes { flex: 1 1 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 0; min-height: 0; }
+  .sim-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--pta-line); }
+  .sim-pane:last-child { border-right: none; }
+  .sim-pane__head { padding: 8px 12px; border-bottom: 1px solid var(--pta-line); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .sim-pane__body { flex: 1 1 auto; overflow: auto; min-height: 0; }
+  .sim-pane__body pre { margin: 0; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; }
+  .sim-pane__body pre code { white-space: pre; }
+  .sim-pre { font-family: var(--code-font-family, monospace); }
+  .sim-line { display: block; }
+  .sim-ln { display: inline-block; width: 3.2em; margin-right: .8em; padding-right: .4em; text-align: right; color: var(--pta-ink-faint); border-right: 1px solid var(--pta-line); user-select: none; white-space: pre; }
+  .sim-line--shared { background: rgba(255, 146, 43, .18); }
+  .pta-dark .sim-line--shared { background: rgba(255, 146, 43, .26); }
+  .sim-cmp__foot { padding: 7px 14px; border-top: 1px solid var(--pta-line); font-size: 11.5px; color: var(--pta-ink-faint); }
+  @media (max-width: 900px) { .sim-cmp__panes { grid-template-columns: 1fr; } .sim-pane { border-right: none; border-bottom: 1px solid var(--pta-line); } }
+</style>
+<div class="row">
+  <div class="medium-9 columns">
+    <div class="section">
+      <div class="section__header">
+        <h1 class="section__title">{{ _('Code Similarity') }} <small class="text-gray">· Dolos</small></h1>
+        <div class="section__tools">
+          <button class="rounded primary button" id="sim-run" {% if report.status == 'running' %}disabled{% endif %}>
+            {% if report.status == 'done' or report.status == 'failed' %}{{ _('Run the check again') }}{% else %}{{ _('Run the check now') }}{% endif %}
+          </button>
+        </div>
+      </div>
+      <div class="section__body">
+        {#- ---------------- status ---------------- -#}
+        {% if not report.systemEnabled %}
+        <div class="pta-note pta-note--warn">{{ _('The code-similarity check is disabled in the system settings (similarity.enabled).') }}</div>
+        {% endif %}
+        {% if not report.checkSimilarity %}
+        <div class="pta-note">{{ _('"Check Code Similarity" is not ticked for this homework, so no check runs automatically at the deadline. You can still run one here.') }}</div>
+        {% elif not report.ended %}
+        <div class="pta-note pta-note--blue">{{ _('The check runs automatically when the homework ends') }} ({{ homework.render_time(report.endAt) }}). {{ _('A check run before that compares the submissions handed in so far.') }}</div>
+        {% endif %}
+        <div class="sim-state" id="sim-state">
+          {% if not report.status %}
+          <div class="sim-state__text">{{ _('No report yet.') }}</div>
+          {% elif report.status == 'running' %}
+          <div class="sim-state__text"><span class="sim-spin"></span><span id="sim-progress">{{ _('Comparing submissions…') }}{% if report.progress %} {{ report.progress.done }}/{{ report.progress.total }} · {{ report.progress.label }}{% endif %}</span> <small class="text-gray">({{ _('started') }} {{ datetimeSpan(report.startedAt, false, 'YYYY-M-D H:mm')|safe }})</small></div>
+          {% elif report.status == 'failed' %}
+          <div class="sim-state__text pta-note pta-note--warn" style="margin:0"><div><b>{{ _('The check failed.') }}</b><br><span style="white-space:pre-wrap">{{ report.error }}</span></div></div>
+          {% else %}
+          <div class="sim-state__text">
+            <span class="pta-chip pta-chip--ok"><span class="icon icon-check"></span> {{ _('Report ready') }}</span>
+            <span class="text-gray">{{ datetimeSpan(report.finishedAt, false, 'YYYY-M-D H:mm')|safe }} ·
+              {% if report.trigger == 'manual' %}{{ _('run by') }} {{ report.by.name or report.by.uname if report.by else _('a teacher') }}{% else %}{{ _('run automatically at the deadline') }}{% endif %}
+              {% if report.engine.version %}· Dolos {{ report.engine.version }}{% endif %}</span>
+          </div>
+          {% endif %}
+        </div>
+        {% if report.stale %}
+        <div class="pta-note pta-note--warn">{{ _('The homework was edited after this report was produced (its tasks or deadline changed). Run the check again for an up-to-date report.') }}</div>
+        {% endif %}
+
+        {% if report.status == 'done' %}
+        {#- ---------------- summary ---------------- -#}
+        <div class="sim-kpis">
+          <div class="sim-kpi"><div class="sim-kpi__num">{{ report.students }}</div><div class="sim-kpi__label">{{ _('Students with submissions') }}</div></div>
+          <div class="sim-kpi"><div class="sim-kpi__num">{{ report.summary.compared }}</div><div class="sim-kpi__label">{{ _('Submissions compared') }}</div></div>
+          <div class="sim-kpi"><div class="sim-kpi__num">{{ report.summary.groups }}</div><div class="sim-kpi__label">{{ _('Comparison groups (task × language)') }}</div></div>
+          <div class="sim-kpi"><div class="sim-kpi__num {{ 'bad' if report.summary.flagged else 'ok' }}">{{ report.summary.flagged }}</div><div class="sim-kpi__label">{{ _('Flagged pairs') }} (≥ {{ (report.threshold * 100)|round }}%)</div></div>
+          <div class="sim-kpi"><div class="sim-kpi__num {{ 'bad' if report.summary.maxSimilarity >= report.threshold else '' }}">{{ (report.summary.maxSimilarity * 100)|round }}%</div><div class="sim-kpi__label">{{ _('Highest similarity') }}</div></div>
+        </div>
+        <div class="sim-meta">{{ _('Similarity is the share of code fingerprints two submissions have in common (Dolos): 100% means the same program up to renaming and re-ordering. Each student is represented by the submission that counts for the homework score; staff submissions are excluded; only pairs at or above {0}% are kept in the report.').format((report.minStore * 100)|round) }}</div>
+        <div class="sim-filter">
+          <label style="margin:0">{{ _('Show pairs with similarity ≥') }}
+            <input type="range" id="sim-threshold" min="0" max="100" step="5" value="{{ (report.threshold * 100)|round }}">
+          </label>
+          <span class="sim-filter__val" id="sim-threshold-val">{{ (report.threshold * 100)|round }}%</span>
+          <span class="text-gray" id="sim-filter-count"></span>
+        </div>
+
+        {#- ---------------- per task ---------------- -#}
+        {% if not report.tasks.length %}
+        <div class="pta-note">{{ _('This homework has no programming task, so there is nothing to compare.') }}</div>
+        {% endif %}
+        {% for task in report.tasks %}
+        <div class="sim-task" data-pid="{{ task.pid }}">
+          <div class="sim-task__head">
+            <span class="sim-task__title">{{ task.pidLabel }} · {{ task.title }}</span>
+            <span class="pta-chip">{{ task.submissions }} {{ _('submissions') }}</span>
+            {% if task.skipped %}<span class="pta-chip pta-chip--dim" title="{{ _('No source text, or alone in its language') }}">{{ task.skipped }} {{ _('skipped') }}</span>{% endif %}
+          </div>
+          {% if not task.groups.length %}
+          <div class="sim-empty">{{ _('Fewer than two comparable submissions.') }}</div>
+          {% endif %}
+          {% for group in task.groups %}
+          <div class="sim-group" data-lang="{{ group.dolosLang }}">
+            <div class="sim-group__head">
+              <b>{{ group.langNames|join(', ') }}</b>
+              {% if group.charFallback %}<span class="pta-chip pta-chip--warn" title="{{ _('Dolos has no parser for this language; the programs were compared character by character, which is noisier.') }}">{{ _('character comparison') }}</span>{% endif %}
+              <span class="pta-chip">{{ group.files.length }} {{ _('files') }}</span>
+              <span class="pta-chip">{{ group.totalPairs }} {{ _('pairs') }}</span>
+              {% if group.flagged %}<span class="pta-chip pta-chip--bad">{{ group.flagged }} {{ _('flagged') }}</span>{% else %}<span class="pta-chip pta-chip--ok">{{ _('nothing flagged') }}</span>{% endif %}
+            </div>
+            {% if group.error %}
+            <div class="pta-note pta-note--warn" style="margin:10px 12px"><div><b>{{ _('This group could not be analyzed.') }}</b><br><span style="white-space:pre-wrap">{{ group.error }}</span></div></div>
+            {% elif group.pairs.length %}
+            <table class="sim-table">
+              <thead><tr>
+                <th>{{ _('Student') }}</th>
+                <th>{{ _('Student') }}</th>
+                <th style="width:190px">{{ _('Similarity') }}</th>
+                <th class="num" title="{{ _('Shared code fingerprints (k-grams)') }}">{{ _('Overlap') }}</th>
+                <th class="num" title="{{ _('Longest run of consecutive shared fingerprints') }}">{{ _('Longest fragment') }}</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+              {% for pair in group.pairs %}
+              <tr class="sim-row{% if pair.similarity >= report.threshold %} sim-row--flag{% endif %}" data-sim="{{ pair.similarity }}" data-left="{{ pair.left.rid }}" data-right="{{ pair.right.rid }}">
+                <td><span class="sim-who">{{ pair.left.name or pair.left.uname }}<small>{{ pair.left.uname }}</small></span></td>
+                <td><span class="sim-who">{{ pair.right.name or pair.right.uname }}<small>{{ pair.right.uname }}</small></span></td>
+                <td><span class="sim-bar"><span class="sim-bar__track"><span class="sim-bar__fill" style="width:{{ (pair.similarity * 100)|round }}%"></span></span><span class="sim-bar__pct">{{ (pair.similarity * 1000)|round / 10 }}%</span></span></td>
+                <td class="num">{{ pair.overlap }}</td>
+                <td class="num">{{ pair.longest }}</td>
+                <td class="num"><button type="button" class="sim-btn sim-compare" data-left="{{ pair.left.rid }}" data-right="{{ pair.right.rid }}">{{ _('Compare') }}</button></td>
+              </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+            <div class="sim-empty sim-none-visible" style="display:none">{{ _('No pair reaches the selected similarity.') }}</div>
+            {% else %}
+            <div class="sim-empty">{{ _('No pair reaches the storage floor of {0}%.').format((report.minStore * 100)|round) }}</div>
+            {% endif %}
+            <details class="sim-files">
+              <summary>{{ _('Compared submissions') }} ({{ group.files.length }})</summary>
+              <table class="sim-table">
+                <thead><tr><th>{{ _('Student') }}</th><th>{{ _('Language') }}</th><th>{{ _('Verdict') }}</th><th class="num">{{ _('Score') }}</th><th class="num" title="{{ _('Fingerprints extracted from the program; 0 means it was too short to compare.') }}">k-grams</th><th class="num">{{ _('Highest similarity') }}</th></tr></thead>
+                <tbody>
+                {% for f in group.files %}
+                <tr>
+                  <td><span class="sim-who">{{ f.name or f.uname }}<small>{{ f.uname }}</small></span></td>
+                  <td>{{ f.lang }}</td>
+                  <td>{% if f.accepted %}<span class="pta-chip pta-chip--ok">{{ _(f.statusText) }}</span>{% else %}<span class="pta-chip">{{ _(f.statusText) }}</span>{% endif %}</td>
+                  <td class="num">{{ f.score }}</td>
+                  <td class="num">{{ f.kgrams }}</td>
+                  <td class="num">{% if f.maxSimilarity >= report.threshold %}<b style="color:var(--pta-bad-text)">{{ (f.maxSimilarity * 100)|round }}%</b>{% else %}{{ (f.maxSimilarity * 100)|round }}%{% endif %}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+              {% if group.log %}<details><summary>{{ _('Dolos output') }}</summary><pre class="sim-log">{{ group.log }}</pre></details>{% endif %}
+            </details>
+          </div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="medium-3 columns">
+    {% include "partials/homework_sidebar.html" %}
+  </div>
+</div>
+{% endblock %}

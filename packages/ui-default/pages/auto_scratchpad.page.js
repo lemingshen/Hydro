@@ -153,6 +153,10 @@ const RAIL_STYLE = [
   '.sl-rail__chip.subj { border-style: dashed; border-color: #c3b2f7; color: #845ef7; background: #f8f5ff; }',
   '.sl-rail__chip.subj:hover { border-color: #845ef7; background: #f3edff; }',
   '.sl-rail__chip.tried { border-style: solid; border-color: #ffc9c9; color: #e03131; background: #fff5f5; }',
+  // 🔴 A judged-wrong objective question (paper rail, after the deadline): solid red, like .ac is solid green.
+  '.sl-rail__chip.wrong { border-style: solid; border-color: transparent; color: #fff; background: linear-gradient(135deg, #ff6b6b, #e03131); box-shadow: 0 4px 10px -4px rgba(224,49,49,.55); }',
+  '.sl-rail__chip.partial { border-style: solid; border-color: transparent; color: #fff; background: linear-gradient(135deg, #ffa94d, #e8590c); box-shadow: 0 4px 10px -4px rgba(232,89,12,.5); }',
+  '.sl-rail__chip.wrong:hover, .sl-rail__chip.partial:hover { color: #fff; filter: brightness(1.05); }',
   '.sl-rail__chip.ac { border-style: solid; border-color: transparent; color: #fff; background: linear-gradient(135deg, #40c057, #2f9e44); box-shadow: 0 4px 10px -4px rgba(47,158,68,.55); }',
   '.sl-rail__chip.current { border-color: #339af0; box-shadow: 0 0 0 2px rgba(51,154,240,.28), 0 4px 12px -4px rgba(51,154,240,.5); }',
   '.sl-rail__chip.locked { border-style: dashed; color: #adb5bd; background: #f8f9fa; cursor: not-allowed; }',
@@ -364,6 +368,9 @@ function buildTdocGroups(kinds) {
       const info = byPid[String(pid)] || {};
       const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
       const st = info.status || 0;
+      // "Handed in, verdict withheld" (a live activity's objective task) is
+      // neither accepted nor wrong: a neutral blue chip, as on the paper.
+      const handedIn = !st && info.submitted ? ' submitted' : '';
       items.push({
         pid: String(pid),
         kind: kind3,
@@ -371,7 +378,7 @@ function buildTdocGroups(kinds) {
         index: info.index,
         points: info.points,
         accepted: st === 1,
-        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(pid) === String(current) ? ' current' : ''}`,
+        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${handedIn}${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(pid),
         href: `${prefix}/p/${pid}?tid=${uc.tdoc.docId}`,
       });
@@ -418,6 +425,10 @@ async function getRailGroups() {
       const kindCls = p.kind === 'objective' ? ' quiz' : (p.kind === 'subjective' ? ' subj' : '');
       const st = p.status || 0;
       const handedIn = !st && p.submitted ? ' submitted' : '';
+      // 🔴 After the deadline an objective question the student got wrong is
+      // solid red (partial: amber) — the outcome the paper computed, which
+      // beats the raw judge status for a partially-scored multi-select.
+      const outcome = p.outcome === 'wrong' ? ' wrong' : p.outcome === 'partial' ? ' partial' : '';
       return {
         pid: String(p.pid),
         kind: p.kind,
@@ -425,7 +436,7 @@ async function getRailGroups() {
         index: p.index,
         points: p.points,
         accepted: st === 1,
-        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${handedIn}${kindCls}`,
+        cls: `${outcome || (st === 1 ? ' ac' : (st ? ' tried' : ''))}${handedIn}${kindCls}`,
         name: p.title || String(p.pid),
         href: p.href,
       };
@@ -702,6 +713,14 @@ async function injectRail(mode) {
  * solve page (a separate bundle) can drive it too.
  */
 export function markRailStatus(pid, accepted, submitted = false) {
+  /*
+   * PTA fork: once a contest / homework has ENDED its rail is FROZEN. The
+   * student may keep practising the programming tasks (submissions go
+   * through the correction path and count for nothing), so a late accept
+   * must not repaint a chip the deadline left red — the rail keeps showing
+   * how the activity actually finished.
+   */
+  if (window.UiContext && UiContext.railFrozen) return;
   const key = (window.CSS && CSS.escape) ? CSS.escape(String(pid)) : String(pid);
   const chip = document.querySelector(`#sl-rail .sl-rail__chip[data-pid="${key}"]`);
   if (!chip) return;

@@ -22,6 +22,7 @@ import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
 import * as document from '../model/document';
+import { getSubjective } from '../model/selflearning';
 import message from '../model/message';
 import * as oplog from '../model/oplog';
 import problem from '../model/problem';
@@ -177,11 +178,22 @@ export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
 /*  PTA test editor: the paper as four sections                        */
 /* ------------------------------------------------------------------ */
 const PAPER_SECTIONS = ['tf', 'choice', 'blank'] as const;
+/** Sections whose tasks carry their own points (typed per task in the editor). */
+const SCORED_SECTIONS = ['prog', 'subj'] as const;
 export interface PaperSections {
     tf: { total: number, pids: number[] };
     choice: { total: number, pids: number[] };
     blank: { total: number, pids: number[] };
     prog: { pids: number[], scores: Record<number, number> };
+    /**
+     * PTA fork: SUBJECTIVE (project-level, S-pid) tasks — the homework
+     * editor's fifth section. Students hand in a report and files on the
+     * task page (handler/self_learning.ts SubjectiveTaskHandler); nothing
+     * is judged, so their points are graded by the teacher outside the
+     * scoreboard. Tests do not offer the section (parsePaper still accepts
+     * it, so the shape is shared).
+     */
+    subj: { pids: number[], scores: Record<number, number> };
 }
 
 const round2 = (x: number) => Math.round(x * 100) / 100;
@@ -192,7 +204,9 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
  * stored per-problem weights (default 100 each) as the points.
  */
 export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSections> {
-    const empty: PaperSections = { tf: { total: 0, pids: [] }, choice: { total: 0, pids: [] }, blank: { total: 0, pids: [] }, prog: { pids: [], scores: {} } };
+    const empty: PaperSections = {
+        tf: { total: 0, pids: [] }, choice: { total: 0, pids: [] }, blank: { total: 0, pids: [] }, prog: { pids: [], scores: {} }, subj: { pids: [], scores: {} },
+    };
     if (!tdoc) return empty;
     const stored = (tdoc as any).sections;
     if (stored && typeof stored === 'object') {
@@ -200,8 +214,10 @@ export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSecti
             empty[k].total = +stored[k]?.total || 0;
             empty[k].pids = (stored[k]?.pids || []).map((x) => +x).filter((x) => x);
         }
-        empty.prog.pids = (stored.prog?.pids || []).map((x) => +x).filter((x) => x);
-        empty.prog.scores = stored.prog?.scores || {};
+        for (const k of SCORED_SECTIONS) {
+            empty[k].pids = (stored[k]?.pids || []).map((x) => +x).filter((x) => x);
+            empty[k].scores = stored[k]?.scores || {};
+        }
         return empty;
     }
     const pdict = await problem.getList(domainId, tdoc.pids, true, false, ['docId', 'pid', 'content'] as any, true);
@@ -212,6 +228,9 @@ export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSecti
             const sub = objectiveSubKindOf(pdoc.content) || 'choice';
             empty[sub].pids.push(pid);
             empty[sub].total = round2(empty[sub].total + weight);
+        } else if (pdoc && /^s/i.test(String(pdoc.pid || ''))) {
+            empty.subj.pids.push(pid);
+            empty.subj.scores[pid] = weight;
         } else {
             empty.prog.pids.push(pid);
             empty.prog.scores[pid] = weight;
@@ -245,21 +264,24 @@ export async function parsePaper(domainId: string, raw: string, viewer: any) {
         choice: { total: points(j.choice?.total), pids: ids(j.choice?.pids) },
         blank: { total: points(j.blank?.total), pids: ids(j.blank?.pids) },
         prog: { pids: ids(j.prog?.pids), scores: {} },
+        subj: { pids: ids(j.subj?.pids), scores: {} },
     };
-    for (const pid of sections.prog.pids) sections.prog.scores[pid] = points(j.prog?.scores?.[pid]);
-    const all = [...sections.tf.pids, ...sections.choice.pids, ...sections.blank.pids, ...sections.prog.pids];
+    for (const k of SCORED_SECTIONS) for (const pid of sections[k].pids) sections[k].scores[pid] = points(j[k]?.scores?.[pid]);
+    const all = [...sections.tf.pids, ...sections.choice.pids, ...sections.blank.pids, ...sections.prog.pids, ...sections.subj.pids];
     const pids = [...new Set(all)];
     const pdict = await problem.getList(domainId, pids, viewer.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || viewer._id, false, ['docId', 'pid'] as any, true);
     for (const pid of pids) if (!pdict[pid]) throw new ValidationError('paper', `problem ${pid}`);
-    // Kind guard: objective sections hold O-tasks, the programming section P-tasks.
+    // Kind guard: objective sections hold O-tasks, the programming section
+    // P-tasks, the subjective section S-tasks.
     for (const k of PAPER_SECTIONS) for (const pid of sections[k].pids) if (!/^o/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not an objective task`);
     for (const pid of sections.prog.pids) if (/^[os]/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a programming task`);
+    for (const pid of sections.subj.pids) if (!/^s/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a subjective task`);
     const score: Record<number, number> = {};
     for (const k of PAPER_SECTIONS) {
         const n = sections[k].pids.length;
         for (const pid of sections[k].pids) score[pid] = n ? round2(sections[k].total / n) : 0;
     }
-    for (const pid of sections.prog.pids) score[pid] = sections.prog.scores[pid];
+    for (const k of SCORED_SECTIONS) for (const pid of sections[k].pids) score[pid] = sections[k].scores[pid];
     return { pids, score, sections };
 }
 
@@ -269,7 +291,7 @@ export async function parsePaper(domainId: string, raw: string, viewer: any) {
  * sections and the programming tasks with, per task, the points it is
  * worth and the points earned (weight × judged score / 100), plus totals.
  */
-export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<number, any>) {
+export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<number, any>, uid?: number) {
     const sections = await paperOf(domainId, tdoc);
     const pdict = await problem.getList(domainId, tdoc.pids, true, false, ['docId', 'pid', 'title', 'content'] as any, true);
     const sectionOf: Record<number, string> = {};
@@ -281,7 +303,10 @@ export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<n
     const weightOf = (pid: number) => (typeof tdoc.score?.[pid] === 'number' ? tdoc.score[pid] : 100);
     const rowOf = (pid: number, index: number) => {
         const d = detail?.[pid];
-        const judged = !!d?.rid && d.status !== STATUS.STATUS_WAITING;
+        // PTA fork: a teacher-adjusted task counts as judged even without a
+        // submission (a hand-graded task); the adjustment travels with the row.
+        const adjusted = d?.override ? { computed: d.override.computed, reason: d.override.reason, at: d.override.at } : null;
+        const judged = !!adjusted || (!!d?.rid && d.status !== STATUS.STATUS_WAITING);
         const score = judged ? (d.score || 0) : 0;
         const full = (weightOf(pid) * score) / 100;
         // Homework: the rule stores the penalised, weighted points per task
@@ -298,8 +323,9 @@ export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<n
             late: judged && earned < full - 1e-9,
             score: judged ? score : null,
             status: d?.status ?? null,
-            submitted: !!d?.rid,
+            submitted: !!d?.rid || !!adjusted,
             rid: d?.rid,
+            adjusted,
         };
     };
     const meta: Record<string, { name: string, icon: string }> = {
@@ -314,16 +340,56 @@ export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<n
             total: round2(tasks.reduce((a, t) => a + t.points, 0)), earned: round2(tasks.reduce((a, t) => a + t.earned, 0)),
         };
     }).filter((g) => g.tasks.length);
-    const progPids = tdoc.pids.filter((pid) => !sectionOf[pid] && !/^s/i.test(String(pdict[pid]?.pid || '')));
+    const isSubjective = (pid: number) => /^s/i.test(String(pdict[pid]?.pid || ''));
+    const progPids = tdoc.pids.filter((pid) => !sectionOf[pid] && !isSubjective(pid));
     const programming = progPids.map((pid, i) => rowOf(pid, i + 1));
     const groups = [...objective, ...(programming.length ? [{
         key: 'prog', name: 'Programming', icon: '⌨', tasks: programming,
         total: round2(programming.reduce((a, t) => a + t.points, 0)), earned: round2(programming.reduce((a, t) => a + t.earned, 0)),
     }] : [])];
+    /*
+     * PTA fork: SUBJECTIVE tasks are handed in as a report + files (no
+     * judge, no record), so they are listed apart from the auto-graded
+     * groups — their points are graded by the teacher by hand and never
+     * enter `earned` / `total` below. With a uid, each row says whether
+     * the student has handed anything in.
+     */
+    const subjPids = tdoc.pids.filter(isSubjective);
+    const handedIn: Record<number, { files: number, hasReport: boolean, updateAt?: Date } | null> = {};
+    if (uid && subjPids.length) {
+        await Promise.all(subjPids.map(async (pid) => {
+            const doc = await getSubjective(domainId, pid, uid).catch(() => null);
+            handedIn[pid] = doc ? { files: (doc.files || []).length, hasReport: !!(doc.report || '').trim(), updateAt: doc.updateAt } : null;
+        }));
+    }
+    const subjective = subjPids.map((pid, i) => {
+        // PTA fork: the teacher grades a subjective task through a score
+        // adjustment on it (homework_score_override) — that is its grade.
+        const d = detail?.[pid];
+        const graded = d?.override ? { score: d.score || 0, earned: round2(typeof d.penaltyScore === 'number' ? d.penaltyScore : (weightOf(pid) * (d.score || 0)) / 100), reason: d.override.reason, at: d.override.at } : null;
+        return {
+            docId: pid,
+            pid: pdict[pid]?.pid,
+            title: pdict[pid]?.title || String(pid),
+            index: i + 1,
+            points: round2(weightOf(pid)),
+            submitted: uid ? !!(handedIn[pid] && (handedIn[pid].files || handedIn[pid].hasReport)) : null,
+            files: handedIn[pid]?.files || 0,
+            hasReport: !!handedIn[pid]?.hasReport,
+            updateAt: handedIn[pid]?.updateAt || null,
+            graded,
+        };
+    });
     return {
         groups,
         total: round2(groups.reduce((a, g) => a + g.total, 0)),
         earned: round2(groups.reduce((a, g) => a + g.earned, 0)),
+        subjective: {
+            tasks: subjective,
+            total: round2(subjective.reduce((a, t) => a + t.points, 0)),
+            earned: subjective.some((t) => t.graded) ? round2(subjective.reduce((a, t) => a + (t.graded ? t.graded.earned : 0), 0)) : null,
+            graded: subjective.filter((t) => t.graded).length,
+        },
     };
 }
 
@@ -1248,6 +1314,20 @@ export class ContestScoreboardHandler extends ContestDetailBaseHandler {
             }
         }
         await view.display.call(this, args);
+        /*
+         * PTA fork: teacher score adjustments on the homework scoreboard —
+         * the page script (homework_score_override.page.js) turns the score
+         * cells into "adjust" affordances for the owner / homework editors.
+         */
+        if (this.tdoc.rule === 'homework' && (this.user.own(this.tdoc) || this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK))) {
+            const pdict = await problem.getList(domainId, this.tdoc.pids, true, false, ['docId', 'pid', 'title'] as any, true);
+            this.UiContext.scoreOverride = {
+                url: this.url('homework_score_override', { tid }),
+                pids: this.tdoc.pids,
+                labels: Object.fromEntries(this.tdoc.pids.map((pid) => [pid, `${(pdict[pid] as any)?.pid || pid} ${(pdict[pid] as any)?.title || ''}`.trim()])),
+                weights: this.tdoc.score || {},
+            };
+        }
     }
 
     @param('tid', Types.ObjectId)

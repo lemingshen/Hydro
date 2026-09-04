@@ -7,7 +7,16 @@
 {% endif %}
   <div>
     <ol class="menu">
-    {% if model.contest.isOngoing(tdoc, tsdoc) or model.contest.isExtended(tdoc, tsdoc) %}
+    {#-
+      PTA fork: the scratchpad is the answering surface for programming
+      tasks at every phase. Hydro accepts submissions after a homework ends
+      as CORRECTION submissions (handler/problem.ts mode == 'correction',
+      the note on the statement says so), so the IDE entry must stay here
+      too — without it the site-wide auto-enter finds no affordance and the
+      student is dropped on the classic problem page. The contest sidebar
+      already keys off `mode`; this one now does the same.
+    -#}
+    {% if model.contest.isOngoing(tdoc, tsdoc) or model.contest.isExtended(tdoc, tsdoc) or mode == 'correction' %}
     {% if page_name == 'homework_detail_problem' and handler.ctx.setting.get('ui-default.enableScratchpad') %}
       <li class="menu__item scratchpad--hide nojs--hide"><a class="menu__link highlight" name="problem-sidebar__open-scratchpad" href="javascript:;" data-global-hotkey="alt+e">
         <span class="icon icon-enlarge"></span> {{ _('Open Scratchpad') }} (Alt+E)
@@ -20,10 +29,20 @@
         <span class="icon icon-flag"></span> {{ _('View Problem') }}
       </a></li>
     {% endif %}
+      {#- Submitting INTO the homework only while it is live: after the hard
+          deadline the server rejects a tid'd submission and the scratchpad
+          posts to the correction endpoint instead (problem_detail.html). -#}
+      {% if model.contest.isOngoing(tdoc, tsdoc) or model.contest.isExtended(tdoc, tsdoc) %}
       <li class="menu__item scratchpad--hide"><a class="menu__link{% if page_name == 'homework_detail_problem_submit' %} active{% endif %}" href="{{ url('problem_submit', pid=pdoc.pid|default(pdoc.docId), query={tid:tdoc.docId}) }}">
         <span class="icon icon-send"></span> {{ _('Submit') }}
       </a></li>
-    {% elif model.contest.isDone(tdoc) %}
+      {% else %}
+      <li class="menu__item scratchpad--hide"><a class="menu__link" href="{{ url('problem_submit', pid=pdoc.pid|default(pdoc.docId)) }}">
+        <span class="icon icon-send"></span> {{ _('Submit') }} ({{ _('correction') }})
+      </a></li>
+      {% endif %}
+    {% endif %}
+    {% if model.contest.isDone(tdoc) %}
       <li class="menu__item scratchpad--hide"><a class="menu__link" href="{{ url('problem_detail', pid=pdoc.pid|default(pdoc.docId)) }}">
         <span class="icon icon-send"></span> {{ _('Open in Problem Set') }}
       </a></li>

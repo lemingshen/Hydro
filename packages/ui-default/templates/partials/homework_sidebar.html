@@ -68,6 +68,10 @@
       <li class="menu__item"><a class="menu__link" href="{{ url('homework_files', tid=tdoc.docId) }}">
         <span class="icon icon-file"></span> {{ _('Files') }}
       </a></li>
+      {#- PTA fork: the Dolos code-similarity report (handler/similarity.ts), staff only. -#}
+      <li class="menu__item"><a class="menu__link" href="{{ url('homework_similarity', tid=tdoc.docId) }}">
+        <span class="icon icon-comparison"></span> {{ _('Code Similarity') }}
+      </a></li>
     {% endif %}
     {% if handler.user.own(tdoc) or handler.user.hasPriv(PRIV.PRIV_READ_RECORD_CODE) or handler.user.hasPerm(perm.PERM_READ_RECORD_CODE) %}
       <li class="menu__item"><a class="menu__link" href="{{ url('homework_code', tid=tdoc.docId) }}" data-no-instant>
@@ -96,6 +100,10 @@
       <dt>{{ _('Problem') }}</dt><dd>{{ tdoc['pids']|length }}</dd>
       {#- 🌐 the homework's allowed submission languages -#}
       <dt>{{ _('Languages') }}</dt><dd title="{{ _('Every programming problem here can only be submitted in these languages.') if (tdoc.langs and tdoc.langs.length) else _('Every judge language is allowed.') }}">{% if tdoc.langs and tdoc.langs.length %}{% for l in tdoc.langs %}{{ model.setting.langs[l].display if model.setting.langs[l] else l }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ _('any') }}{% endif %}</dd>
+      {%- if tdoc.checkSimilarity -%}
+      {#- PTA fork: the editor's "Check Code Similarity" tick box, shown only when it is on. -#}
+      <dt>{{ _('Code similarity') }}</dt><dd title="{{ _('The programming submissions of this homework are compared across the class for similar code.') }}">{{ _('Enabled') }}</dd>
+      {%- endif -%}
       <dt>{{ _('Open Since') }}</dt><dd>{{ homework.render_time(tdoc['beginAt']) }}</dd>
       <dt>{{ _('Deadline') }}</dt><dd>{{ homework.render_time(tdoc['penaltySince']) }}</dd>
       <dt>{{ _('Can be Extended For') }}</dt><dd>{{ homework.render_extension(tdoc) }} {{ _('hour(s)') }}</dd>

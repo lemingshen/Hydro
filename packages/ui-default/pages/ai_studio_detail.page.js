@@ -60,7 +60,7 @@ const DETAIL_STYLE = [
   '.aisd__stage { position: relative; }',
   '.aisd__stage:not(:last-of-type)::after { content: ""; position: absolute; left: 5px; top: 17px; bottom: -6px; width: 2px; background: rgba(151, 117, 250, .22); border-radius: 2px; transition: background .3s ease; }',
   '.aisd__stage--done:not(:last-of-type)::after { background: #40c057; }',
-  '.aisd__ev { background: #1e2227; color: #e6e6e6; border-radius: 10px; padding: 10px 12px; font: 11.5px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow: auto; scrollbar-width: thin; animation: ptaFadeIn .2s ease; }',
+  '.aisd__ev { background: #1e2227; color: #e6e6e6; border-radius: 10px; padding: 10px 12px; font: 11.5px/1.5 var(--font-family); font-variant-numeric: tabular-nums; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow: auto; scrollbar-width: thin; animation: ptaFadeIn .2s ease; }',
   '.aisd__meta { color: var(--pta-ink-faint); font-size: 11.5px; }',
   '.aisd__mtable { width: 100%; border-collapse: collapse; font-size: 11.5px; }',
   '.aisd__mtable td, .aisd__mtable th { padding: 3px 6px; border-bottom: 1px solid var(--pta-line-soft); text-align: left; }',
@@ -130,9 +130,9 @@ const DETAIL_STYLE = [
   '.aisq__card { border: 1px solid var(--pta-line); border-radius: var(--pta-radius-lg); padding: 12px 14px; margin: 0 0 10px; background: var(--pta-card); animation: ptaFadeUp .22s var(--pta-ease) backwards; }',
   '.aisq__card:hover { border-color: rgba(12, 166, 120, .45); }',
   '.aisq__head { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; flex-wrap: wrap; }',
-  '.aisq__num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(120deg, #20c997, #0ca678); color: #fff; font: bold 12px/1 ui-monospace, Consolas, monospace; flex: 0 0 auto; }',
+  '.aisq__num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(120deg, #20c997, #0ca678); color: #fff; font: bold 12px/1 var(--font-family); font-variant-numeric: tabular-nums; flex: 0 0 auto; }',
   '.aisq__type { font-size: 12px; font-weight: bold; color: var(--pta-ink-soft); }',
-  '.aisq__id { font: 11px/1 ui-monospace, Consolas, monospace; color: var(--pta-ink-faint); }',
+  '.aisq__id { font: 11px/1 var(--font-family); font-variant-numeric: tabular-nums; color: var(--pta-ink-faint); }',
   '.aisq__score { margin-left: auto; font-size: 11.5px; border-radius: 9px; padding: 2px 9px; background: var(--pta-card-2); color: var(--pta-ink-soft); }',
   '.aisq__stem { font-size: 13px; line-height: 1.6; }',
   '.aisq__stem p { margin: 0 0 6px; }',
@@ -140,7 +140,7 @@ const DETAIL_STYLE = [
   '.aisq__opt { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; border: 1px solid var(--pta-line-soft); border-radius: 9px; padding: 6px 10px; background: var(--pta-card-2); }',
   '.aisq__opt--ok { border-color: #40c057; background: #ebfbee; }',
   '.pta-dark .aisq__opt--ok { background: #10331d; }',
-  '.aisq__letter { font: bold 11.5px/1.5 ui-monospace, Consolas, monospace; color: var(--pta-ink-faint); flex: 0 0 auto; min-width: 14px; }',
+  '.aisq__letter { font: bold 11.5px/1.5 var(--font-family); font-variant-numeric: tabular-nums; color: var(--pta-ink-faint); flex: 0 0 auto; min-width: 14px; }',
   '.aisq__opt--ok .aisq__letter { color: #2b8a3e; }',
   '.aisq__tick { margin-left: auto; color: #2b8a3e; font-weight: bold; }',
   '.aisq__ans { margin-top: 8px; font-size: 12.5px; color: var(--pta-ink-soft); }',
@@ -159,7 +159,7 @@ const DETAIL_STYLE = [
   '.aisd__fieldhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 14px 0 6px; }',
   '.aisd__fieldhead .aisd__meta { text-transform: none; letter-spacing: 0; }',
   '.aisd__toolhint { margin: 8px 0 2px; font-size: 12.5px; color: var(--pta-ink-soft); line-height: 1.5; }',
-  '.aisd__pidchip { margin-left: 8px; font-family: ui-monospace, Consolas, monospace; font-weight: bold; letter-spacing: .03em; }',
+  '.aisd__pidchip { margin-left: 8px; font-family: var(--font-family); font-weight: bold; letter-spacing: .03em; }',
   '.aisd__bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }'
 ].concat(AIS_POLISH).join('\n');
 

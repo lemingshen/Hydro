@@ -142,7 +142,8 @@ export const AIS_STYLE = [
   '.ais textarea, .ais input[type=text], .ais select { width: 100%; border: 1px solid #d5dbe7; border-radius: 10px; padding: 8px 10px; font-size: 13px; box-sizing: border-box; background: #fff; }',
   '.ais textarea { font-size: 13px; line-height: 1.5; resize: vertical; }',
   // Code, tests and answer keys stay monospaced; prose that the AI reads does not (see chat-composer).
-  '.ais textarea.aisd__sol-code, .ais textarea.aisd__alt-code, .ais textarea.aisd__tests, .ais textarea.aisd__answers, .ais textarea.aisd__body-md { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }',
+  '.ais textarea.aisd__sol-code, .ais textarea.aisd__alt-code, .ais textarea.aisd__tests, .ais textarea.aisd__answers { font-family: var(--code-font-family, ui-monospace, Consolas, monospace); font-size: 12.5px; }',
+  '.ais textarea.aisd__body-md { font-family: var(--font-family); font-size: 13px; }',
   // Claude-style composers inside the Studio: roomy, rounded, calm.
   '.ais textarea.ais__topic, .ais textarea.ais__notes, .ais textarea.aisc__input, .ais textarea.aisd__topic, .ais textarea.aisd__notes { border-radius: 14px; padding: 10px 14px; font-size: 13.5px; line-height: 1.55; min-height: 44px; }',
   '.ais__row { display: flex; gap: 14px; flex-wrap: wrap; }',
@@ -219,7 +220,7 @@ export const AIS_STYLE = [
   '.ais__qt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--pta-violet-line); border-radius: 999px; padding: 4px 12px; font-size: 12px; color: var(--pta-violet-text); background: var(--pta-card); cursor: pointer; user-select: none; transition: background .13s, border-color .13s; }',
   '.ais__qt:hover { background: var(--pta-violet-soft); }',
   '.ais__qt input { accent-color: #845ef7; margin: 0; }',
-  '.ais__kindchip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; font: bold 11px/1 ui-monospace, Consolas, monospace; color: #fff; margin-right: 7px; flex: 0 0 auto; vertical-align: -4px; }',
+  '.ais__kindchip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; font: bold 11px/1 var(--font-family); font-variant-numeric: tabular-nums; color: #fff; margin-right: 7px; flex: 0 0 auto; vertical-align: -4px; }',
   '.ais__kindchip--p { background: linear-gradient(120deg, #339af0, #1c7ed6); }',
   '.ais__kindchip--o { background: linear-gradient(120deg, #20c997, #0ca678); }',
   '.ais__kindchip--s { background: linear-gradient(120deg, #9775fa, #7048e8); }',

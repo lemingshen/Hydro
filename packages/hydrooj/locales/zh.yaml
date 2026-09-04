@@ -1050,3 +1050,13 @@ Your role: 您的角色
 day streak: 天连续练习
 solved: 已解决
 challenges cleared: 次挑战通关
+homework_similarity: "作业代码相似度"
+setting_similarity: "代码相似度检查"
+similarity.enabled: "启用代码相似度检查"
+similarity.dolos_path: "Dolos 命令"
+similarity.threshold: "标记阈值（0-1）"
+similarity.min_store: "保留下限（0-1）"
+similarity.max_pairs: "每组最多保留配对数"
+similarity.timeout: "Dolos 超时（秒）"
+similarity.extra_args: "Dolos 额外参数"
+grade_center: "成绩中心"

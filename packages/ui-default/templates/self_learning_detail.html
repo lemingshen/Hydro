@@ -40,6 +40,14 @@
   .sld-results__table tbody tr:hover td { background: var(--pta-violet-soft); }
   .sld-results__table td:first-child, .sld-results__table th:first-child { color: var(--pta-ink-faint); }
   .sld-results__num { text-align: center !important; }
+  .sld-results__sortable { cursor: pointer; user-select: none; }
+  .sld-results__sortable:hover { color: var(--pta-blue-text) !important; }
+  .sld-results__arrow { display: inline-block; width: 1em; margin-left: 2px; opacity: .45; font-size: .9em; }
+  .sld-results__arrow::after { content: '⇅'; }
+  .sld-results__sortable[data-dir] { color: var(--pta-blue-text) !important; }
+  .sld-results__sortable[data-dir] .sld-results__arrow { opacity: 1; }
+  .sld-results__sortable[data-dir="asc"] .sld-results__arrow::after { content: '▲'; }
+  .sld-results__sortable[data-dir="desc"] .sld-results__arrow::after { content: '▼'; }
   .sld-results__table--grouped th small { display: block; font-weight: normal; opacity: .6; font-size: .78em; }
   .sld-results__table--grouped .sld-results__sub small { display: inline; margin-left: 1px; }
   .sld-results__group { border-left: 1px solid var(--pta-line); }
@@ -48,6 +56,16 @@
   .sld-results__fa { margin-left: 2px; font-size: .8em; }
   .sld-results__table--grouped td.is-flagged { color: var(--pta-red, #c0392b); font-weight: 600; }
   .sld-results__flag { margin-left: 1px; font-size: .8em; }
+  .sld-results__adj { margin-left: 3px; font-size: .8em; color: var(--pta-violet-text, #5f3dc4); cursor: help; }
+  .sld-evpop__adj { margin-top: 8px; padding: 8px 10px; border-radius: 9px; background: var(--pta-violet-soft, #f3f0ff); border: 1px solid var(--pta-violet-line, var(--pta-line)); }
+  .sld-evpop__adj b { color: var(--pta-violet-text, #5f3dc4); }
+  .sld-evpop__adj input, .sld-evpop__adj textarea { font-family: var(--font-family); width: 100%; box-sizing: border-box; margin: 4px 0; padding: 5px 8px; border: 1px solid var(--pta-line); border-radius: 7px; background: var(--pta-card); color: var(--pta-ink); font-size: 12px; }
+  .sld-evpop__adj textarea { min-height: 52px; resize: vertical; }
+  .sld-evpop__adj .sld-evpop__btnrow { display: flex; gap: 6px; margin-top: 4px; }
+  .sld-evpop__adj button { border: none; border-radius: 999px; padding: 5px 12px; font-size: 12px; cursor: pointer; background: var(--pta-violet, #7048e8); color: #fff; }
+  .sld-evpop__adj button.is-secondary { background: transparent; color: var(--pta-ink-soft); border: 1px solid var(--pta-line); }
+  .sld-evpop__adj button:disabled { opacity: .55; cursor: default; }
+  .sld-myscore__adj { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; background: var(--pta-violet-soft, #f3f0ff); color: var(--pta-violet-text, #5f3dc4); border: 1px solid var(--pta-violet-line, var(--pta-line)); cursor: help; }
   .sld-rubric { margin-top: 8px; }
   .sld-rubric > summary { cursor: pointer; font-weight: 600; color: var(--pta-ink-soft); padding: 4px 0; list-style: none; }
   .sld-rubric > summary::-webkit-details-marker { display: none; }
@@ -62,10 +80,18 @@
   .sld-rubric__b { color: var(--pta-ink-faint); }
   .sld-rubric__foot { margin-top: 7px; color: var(--pta-ink-soft); }
   .sld-myscore__mine { margin: 2px 0 6px; color: var(--pta-ink-soft); }
+  .sld-myscore__notes { margin: 8px 0 6px; padding: 9px 12px; border-radius: 10px; background: var(--pta-violet-soft, #f3f0ff); border: 1px solid var(--pta-violet-line, var(--pta-line)); color: var(--pta-ink); font-size: 12.5px; }
+  .sld-myscore__notes b { color: var(--pta-violet-text, #5f3dc4); }
+  .sld-myscore__notes ul { margin: 4px 0 0; padding-left: 18px; }
+  .sld-myscore__notes li { margin: 3px 0; }
+  .sld-myscore__notes q { font-style: italic; }
+  .sld-myscore__notes small { color: var(--pta-ink-faint); }
   .sld-results__legend > div { margin-top: 3px; }
   /* expanded (full-screen) board */
   .sld-results--full { position: fixed !important; inset: 14px !important; z-index: 2001 !important; margin: 0 !important; overflow: auto; border-radius: 16px; background: var(--pta-card); box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .55); animation: none !important; transform: none !important; }
-  .sld-results--full .section__body { display: flex; flex-direction: column; height: calc(100% - 58px); box-sizing: border-box; }
+  .sld-results--full { display: flex; flex-direction: column; }
+  /* The body takes whatever the (now wrapping) header leaves, instead of a fixed 58px guess. */
+  .sld-results--full .section__body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: auto; box-sizing: border-box; }
   .sld-results--full .sld-results__wrap { flex: 1 1 auto; max-height: none; }
   .sld-results__backdrop { position: fixed; inset: 0; z-index: 2000; background: rgba(15, 12, 30, .58); }
   .sld-results__total { background: var(--pta-violet-soft); }
@@ -81,7 +107,26 @@
   .sld-results__late { font-size: 10px; margin-left: 2px; color: var(--pta-warn-text); }
   .sld-results__name { color: var(--pta-ink-faint); font-size: 11.5px; margin-left: 4px; }
   .sld-results__legend { margin-top: 8px; font-size: 11.5px; color: var(--pta-ink-faint); line-height: 1.5; }
-  .sld-results .section__tools { display: flex; gap: 6px; align-items: center; }
+  /*
+   * Results toolbar: the header is a wrapping flex row (title left, tools
+   * right), the tools no longer float absolutely, and every control —
+   * Expand, Export CSV, Evaluate and the AI Class Report button that
+   * ai_class_report.page.js appends — shares one height and baseline.
+   * The base .button carries a 1rem bottom margin, which centred the
+   * buttons 8px above anything without one; zeroed here.
+   */
+  .sld-results > .section__header { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+  .sld-results > .section__header .section__title { flex: 1 1 auto; margin: 0; line-height: 36px; }
+  .sld-results .section__tools { position: static; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; margin: 0; }
+  .sld-results .section__tools form { display: inline-flex; margin: 0; }
+  .sld-results .section__tools .button,
+  .sld-results .section__tools .acr-btn { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; height: 36px; line-height: 34px; margin: 0 !important; padding: 0 16px; font-size: 13px; font-weight: 600; border-radius: 999px; white-space: nowrap; vertical-align: middle; }
+  .sld-results .section__tools .acr-btn { line-height: 1; transform: none; }
+  .sld-results .section__tools .acr-btn:hover { transform: none; }
+  @media (max-width: 720px) {
+    .sld-results .section__tools { justify-content: flex-start; width: 100%; }
+    .sld-results .section__tools .button, .sld-results .section__tools .acr-btn { flex: 1 1 auto; justify-content: center; }
+  }
   .sld-myscore__body { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
   .sld-myscore__main { font-size: 14px; color: var(--pta-ink); }
   .sld-myscore__main b { font-size: 24px; color: var(--pta-violet-text); margin-left: 6px; }
@@ -117,15 +162,37 @@
   /* Not measured yet: the dash is muted, not alarming. */
   .sld-myscore__part--pending b { color: var(--pta-ink-faint); }
   /* 🎓 Hover breakdown of a student's Ownership cell (teacher view). */
-  .sld-owntip { position: fixed; z-index: 12100; width: 340px; max-height: 340px; overflow-y: auto; background: var(--pta-card); border: 1px solid var(--pta-blue-line, var(--pta-line)); border-radius: 12px; box-shadow: 0 22px 50px -22px rgba(10, 20, 40, .55); padding: 11px 13px; font-size: 12px; line-height: 1.5; color: var(--pta-ink); }
-  .sld-owntip__title { font-weight: 700; color: var(--pta-blue-text); margin-bottom: 6px; }
-  .sld-owntip__task { margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--pta-line); font-weight: 700; }
-  .sld-owntip__task:first-of-type { margin-top: 2px; padding-top: 0; border-top: none; }
-  .sld-owntip__task small { font-weight: normal; color: var(--pta-ink-faint); }
-  .sld-owntip__q { margin: 3px 0 3px 2px; color: var(--pta-ink-soft); }
-  .sld-owntip__q em { color: var(--pta-ink-faint); font-style: normal; }
-  .sld-owntip__q .sl-lvl { margin: 0 0 0 4px; }
-  .sld-owntip__sum { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--pta-line); font-weight: 700; color: var(--pta-blue-text); }
+  /* 🔎 Score-evidence pop-up (hover any score cell; click to pin). */
+  .sld-ev { cursor: help; }
+  .sld-ev.is-pinned { outline: 2px solid var(--pta-violet, #7048e8); outline-offset: -2px; border-radius: 4px; }
+  .sld-evpop { position: fixed; z-index: 12100; width: 460px; max-width: calc(100vw - 16px); max-height: min(62vh, 560px); overflow-y: auto; overscroll-behavior: contain; background: var(--pta-card); border: 1px solid var(--pta-blue-line, var(--pta-line)); border-radius: 12px; box-shadow: 0 22px 50px -22px rgba(10, 20, 40, .55); padding: 11px 13px 12px; font-size: 12px; line-height: 1.5; color: var(--pta-ink); animation: ptaFadeUp .16s var(--pta-ease, ease) backwards; }
+  .sld-evpop__head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+  .sld-evpop__title { flex: 1 1 auto; font-weight: 700; color: var(--pta-blue-text); }
+  .sld-evpop__title small { display: block; font-weight: normal; color: var(--pta-ink-faint); }
+  .sld-evpop__btn { border: none; background: transparent; cursor: pointer; color: var(--pta-ink-faint); font-size: 14px; line-height: 1; padding: 0 2px; }
+  .sld-evpop__btn:hover { color: var(--pta-violet-text, #5f3dc4); }
+  .sld-evpop__score { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; padding: 7px 10px; margin: 0 0 8px; border-radius: 9px; background: var(--pta-blue-soft); border: 1px solid var(--pta-blue-line, var(--pta-line)); }
+  .sld-evpop__score b { font-size: 17px; color: var(--pta-blue-text); }
+  .sld-evpop__score.is-flag { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); }
+  .sld-evpop__score.is-flag b { color: var(--pta-bad-text); }
+  .sld-evpop__formula { color: var(--pta-ink-soft); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .sld-evpop__sec { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--pta-line); font-weight: 700; color: var(--pta-ink); }
+  .sld-evpop__sec small { font-weight: normal; color: var(--pta-ink-faint); }
+  .sld-evpop__q { margin: 5px 0 2px; color: var(--pta-ink); }
+  .sld-evpop__q .sld-evpop__line { color: var(--pta-ink-faint); font-weight: normal; margin-left: 4px; }
+  .sld-evpop__a { margin: 2px 0 4px 12px; padding: 5px 8px; border-left: 3px solid var(--pta-violet-line, var(--pta-line)); background: var(--pta-card-2); border-radius: 0 8px 8px 0; white-space: pre-wrap; word-break: break-word; color: var(--pta-ink-soft); }
+  .sld-evpop__a .sl-lvl { margin: 0 0 0 6px; }
+  .sld-evpop__meta { color: var(--pta-ink-faint); font-size: 11px; }
+  .sld-evpop__note { color: var(--pta-ink-faint); font-style: italic; margin: 3px 0; }
+  .sld-evpop__flag { margin: 6px 0; padding: 6px 9px; border-radius: 8px; background: var(--pta-bad-soft); border: 1px solid var(--pta-bad-line); color: var(--pta-bad-text); }
+  .sld-evpop table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 11.5px; }
+  .sld-evpop th, .sld-evpop td { padding: 3px 6px; border-bottom: 1px solid var(--pta-line-soft, var(--pta-line)); text-align: left; white-space: nowrap; }
+  .sld-evpop th { color: var(--pta-ink-faint); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
+  .sld-evpop td.num, .sld-evpop th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sld-evpop tr.is-counted td { background: var(--pta-ok-soft); font-weight: 600; }
+  .sld-evpop tr.is-excluded td { opacity: .55; text-decoration: line-through; }
+  .sld-evpop__sum { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--pta-line); font-weight: 700; color: var(--pta-blue-text); }
+  .sld-evpop__foot { margin-top: 7px; font-size: 10.5px; color: var(--pta-ink-faint); }
   .sld-myscore__meta { font-size: 12px; color: var(--pta-ink-soft); line-height: 1.6; }
   .sld-myscore__diff { color: var(--pta-warn-text); }
   /* Embargoed total: the number is replaced by a neutral mask until release. */
@@ -142,7 +209,7 @@
   .slp-bonus__st--busy { background: var(--pta-warn-soft); color: var(--pta-warn-text); }
   .slp-st--ac { background: linear-gradient(135deg, #40c057, #2f9e44); border-color: transparent; color: #fff; box-shadow: 0 4px 10px -4px rgba(47, 158, 68, .6); }
   .slp-st--tried { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); color: var(--pta-bad-text); }
-  .slp-pid { font-size: 12px; font-weight: bold; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 7px; padding: 1px 8px; flex: 0 0 auto; font-family: var(--code-font-family); }
+  .slp-pid { font-size: 12px; font-weight: bold; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 7px; padding: 1px 8px; flex: 0 0 auto; }
   .slp-title { font-size: 13.5px; font-weight: 500; color: var(--pta-ink); text-decoration: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .13s ease; }
   a.slp-title:hover { color: var(--pta-blue-text); }
   .slp-kind { flex: 0 0 auto; font-size: 11.5px; font-weight: bold; border-radius: 999px; padding: 2px 11px; border: 1px solid; }
@@ -186,7 +253,7 @@
   .sldb__name { color: var(--pta-ink-faint); margin-left: 6px; }
   /* The generated statement can be long; this is the one column that wraps. */
   .sldb__task { white-space: normal !important; max-width: 320px; }
-  .sldb__pid { font-family: var(--code-font-family); font-size: 11.5px; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 7px; padding: 1px 7px; margin-right: 6px; }
+  .sldb__pid { font-size: 11.5px; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 7px; padding: 1px 7px; margin-right: 6px; }
   .sldb__kp { display: inline-flex; flex-wrap: wrap; gap: 4px; white-space: normal; max-width: 280px; }
   .sldb__st { font-size: 11.5px; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
   .sldb__st--ready { background: var(--pta-ok-soft); color: var(--pta-ok-text); }
@@ -267,13 +334,14 @@
         <table class="sld-results__table sld-results__table--grouped">
           <thead>
           <tr>
-            <th rowspan="2">#</th><th rowspan="2">{{ _('Student') }}</th>
+            {#- PTA fork: click Student / Total to sort the board (self_learning_detail.page.js); # stays the rank by total. -#}
+            <th rowspan="2" title="{{ _('Rank by total') }}">#</th><th rowspan="2" class="sld-results__sortable" data-sort="uname" title="{{ _('Sort by student ID') }}">{{ _('Student') }}<span class="sld-results__arrow"></span></th>
             {% for pid in sdoc.pids %}<th class="sld-results__num sld-results__group" colspan="6" title="{{ pdict[pid].title if pdict[pid] else pid }}">{{ pdict[pid].pid if pdict[pid] else pid }}</th>{% endfor %}
             <th class="sld-results__num" rowspan="2" title="{{ _('Block A · per-task rubrics: task sum ÷ (tasks × 100) × {0}, all five sub-rubrics live').replace('{0}', results.blockAMax|default(75)) }}">🅰<br><small>/{{ results.blockAMax|default(75) }}</small></th>
             <th class="sld-results__num" rowspan="2" title="{{ _('Independence Trajectory — one whole-session LLM level × {0}: does the student need less tutor help from the first task to the last?').replace('{0}', (trjShare / 4)|round(1)) }}">📈<br><small>/{{ trjShare }}</small></th>
             <th class="sld-results__num" rowspan="2" title="{{ _('Concept Transfer — mean re-encounter level × {0}: does a resolved mistake recur on the next task exercising the same knowledge point?').replace('{0}', (trfShare / 4)|round(2)) }}">🧠<br><small>/{{ trfShare }}</small></th>
             <th class="sld-results__num" rowspan="2" title="{{ _('Block B · cross-student-session rubrics: 📈 + 🧠') }}">🅱<br><small>/{{ results.blockBMax|default(25) }}</small></th>
-            <th class="sld-results__num sld-results__total" rowspan="2">{{ _('Total') }}<br><small>/{{ results.maxTotal }}</small></th>
+            <th class="sld-results__num sld-results__total sld-results__sortable" rowspan="2" data-sort="total" title="{{ _('Sort by total score') }}">{{ _('Total') }}<span class="sld-results__arrow"></span><br><small>/{{ results.maxTotal }}</small></th>
             <th class="sld-results__num" rowspan="2">{{ _('Attempts') }}</th>
             <th class="sld-results__num" rowspan="2">🏁</th><th class="sld-results__num" rowspan="2">⏭</th><th class="sld-results__num" rowspan="2">🎁</th>
           </tr>
@@ -290,39 +358,39 @@
           </thead>
           <tbody>
           {% for r in results.rows %}
-          <tr>
+          <tr data-uname="{{ r.uname }}" data-total="{{ r.total }}" data-rank="{{ loop.index }}">
             <td>{{ loop.index }}</td>
             <td><a href="{{ url('user_detail', uid=r.uid) }}">{{ r.uname }}</a>{% if r.name %} <span class="sld-results__name">{{ r.name }}</span>{% endif %}</td>
             {% for pid in sdoc.pids %}{% set sc = r.scores[pid|string] %}{% set ts = r.taskScores[pid|string] if r.taskScores else none %}{% set ow = r.own[pid|string] if r.own else none %}{% set isfa = r.fa and r.fa[pid|string] %}{% set aSh = faAch if isfa else achShare %}{% set oSh = faOwn if isfa else ownShare %}
-            <td class="sld-results__num sld-results__subfirst{% if sc and sc.effective >= 100 %} is-full{% elif not sc %} is-none{% endif %}"{% if isfa %} title="{{ _('⭐ First-attempt acceptance: this task = 🏆 /{0} + 🎓 /{1}; 🔧 🧩 💡 do not apply').replace('{0}', faAch).replace('{1}', faOwn) }}"{% endif %}><b>{% if ts is number %}{{ ts }}{% else %}—{% endif %}</b>{% if isfa %}<span class="sld-results__fa">⭐</span>{% endif %}</td>
-            <td class="sld-results__num{% if not sc %} is-none{% endif %}"{% if sc %} title="{{ _('judged') }} {{ sc.effective }}/100 × {{ aSh }}%{% if isfa %} · {{ _('first-attempt') }}{% endif %}{% if sc.late %} · {{ _('Late: raw score {0}').replace('{0}', sc.score) }}{% endif %}"{% endif %}>{% if sc %}{{ sc.effective }}→{{ (sc.effective * aSh / 100)|round(1) }}{% if sc.late %}<span class="sld-results__late">⏱</span>{% endif %}{% else %}—{% endif %}</td>
-            <td class="sld-results__num{% if ow and ow.flagged %} is-flagged{% elif not (ow and ow.level is number) %} is-none{% endif %}"{% if ow and ow.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif ow and ow.level is number %} title="L{{ ow.level }} × {{ (oSh / 4)|round(1) }} ({{ ow.asked }}{{ _('q') }}){% if isfa %} · {{ _('first-attempt: /{0}, lenient grading').replace('{0}', faOwn) }}{% endif %}"{% else %} title="{{ _('no walkthrough yet') }}"{% endif %}>{% if ow and ow.flagged %}0<span class="sld-results__flag">🚫</span>{% elif ow and ow.level is number %}{{ ow.pts if ow.pts is number else (ow.level * oSh / 4)|round(1) }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-results__subfirst sld-ev{% if sc and sc.effective >= 100 %} is-full{% elif not sc %} is-none{% endif %}" data-ev="task" data-uid="{{ r.uid }}" data-pid="{{ pid }}"{% if isfa %} title="{{ _('⭐ First-attempt acceptance: this task = 🏆 /{0} + 🎓 /{1}; 🔧 🧩 💡 do not apply').replace('{0}', faAch).replace('{1}', faOwn) }}"{% endif %}><b>{% if ts is number %}{{ ts }}{% else %}—{% endif %}</b>{% if isfa %}<span class="sld-results__fa">⭐</span>{% endif %}{% if r.override and r.override.tasks and r.override.tasks[pid|string] %}<span class="sld-results__adj" title="{{ _('Adjusted by the teacher') }}: {{ r.override.tasks[pid|string].reason }} ({{ _('computed') }} {{ r.override.tasks[pid|string].computed }})">✎</span>{% endif %}</td>
+            <td class="sld-results__num sld-ev{% if not sc %} is-none{% endif %}" data-ev="ach" data-uid="{{ r.uid }}" data-pid="{{ pid }}"{% if sc %} title="{{ _('judged') }} {{ sc.effective }}/100 × {{ aSh }}%{% if isfa %} · {{ _('first-attempt') }}{% endif %}{% if sc.late %} · {{ _('Late: raw score {0}').replace('{0}', sc.score) }}{% endif %}"{% endif %}>{% if sc %}{{ sc.effective }}→{{ (sc.effective * aSh / 100)|round(1) }}{% if sc.late %}<span class="sld-results__late">⏱</span>{% endif %}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev{% if ow and ow.flagged %} is-flagged{% elif not (ow and ow.level is number) %} is-none{% endif %}" data-ev="own" data-uid="{{ r.uid }}" data-pid="{{ pid }}"{% if ow and ow.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif ow and ow.level is number %} title="L{{ ow.level }} × {{ (oSh / 4)|round(1) }} ({{ ow.asked }}{{ _('q') }}){% if isfa %} · {{ _('first-attempt: /{0}, lenient grading').replace('{0}', faOwn) }}{% endif %}"{% else %} title="{{ _('no walkthrough yet') }}"{% endif %}>{% if ow and ow.flagged %}0<span class="sld-results__flag">🚫</span>{% elif ow and ow.level is number %}{{ ow.pts if ow.pts is number else (ow.level * oSh / 4)|round(1) }}{% else %}—{% endif %}</td>
             {% if isfa %}
-            <td class="sld-results__num is-na" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
-            <td class="sld-results__num is-na" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
-            <td class="sld-results__num is-na" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
+            <td class="sld-results__num is-na sld-ev" data-ev="fix" data-uid="{{ r.uid }}" data-pid="{{ pid }}" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
+            <td class="sld-results__num is-na sld-ev" data-ev="rea" data-uid="{{ r.uid }}" data-pid="{{ pid }}" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
+            <td class="sld-results__num is-na sld-ev" data-ev="ini" data-uid="{{ r.uid }}" data-pid="{{ pid }}" title="{{ _('does not apply — first-attempt acceptance') }}">·</td>
             {% else %}
             {% set fx = r.fix[pid|string] if r.fix else none %}
-            <td class="sld-results__num{% if fx and fx.flagged %} is-flagged{% elif not (fx and fx.level is number) %} is-none{% endif %}"{% if fx and fx.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif fx and fx.level is number %} title="{{ _('mean(level × penalty)') }} {{ fx.level }} × {{ (fixShare / 4)|round(2) }} ({{ fx.judged }}{{ _('t') }})"{% else %} title="{{ _('no guided fixes judged yet') }}"{% endif %}>{% if fx and fx.flagged %}0<span class="sld-results__flag">🚫</span>{% elif fx and fx.level is number %}{{ fx.pts if fx.pts is number else (fx.level * fixShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev{% if fx and fx.flagged %} is-flagged{% elif not (fx and fx.level is number) %} is-none{% endif %}" data-ev="fix" data-uid="{{ r.uid }}" data-pid="{{ pid }}"{% if fx and fx.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif fx and fx.level is number %} title="{{ _('mean(level × penalty)') }} {{ fx.level }} × {{ (fixShare / 4)|round(2) }} ({{ fx.judged }}{{ _('t') }})"{% else %} title="{{ _('no guided fixes judged yet') }}"{% endif %}>{% if fx and fx.flagged %}0<span class="sld-results__flag">🚫</span>{% elif fx and fx.level is number %}{{ fx.pts if fx.pts is number else (fx.level * fixShare / 4)|round(1) }}{% else %}—{% endif %}</td>
             {% set rx = r.rea[pid|string] if r.rea else none %}
-            <td class="sld-results__num{% if rx and rx.flagged %} is-flagged{% elif not (rx and rx.level is number) %} is-none{% endif %}"{% if rx and rx.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif rx and rx.level is number %} title="{{ _('mean level') }} {{ rx.level }} × {{ (reaShare / 4)|round(1) }} ({{ rx.judged }}{{ _('a') }})"{% else %} title="{{ _('no failure-phase answers graded yet') }}"{% endif %}>{% if rx and rx.flagged %}0<span class="sld-results__flag">🚫</span>{% elif rx and rx.level is number %}{{ rx.pts if rx.pts is number else (rx.level * reaShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev{% if rx and rx.flagged %} is-flagged{% elif not (rx and rx.level is number) %} is-none{% endif %}" data-ev="rea" data-uid="{{ r.uid }}" data-pid="{{ pid }}"{% if rx and rx.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif rx and rx.level is number %} title="{{ _('mean level') }} {{ rx.level }} × {{ (reaShare / 4)|round(1) }} ({{ rx.judged }}{{ _('a') }})"{% else %} title="{{ _('no failure-phase answers graded yet') }}"{% endif %}>{% if rx and rx.flagged %}0<span class="sld-results__flag">🚫</span>{% elif rx and rx.level is number %}{{ rx.pts if rx.pts is number else (rx.level * reaShare / 4)|round(1) }}{% else %}—{% endif %}</td>
             {% set ix = r.ini[pid|string] if r.ini else none %}
-            <td class="sld-results__num{% if ix and ix.flagged %} is-flagged{% elif not (ix and ix.level is number) %} is-none{% endif %}"{% if ix and ix.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif ix and ix.level is number %} title="{{ _('first engagement') }} L{{ ix.level }} × {{ (iniShare / 4)|round(2) }}"{% else %} title="{{ _('not judged yet — needs a closed first engagement with answers') }}"{% endif %}>{% if ix and ix.flagged %}0<span class="sld-results__flag">🚫</span>{% elif ix and ix.level is number %}{{ ix.pts if ix.pts is number else (ix.level * iniShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev{% if ix and ix.flagged %} is-flagged{% elif not (ix and ix.level is number) %} is-none{% endif %}" data-ev="ini" data-uid="{{ r.uid }}" data-pid="{{ pid }}"{% if ix and ix.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0 for this task') }}"{% elif ix and ix.level is number %} title="{{ _('first engagement') }} L{{ ix.level }} × {{ (iniShare / 4)|round(2) }}"{% else %} title="{{ _('not judged yet — needs a closed first engagement with answers') }}"{% endif %}>{% if ix and ix.flagged %}0<span class="sld-results__flag">🚫</span>{% elif ix and ix.level is number %}{{ ix.pts if ix.pts is number else (ix.level * iniShare / 4)|round(1) }}{% else %}—{% endif %}</td>
             {% endif %}
             {% endfor %}
             {% if r.allFa %}
-            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
-            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
-            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
-            <td class="sld-results__num is-na" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            <td class="sld-results__num is-na sld-ev" data-ev="blockA" data-uid="{{ r.uid }}" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            <td class="sld-results__num is-na sld-ev" data-ev="trj" data-uid="{{ r.uid }}" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            <td class="sld-results__num is-na sld-ev" data-ev="trf" data-uid="{{ r.uid }}" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
+            <td class="sld-results__num is-na sld-ev" data-ev="blockB" data-uid="{{ r.uid }}" title="{{ _('does not apply — all tasks first-attempt') }}">·</td>
             {% else %}
-            <td class="sld-results__num">{% if r.blockA is number %}{{ r.blockA }}{% else %}—{% endif %}</td>
-            <td class="sld-results__num{% if r.trj and r.trj.flagged %} is-flagged{% elif not (r.trj and r.trj.level is number) %} is-none{% endif %}"{% if r.trj and r.trj.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0') }}"{% elif r.trj and r.trj.level is number %} title="L{{ r.trj.level }} × {{ (trjShare / 4)|round(1) }}"{% else %} title="{{ _('not judged yet — evaluated over the whole session history') }}"{% endif %}>{% if r.trj and r.trj.flagged %}0<span class="sld-results__flag">🚫</span>{% elif r.trj and r.trj.level is number %}{{ r.trj.pts if r.trj.pts is number else (r.trj.level * trjShare / 4)|round(1) }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev" data-ev="blockA" data-uid="{{ r.uid }}">{% if r.blockA is number %}{{ r.blockA }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev{% if r.trj and r.trj.flagged %} is-flagged{% elif not (r.trj and r.trj.level is number) %} is-none{% endif %}" data-ev="trj" data-uid="{{ r.uid }}"{% if r.trj and r.trj.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0') }}"{% elif r.trj and r.trj.level is number %} title="L{{ r.trj.level }} × {{ (trjShare / 4)|round(1) }}"{% else %} title="{{ _('not judged yet — evaluated over the whole session history') }}"{% endif %}>{% if r.trj and r.trj.flagged %}0<span class="sld-results__flag">🚫</span>{% elif r.trj and r.trj.level is number %}{{ r.trj.pts if r.trj.pts is number else (r.trj.level * trjShare / 4)|round(1) }}{% else %}—{% endif %}</td>
             {% set tf = r.trf %}
-            <td class="sld-results__num{% if tf and tf.flagged %} is-flagged{% elif not tf or tf.state == 'pending' %} is-none{% endif %}"{% if tf and tf.state == 'assessed' %} title="{{ _('mean level') }} {{ tf.level }} × {{ (trfShare / 4)|round(2) }} ({{ tf.judged }}{{ _('re-encounter(s)') }})"{% elif tf and tf.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0') }}"{% elif tf and tf.state == 'untestable' %} title="{{ _('no re-encountered knowledge points — full credit ({0})').replace('{0}', trfShare) }}"{% else %} title="{{ _('pending — surfacing and judging run on evaluation') }}"{% endif %}>{% if tf and tf.flagged %}0<span class="sld-results__flag">🚫</span>{% elif tf and tf.state != 'pending' %}{{ tf.pts }}{% else %}—{% endif %}</td>
-            <td class="sld-results__num">{% if r.blockB is number %}{{ r.blockB }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev{% if tf and tf.flagged %} is-flagged{% elif not tf or tf.state == 'pending' %} is-none{% endif %}" data-ev="trf" data-uid="{{ r.uid }}"{% if tf and tf.state == 'assessed' %} title="{{ _('mean level') }} {{ tf.level }} × {{ (trfShare / 4)|round(2) }} ({{ tf.judged }}{{ _('re-encounter(s)') }})"{% elif tf and tf.flagged %} title="{{ _('manipulation detected — this sub-rubric is scored 0') }}"{% elif tf and tf.state == 'untestable' %} title="{{ _('no re-encountered knowledge points — full credit ({0})').replace('{0}', trfShare) }}"{% else %} title="{{ _('pending — surfacing and judging run on evaluation') }}"{% endif %}>{% if tf and tf.flagged %}0<span class="sld-results__flag">🚫</span>{% elif tf and tf.state != 'pending' %}{{ tf.pts }}{% else %}—{% endif %}</td>
+            <td class="sld-results__num sld-ev" data-ev="blockB" data-uid="{{ r.uid }}">{% if r.blockB is number %}{{ r.blockB }}{% else %}—{% endif %}</td>
             {% endif %}
-            <td class="sld-results__num sld-results__total"{% if r.allFa %} title="{{ _('⭐⭐ All tasks first-attempt: Total = 🏆 {0}/{1} + 🎓 {2}/{3}').replace('{0}', r.sessAch).replace('{1}', faAch).replace('{2}', r.sessOwn).replace('{3}', faOwn) }}"{% endif %}><b>{{ r.total }}</b>{% if r.allFa %}<span class="sld-results__fa">⭐⭐</span>{% endif %}{% if r.lateFactor %}<span class="sld-results__fa" title="{{ _('⏱ last counted submission {0}h past the deadline — total × {1}').replace('{0}', r.lateHours).replace('{1}', r.lateFactor) }}">⏱</span>{% endif %}</td>
+            <td class="sld-results__num sld-results__total sld-ev" data-ev="total" data-uid="{{ r.uid }}"{% if r.allFa %} title="{{ _('⭐⭐ All tasks first-attempt: Total = 🏆 {0}/{1} + 🎓 {2}/{3}').replace('{0}', r.sessAch).replace('{1}', faAch).replace('{2}', r.sessOwn).replace('{3}', faOwn) }}"{% endif %}><b>{{ r.total }}</b>{% if r.allFa %}<span class="sld-results__fa">⭐⭐</span>{% endif %}{% if r.override and r.override.total %}<span class="sld-results__adj" title="{{ _('Adjusted by the teacher') }}: {{ r.override.total.reason }} ({{ _('computed') }} {{ r.override.total.computed }})">✎</span>{% endif %}{% if r.lateFactor %}<span class="sld-results__fa" title="{{ _('⏱ last counted submission {0}h past the deadline — total × {1}').replace('{0}', r.lateHours).replace('{1}', r.lateFactor) }}">⏱</span>{% endif %}</td>
             <td class="sld-results__num">{{ r.attempts }}</td>
             <td class="sld-results__num">{{ r.done }}</td><td class="sld-results__num">{{ r.skipped }}</td>
             <td class="sld-results__num">{% if r.bonus == 'accepted' %}✓{% elif r.bonus == 'ready' %}·{% elif r.bonus == 'none' %}—{% else %}{{ r.bonus }}{% endif %}</td>
@@ -332,6 +400,8 @@
         </table>
         </div>
         <div class="sld-results__legend">
+        {#- PTA fork: the score-evidence pop-up (self_learning_detail.page.js). -#}
+        <div>🔎 {{ _('Hover any score for the evidence behind it — the tutor’s questions, the student’s own answers and their grades, the judged submissions and the exact formula; click a score to pin its pop-up while you walk a student through it.') }}</div>
         <details class="sld-rubric" open>
           <summary>📖 {{ _('Scoring rubric — how every number is computed') }}</summary>
           <div class="sld-rubric__group">
@@ -383,16 +453,30 @@
           number will appear instead of showing it.
         -#}
         {% if myScore.released %}
-        <div class="sld-myscore__main">📊 <span>{{ _('Your score') }}</span> <b>{{ myScore.total }}</b><small>/ {{ myScore.max }}</small>
+        <div class="sld-myscore__main">📊 <span>{{ _('Your score') }}</span> <b>{{ myScore.total }}</b><small>/ {{ myScore.max }}</small>{% if myScore.adjusted and myScore.adjusted.total %}<span class="sld-myscore__adj" title="{{ _('computed') }} {{ myScore.adjusted.total.computed }} → {{ myScore.total }} · {{ myScore.adjusted.total.reason }}">✎ {{ _('adjusted by your teacher') }}: {{ myScore.adjusted.total.reason }}</span>{% elif myScore.adjusted and myScore.adjusted.tasks %}<span class="sld-myscore__adj" title="{{ _('One or more task scores were adjusted by your teacher — hover a task for the reason.') }}">✎ {{ _('includes {0} adjusted task(s)').replace('{0}', myScore.adjusted.tasks) }}</span>{% endif %}
           {% if myScore.lateFactor %}<span class="sld-results__fa" title="{{ _('⏱ last counted submission {0}h past the deadline — total × {1}').replace('{0}', myScore.lateHours).replace('{1}', myScore.lateFactor) }}">⏱</span>{% endif %}{% if myScore.allFa %}<span class="sld-myscore__blocks" title="{{ _('⭐⭐ All tasks first-attempt: Total = 🏆 {0}/{1} + 🎓 {2}/{3}').replace('{0}', myScore.sessAch).replace('{1}', myScore.faAchShare).replace('{2}', myScore.sessOwn).replace('{3}', myScore.faOwnShare) }}">⭐⭐ 🏆 {{ myScore.sessAch }}<small>/{{ myScore.faAchShare }}</small> + 🎓 {{ myScore.sessOwn }}<small>/{{ myScore.faOwnShare }}</small></span>{% else %}<span class="sld-myscore__blocks" title="{{ _('Block A · per-task rubrics: task sum ÷ (tasks × {0}) × {1}, all five sub-rubrics live').replace('{0}', myScore.taskMax).replace('{1}', myScore.blockAMax) }}">🅰 {{ myScore.blockA }}<small>/{{ myScore.blockAMax }}</small> · 🅱 {{ myScore.blockB }}<small>/{{ myScore.blockBMax }}</small> <span class="sld-myscore__suba">= 📈 {% if myScore.trjFlagged %}0🚫{% elif myScore.trjLevel is number %}{{ myScore.trjPts }}{% else %}—{% endif %}<small>/{{ myScore.trajectoryShare }}</small> + 🧠 {% if myScore.trfFlagged %}0🚫{% elif myScore.trfState != 'pending' %}{{ myScore.trfPts }}{% else %}—{% endif %}<small>/{{ myScore.transferShare }}</small></span></span>{% endif %}
         </div>
         <div class="sld-myscore__tasks" title="{{ _('per-task rubric scores; 🅰 Block A maps their sum onto {0} points').replace('{0}', myScore.blockAMax) }}">
           {%- for t in myScore.perTask %}
-          {% if t.firstAttempt %}<span class="sld-myscore__task" title="⭐ {{ _('First-attempt acceptance: this task = 🏆 /{0} + 🎓 /{1}; 🔧 🧩 💡 do not apply').replace('{0}', myScore.faAchShare).replace('{1}', myScore.faOwnShare) }} · 🏆 {{ _('judged') }} {{ t.judged }}/100 × {{ myScore.faAchShare }}% = {{ t.achPts }}/{{ myScore.faAchShare }} · 🎓 {% if t.ownLevel is number %}L{{ t.ownLevel }} × {{ (myScore.faOwnShare / 4)|round(1) }} = {{ t.ownPts }}/{{ myScore.faOwnShare }} ({{ _('lenient grading') }}){% else %}{{ _('no walkthrough yet') }} — 0/{{ myScore.faOwnShare }}{% endif %}">{{ t.pid }} <b>{{ t.score }}</b><small>/{{ myScore.taskMax }}</small> ⭐{% if t.late %} ⏱{% endif %} <span class="sld-myscore__parts">🏆{{ t.judged }}→{{ t.achPts }}<i>/{{ myScore.faAchShare }}</i> 🎓{% if t.ownLevel is number %}{{ t.ownPts }}{% else %}—{% endif %}<i>/{{ myScore.faOwnShare }}</i></span></span>{% else %}<span class="sld-myscore__task{% if not t.attempted %} sld-myscore__task--zero{% endif %}" title="🏆 {{ _('judged') }} {{ t.judged }}/100 × {{ myScore.achievementShare }}% = {{ t.achPts }}/{{ myScore.achievementShare }} · 🎓 {% if t.ownLevel is number %}L{{ t.ownLevel }} × {{ (myScore.ownershipShare / 4)|round(1) }} = {{ t.ownPts }}/{{ myScore.ownershipShare }}{% else %}{{ _('no walkthrough yet') }} — 0/{{ myScore.ownershipShare }}{% endif %} · 🔧 {% if t.fixLevel is number %}{{ _('mean(level × penalty)') }} {{ t.fixLevel }} × {{ (myScore.fixconvShare / 4)|round(2) }} = {{ t.fixPts }}/{{ myScore.fixconvShare }}{% else %}{{ _('no guided fixes judged yet') }} — 0/{{ myScore.fixconvShare }}{% endif %} · 🧩 {% if t.reaLevel is number %}{{ _('mean level') }} {{ t.reaLevel }} × {{ (myScore.reasoningShare / 4)|round(1) }} = {{ t.reaPts }}/{{ myScore.reasoningShare }}{% else %}{{ _('no failure-phase answers graded yet') }} — 0/{{ myScore.reasoningShare }}{% endif %} · 💡 {% if t.iniLevel is number %}{{ _('first engagement') }} L{{ t.iniLevel }} × {{ (myScore.initiativeShare / 4)|round(2) }} = {{ t.iniPts }}/{{ myScore.initiativeShare }}{% else %}{{ _('not judged yet — needs a closed first engagement with answers') }} — 0/{{ myScore.initiativeShare }}{% endif %}">{{ t.pid }} <b>{{ t.score }}</b><small>/{{ myScore.taskMax }}</small>{% if t.late %} ⏱{% endif %} <span class="sld-myscore__parts">🏆{{ t.judged }}→{{ t.achPts }}<i>/{{ myScore.achievementShare }}</i> 🎓{% if t.ownFlagged %}0🚫{% elif t.ownLevel is number %}{{ t.ownPts }}{% else %}—{% endif %}<i>/{{ myScore.ownershipShare }}</i> 🔧{% if t.fixFlagged %}0🚫{% elif t.fixLevel is number %}{{ t.fixPts }}{% else %}—{% endif %}<i>/{{ myScore.fixconvShare }}</i> 🧩{% if t.reaFlagged %}0🚫{% elif t.reaLevel is number %}{{ t.reaPts }}{% else %}—{% endif %}<i>/{{ myScore.reasoningShare }}</i> 💡{% if t.iniFlagged %}0🚫{% elif t.iniLevel is number %}{{ t.iniPts }}{% else %}—{% endif %}<i>/{{ myScore.initiativeShare }}</i></span></span>{% endif %}
+          {% if t.firstAttempt %}<span class="sld-myscore__task" title="⭐ {{ _('First-attempt acceptance: this task = 🏆 /{0} + 🎓 /{1}; 🔧 🧩 💡 do not apply').replace('{0}', myScore.faAchShare).replace('{1}', myScore.faOwnShare) }} · 🏆 {{ _('judged') }} {{ t.judged }}/100 × {{ myScore.faAchShare }}% = {{ t.achPts }}/{{ myScore.faAchShare }} · 🎓 {% if t.ownLevel is number %}L{{ t.ownLevel }} × {{ (myScore.faOwnShare / 4)|round(1) }} = {{ t.ownPts }}/{{ myScore.faOwnShare }} ({{ _('lenient grading') }}){% else %}{{ _('no walkthrough yet') }} — 0/{{ myScore.faOwnShare }}{% endif %}">{{ t.pid }} <b>{{ t.score }}</b><small>/{{ myScore.taskMax }}</small> ⭐{% if t.late %} ⏱{% endif %}{% if t.adjusted %} <span class="sld-myscore__adj" title="{{ _('computed') }} {{ t.adjusted.computed }} → {{ t.score }} · {{ t.adjusted.reason }}">✎</span>{% endif %} <span class="sld-myscore__parts">🏆{{ t.judged }}→{{ t.achPts }}<i>/{{ myScore.faAchShare }}</i> 🎓{% if t.ownLevel is number %}{{ t.ownPts }}{% else %}—{% endif %}<i>/{{ myScore.faOwnShare }}</i></span></span>{% else %}<span class="sld-myscore__task{% if not t.attempted %} sld-myscore__task--zero{% endif %}" title="🏆 {{ _('judged') }} {{ t.judged }}/100 × {{ myScore.achievementShare }}% = {{ t.achPts }}/{{ myScore.achievementShare }} · 🎓 {% if t.ownLevel is number %}L{{ t.ownLevel }} × {{ (myScore.ownershipShare / 4)|round(1) }} = {{ t.ownPts }}/{{ myScore.ownershipShare }}{% else %}{{ _('no walkthrough yet') }} — 0/{{ myScore.ownershipShare }}{% endif %} · 🔧 {% if t.fixLevel is number %}{{ _('mean(level × penalty)') }} {{ t.fixLevel }} × {{ (myScore.fixconvShare / 4)|round(2) }} = {{ t.fixPts }}/{{ myScore.fixconvShare }}{% else %}{{ _('no guided fixes judged yet') }} — 0/{{ myScore.fixconvShare }}{% endif %} · 🧩 {% if t.reaLevel is number %}{{ _('mean level') }} {{ t.reaLevel }} × {{ (myScore.reasoningShare / 4)|round(1) }} = {{ t.reaPts }}/{{ myScore.reasoningShare }}{% else %}{{ _('no failure-phase answers graded yet') }} — 0/{{ myScore.reasoningShare }}{% endif %} · 💡 {% if t.iniLevel is number %}{{ _('first engagement') }} L{{ t.iniLevel }} × {{ (myScore.initiativeShare / 4)|round(2) }} = {{ t.iniPts }}/{{ myScore.initiativeShare }}{% else %}{{ _('not judged yet — needs a closed first engagement with answers') }} — 0/{{ myScore.initiativeShare }}{% endif %}">{{ t.pid }} <b>{{ t.score }}</b><small>/{{ myScore.taskMax }}</small>{% if t.late %} ⏱{% endif %}{% if t.adjusted %} <span class="sld-myscore__adj" title="{{ _('computed') }} {{ t.adjusted.computed }} → {{ t.score }} · {{ t.adjusted.reason }}">✎</span>{% endif %} <span class="sld-myscore__parts">🏆{{ t.judged }}→{{ t.achPts }}<i>/{{ myScore.achievementShare }}</i> 🎓{% if t.ownFlagged %}0🚫{% elif t.ownLevel is number %}{{ t.ownPts }}{% else %}—{% endif %}<i>/{{ myScore.ownershipShare }}</i> 🔧{% if t.fixFlagged %}0🚫{% elif t.fixLevel is number %}{{ t.fixPts }}{% else %}—{% endif %}<i>/{{ myScore.fixconvShare }}</i> 🧩{% if t.reaFlagged %}0🚫{% elif t.reaLevel is number %}{{ t.reaPts }}{% else %}—{% endif %}<i>/{{ myScore.reasoningShare }}</i> 💡{% if t.iniFlagged %}0🚫{% elif t.iniLevel is number %}{{ t.iniPts }}{% else %}—{% endif %}<i>/{{ myScore.initiativeShare }}</i></span></span>{% endif %}
           {%- endfor %}
         </div>
         <div class="sld-myscore__meta">
           <div class="sld-myscore__mine">{% if myScore.lateFactor %}{{ _('⏱ Late penalty: your last counted submission was {0}h past the deadline — total × {1}.').replace('{0}', myScore.lateHours).replace('{1}', myScore.lateFactor) }} {% endif %}🧭 {{ _('{0} of {1} tasks attempted').replace('{0}', myScore.attempted).replace('{1}', sdoc.pids.length) }}{% if myScore.trjLevel is number %} {{ _('Your trajectory: L{0} → {1}/{2}.').replace('{0}', myScore.trjLevel).replace('{1}', myScore.trjPts).replace('{2}', myScore.trajectoryShare) }}{% endif %}{% if myScore.trfState == 'assessed' %} {{ _('Your transfer: mean L{0} → {1}/{2} over {3} re-encounter(s).').replace('{0}', myScore.trfLevel).replace('{1}', myScore.trfPts).replace('{2}', myScore.transferShare).replace('{3}', myScore.trfJudged) }}{% elif myScore.trfState == 'untestable' %} {{ _('Your tasks shared no re-encountered knowledge points — 🧠 credits the full {0}.').replace('{0}', myScore.transferShare) }}{% endif %}{% if myScore.allFa %} {{ _('Your session: 🏆 {0}/{1} + 🎓 {2}/{3} = {4}.').replace('{0}', myScore.sessAch).replace('{1}', myScore.faAchShare).replace('{2}', myScore.sessOwn).replace('{3}', myScore.faOwnShare).replace('{4}', myScore.total) }}{% endif %}</div>
+          {%- if myScore.adjusted and (myScore.adjusted.total or myScore.adjusted.tasks) -%}
+          {#- PTA fork: the teacher's comments on adjusted scores, in full (the chips only mark the cells). -#}
+          <div class="sld-myscore__notes">
+            <b>✎ {{ _('Comments from your teacher') }}</b>
+            <ul>
+              {%- for t in myScore.perTask -%}{%- if t.adjusted -%}
+              <li><b>{{ t.pid }}</b> — {{ _('computed') }} {{ t.adjusted.computed }} → <b>{{ t.score }}</b>/{{ myScore.taskMax }}: <q>{{ t.adjusted.reason }}</q> <small>{{ datetimeSpan(t.adjusted.at)|safe }}</small></li>
+              {%- endif -%}{%- endfor -%}
+              {%- if myScore.adjusted.total -%}
+              <li><b>{{ _('Total') }}</b> — {{ _('computed') }} {{ myScore.adjusted.total.computed }} → <b>{{ myScore.total }}</b>/{{ myScore.max }}: <q>{{ myScore.adjusted.total.reason }}</q> <small>{{ datetimeSpan(myScore.adjusted.total.at)|safe }}</small></li>
+              {%- endif -%}
+            </ul>
+          </div>
+          {%- endif -%}
           {% if myScore.evaluatedTotal is number %}<br>✅ {{ _('Evaluated by your teacher') }} {{ datetimeSpan(myScore.evaluatedAt)|safe }}: <b>{{ myScore.evaluatedTotal }}</b> / {{ myScore.max }}{% if myScore.evaluatedTotal != myScore.total %} <span class="sld-myscore__diff">({{ _('your current score differs — the next evaluation will pick it up') }})</span>{% endif %}{% endif %}
           <details class="sld-rubric">
             <summary>📖 {{ _('Scoring rubric — how every number is computed') }}</summary>

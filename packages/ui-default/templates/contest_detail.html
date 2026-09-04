@@ -10,6 +10,8 @@
     <div class="section">
       <div class="section__header" style="align: center">
         <h1 class="section__title">{{ tdoc.title }}</h1>
+        {#- PTA fork: an (empty) tools slot so the teacher's AI Class Report button (ai_class_report.page.js appends to the first .section__tools) lands here, at the top of the page. -#}
+        <div class="section__tools"></div>
       </div>
       <div class="section__body">
         <span class="problem__tag-item">{{ _(model.contest.statusText(tdoc, tsdoc)) }}</span>

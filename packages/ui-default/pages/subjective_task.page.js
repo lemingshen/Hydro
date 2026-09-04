@@ -32,7 +32,7 @@ const STYLE = [
   '.sbt__badge:empty { display: none; }',
   /* ------------------------------ report area ----------------------------- */
   // Pre-upgrade fallback textarea; the editor hides it once mounted.
-  '.sbt__report { width: 100%; min-height: 180px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; border: 1px solid var(--pta-line); border-radius: 10px; padding: 8px 10px; resize: vertical; box-sizing: border-box; background: var(--pta-card); color: var(--pta-ink); transition: border-color .15s ease, box-shadow .15s ease; }',
+  '.sbt__report { width: 100%; min-height: 180px; font: 12.5px/1.5 var(--font-family); font-variant-numeric: tabular-nums; border: 1px solid var(--pta-line); border-radius: 10px; padding: 8px 10px; resize: vertical; box-sizing: border-box; background: var(--pta-card); color: var(--pta-ink); transition: border-color .15s ease, box-shadow .15s ease; }',
   '.sbt__report:focus { outline: none; border-color: var(--pta-violet-2); box-shadow: var(--pta-ring-violet); }',
   // The site-wide double-column markdown editor (md-editor-rt).
   '.sbt .md-editor { height: 460px; border-radius: 10px; overflow: hidden; }',

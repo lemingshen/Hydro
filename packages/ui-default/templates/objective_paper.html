@@ -14,6 +14,47 @@
   scratchpad view, so moving between questions and programming tasks never
   needs the detail page. The rail squeezes .main's left margin by itself.
 -#}
+<style>
+  /* PTA fork: per-question verdict + the AI "Explain" button (after the deadline). */
+  .paper-q__verdict { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 2px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--pta-line); background: var(--pta-card-3); color: var(--pta-ink-soft); }
+  .paper-q__verdict.is-ok { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
+  .paper-q__verdict.is-bad { background: var(--pta-bad-soft); border-color: var(--pta-bad-line); color: var(--pta-bad-text); }
+  .paper-q__verdict.is-partial { background: var(--pta-gold-soft); border-color: var(--pta-gold-line); color: var(--pta-gold-text); }
+  .paper-q--wrong { box-shadow: inset 4px 0 0 var(--pta-fail, #e03131); }
+  /* PTA fork: a frozen sheet (after the deadline) — controls are disabled. */
+  .paper-q .objective-input:disabled { cursor: not-allowed; opacity: .85; }
+  .paper-q .is-locked { cursor: not-allowed; }
+  .paper-q .paper-opt.is-locked { opacity: .95; }
+  .paper-locked-note { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 9px 14px; border-radius: 12px; background: var(--pta-card-2); border: 1px solid var(--pta-line); color: var(--pta-ink-soft); font-size: 12.5px; }
+  .paper-q--partial { box-shadow: inset 4px 0 0 var(--pta-warn-text, #e8590c); }
+  .hwof-btn { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 2px 11px; border: 1px solid var(--pta-violet-line, #e5dbff); border-radius: 999px; background: var(--pta-violet-soft, #f3f0ff); color: var(--pta-violet-text, #5f3dc4); font-size: 11.5px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: filter .12s ease, transform .12s ease; }
+  .hwof-btn:hover { filter: brightness(.97); transform: translateY(-1px); }
+  .hwof-btn:disabled { opacity: .6; cursor: default; transform: none; }
+  .hwof-btn--has { background: var(--pta-blue-soft); border-color: var(--pta-blue-line, var(--pta-line)); color: var(--pta-blue-text); }
+  /* PTA fork: the AI explanation, appended under its question (never a pop-up). */
+  .hwof-panel.is-hidden { display: none; }
+  .hwof-panel { border-top: 1px dashed var(--pta-violet-line, var(--pta-line)); background: var(--pta-violet-soft, #f7f5ff); }
+  .pta-dark .hwof-panel, .theme--dark .hwof-panel { background: rgba(112,72,232,.08); }
+  .hwof-panel__head { font-weight: 700; font-size: 13px; color: var(--pta-violet-text, #5f3dc4); margin-bottom: 6px; }
+  .hwof-panel__body { font-size: 13.5px; line-height: 1.65; }
+  .hwof-panel__body h3 { font-size: 13.5px; margin: 12px 0 5px; color: var(--pta-violet-text, #5f3dc4); }
+  .hwof-panel__body h3:first-child { margin-top: 0; }
+  .hwof-panel__body ul { margin: 4px 0 8px; padding-left: 20px; }
+  .hwof-panel__body li { margin: 2px 0; }
+  .hwof-panel__body p { margin: 4px 0; }
+  .hwof-panel__body code { background: var(--pta-card-3); border-radius: 4px; padding: 1px 5px; }
+  .hwof-panel__body pre { background: var(--pta-card-3); border: 1px solid var(--pta-line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+  .hwof-panel__foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--pta-line); }
+  .hwof-panel__foot .spacer { flex: 1 1 auto; }
+  .hwof-panel__error { color: var(--pta-bad-text); font-size: 13px; }
+  .hwof-again { border: 1px solid var(--pta-line); background: transparent; color: var(--pta-ink-soft); border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer; }
+  .hwof-again:hover { color: var(--pta-violet-text, #5f3dc4); border-color: var(--pta-violet-line, var(--pta-line)); }
+  .hwof-meta { font-size: 11.5px; color: var(--pta-ink-faint); }
+  .hwof-wait { display: flex; gap: 14px; align-items: center; padding: 4px 0; }
+  .hwof-spin { width: 24px; height: 24px; border: 3px solid var(--pta-violet-soft, #e5dbff); border-top-color: var(--pta-violet, #7048e8); border-radius: 50%; animation: ptaSpin .8s linear infinite; flex: 0 0 auto; }
+  .hwof-dots::after { content: ""; display: inline-block; width: 1.4em; text-align: left; animation: hwofDots 1.2s steps(4, end) infinite; }
+  @keyframes hwofDots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+</style>
 <div class="row">
   <div class="medium-12 columns">
     <div class="section paper-top">
@@ -50,12 +91,24 @@
           <span class="paper-overview__cell paper-overview__cell--prog">
             <span class="paper-overview__icon">⌨</span>
             <span class="paper-overview__name">{{ _('Programming') }}</span>
-            <span class="paper-overview__meta">{{ othersCount }} {{ _('task(s)') }} · <b>{{ programmingPoints }}</b> {{ _('pts') }}</span>
+            <span class="paper-overview__meta">{{ programmingCount }} {{ _('task(s)') }} · <b>{{ programmingPoints }}</b> {{ _('pts') }}</span>
+          </span>
+          {%- endif -%}
+          {%- if subjectiveCount -%}
+          {#- PTA fork: subjective tasks (homework editor's fifth section) — handed in on their pages, graded by the teacher. -#}
+          <span class="paper-overview__cell paper-overview__cell--prog" title="{{ _('Handed in on the task page and graded by the teacher by hand.') }}">
+            <span class="paper-overview__icon">📁</span>
+            <span class="paper-overview__name">{{ _('Subjective Tasks') }}</span>
+            <span class="paper-overview__meta">{{ subjectiveCount }} {{ _('task(s)') }} · <b>{{ subjectivePoints }}</b> {{ _('pts') }}</span>
           </span>
           {%- endif -%}
         </div>
       </div>
     </div>
+    {%- endif -%}
+    {%- if paperLocked and tasks.length -%}
+    {#- PTA fork: the objective sheet is closed for answers after the deadline. -#}
+    <div class="paper-locked-note">🔒 {{ _('This paper is closed — the objective answers below are your submitted ones and can no longer be changed. Programming tasks stay open for practice; those submissions are not counted.') }}</div>
     {%- endif -%}
     {%- if not tasks.length -%}
       <div class="section"><div class="section__body typo"><p>{{ _('This set contains no objective tasks.') }}</p></div></div>
@@ -71,11 +124,26 @@
     {%- for t in g.tasks -%}
     {#- Objective tasks are titled by their question, so the card shows the
         content directly: the running number (and its points) are the header. -#}
-    <div class="section paper-q" id="q-{{ t.docId }}" data-docid="{{ t.docId }}" data-submit-url="{{ t.submitUrl }}">
+    <div class="section paper-q{% if t.outcome == 'wrong' %} paper-q--wrong{% elif t.outcome == 'partial' %} paper-q--partial{% endif %}" id="q-{{ t.docId }}" data-docid="{{ t.docId }}" data-submit-url="{{ t.submitUrl }}">
       <div class="section__body typo richmedia paper-q__content">
         <div class="paper-q__lead">
           <span class="paper-q__num" title="{{ t.pid }}">{{ t.index }}</span>
           {%- if showScores and t.points is not none -%}<span class="paper-q__pts">{{ t.points }} {{ _('pts') }}</span>{%- endif -%}
+          {#-
+            PTA fork: once the homework has ended, each objective question
+            shows its verdict here and — when it is not fully right — an
+            "Explain" button that asks the AI for the answer and the
+            reasoning (lib/objective_feedback.ts, homework_objective_feedback.page.js).
+          -#}
+          {%- if t.outcome -%}
+          {%- if t.outcome == 'correct' -%}<span class="paper-q__verdict is-ok">✓ {{ _('Correct') }}</span>
+          {%- elif t.outcome == 'partial' -%}<span class="paper-q__verdict is-partial">◐ {{ _('Partial') }}</span>
+          {%- elif t.outcome == 'unanswered' -%}<span class="paper-q__verdict is-none">{{ _('Not answered') }}</span>
+          {%- else -%}<span class="paper-q__verdict is-bad">✗ {{ _('Incorrect') }}</span>{%- endif -%}
+          {%- if t.outcome != 'correct' -%}
+          <button type="button" class="hwof-btn{% if t.explained %} hwof-btn--has{% endif %}" data-pid="{{ t.docId }}" data-title="{{ _('Question') }} {{ t.index }}"{% if t.explaining %} data-running="1"{% endif %}>{% if t.explained %}📘 {{ _('View explanation') }}{% else %}🤖 {{ _('Explain') }}{% endif %}</button>
+          {%- endif -%}
+          {%- endif -%}
           <span class="paper-q__status" data-status-for="{{ t.docId }}"></span>
         </div>
         {{ t.content|content(handler.user.viewLang|default(''), false)|safe }}

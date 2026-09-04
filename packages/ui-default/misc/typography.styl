@@ -472,7 +472,11 @@ h1, h2, h3, h4, h5, h6
   &.darker
     color: darken(black, 40%)
 
+// PTA fork: a textarea is prose unless it holds code / YAML — the site
+// uses monospace only in code editors and code views.
 textarea
+  font-family: $primary-font-family
+textarea.monospace, textarea[data-yaml], textarea[name="code"], textarea[name="config"], textarea[data-code]
   font-family: $code-font-family !important
 
 :focus

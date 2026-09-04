@@ -9,6 +9,8 @@
     <div class="section">
       <div class="section__header">
         <h1 class="section__title">{{ _('Homework Introduction') }}</h1>
+        {#- PTA fork: an (empty) tools slot so the teacher's AI Class Report button (ai_class_report.page.js appends to the first .section__tools) lands here, at the top of the page. -#}
+        <div class="section__tools"></div>
       </div>
       <div class="section__body typo richmedia">
         {{ tdoc['content']|markdown|safe }}
@@ -20,7 +22,7 @@
     <div class="section pta-results">
       <div class="section__header">
         <h1 class="section__title">📊 {{ _('Your results') }}</h1>
-        <div class="section__tools"><span class="pta-results__total"><b>{{ myResults.earned }}</b> / {{ myResults.total }} {{ _('pts') }}</span></div>
+        <div class="section__tools"><span class="pta-results__total"{% if myResults.subjective and myResults.subjective.tasks.length %} title="{{ _('Automatically graded tasks only; the subjective tasks below are graded by the teacher.') }}"{% endif %}><b>{{ myResults.earned }}</b> / {{ myResults.total }} {{ _('pts') }}</span></div>
       </div>
       <div class="section__body">
         {%- for g in myResults.groups -%}
@@ -44,17 +46,91 @@
                   {%- else -%}<span class="pta-chip pta-chip--bad">✗ {{ _('Incorrect') if g.key != 'prog' else _('Not accepted') }}</span>
                   {%- endif -%}
                 </td>
-                <td class="col--pts"><b>{{ t.earned }}</b> <span class="pta-results__of">/ {{ t.points }}</span>{% if t.late %} <span class="pta-chip pta-chip--gold" title="{{ _('Late submission — penalty applied') }}">{{ _('late') }}</span>{% endif %}</td>
+                <td class="col--pts"><b>{{ t.earned }}</b> <span class="pta-results__of">/ {{ t.points }}</span>{% if t.late %} <span class="pta-chip pta-chip--gold" title="{{ _('Late submission — penalty applied') }}">{{ _('late') }}</span>{% endif %}{% if t.adjusted %}<div class="sld-myscore__note">✎ <b>{{ _('adjusted by your teacher') }}</b> ({{ _('computed') }} {{ t.adjusted.computed if t.adjusted.computed is number else '—' }} → {{ t.score }}): <q>{{ t.adjusted.reason }}</q></div>{% endif %}</td>
               </tr>
             {%- endfor -%}
             </tbody>
           </table>
         </div>
         {%- endfor -%}
+        {%- if myResults.subjective and myResults.subjective.tasks.length -%}
+        {#- PTA fork: subjective (S) tasks — handed in on the task page, graded by the teacher by hand; never part of the automatic total above. -#}
+        <div class="pta-results__group">
+          <div class="pta-results__ghead">
+            <span class="pta-results__gicon">📁</span>
+            <span class="pta-results__gname">{{ _('Subjective Tasks') }}</span>
+            <span class="pta-results__gscore"><span class="pta-chip pta-chip--violet">{{ _('graded by the teacher') }}</span> {% if myResults.subjective.earned is number %}<b>{{ myResults.subjective.earned }}</b> / {{ myResults.subjective.total }}{% else %}<b>{{ myResults.subjective.total }}</b>{% endif %} {{ _('pts') }}</span>
+          </div>
+          <table class="data-table pta-results__table">
+            <colgroup><col class="col--idx"><col class="col--task"><col class="col--status"><col class="col--pts"></colgroup>
+            <tbody>
+            {%- for t in myResults.subjective.tasks -%}
+              <tr class="{% if t.submitted %}is-pass{% else %}is-none{% endif %}">
+                <td class="col--idx"><span class="pta-results__idx">S{{ t.index }}</span></td>
+                <td class="col--task"><a href="{{ url('problem_detail', pid=t.docId, query={tid:tdoc.docId}) }}">{{ t.title }}</a></td>
+                <td class="col--status">
+                  {%- if t.submitted -%}<span class="pta-chip pta-chip--ok">✓ {{ _('Handed in') }}{% if t.files %} · {{ t.files }} {{ _('file(s)') }}{% endif %}</span>
+                  {%- else -%}<span class="pta-chip pta-chip--dim">{{ _('Not handed in') }}</span>
+                  {%- endif -%}
+                </td>
+                <td class="col--pts">{% if t.graded %}<b>{{ t.graded.earned }}</b> / {{ t.points }}<div class="sld-myscore__note">✎ <b>{{ _('graded by the teacher') }}</b>: <q>{{ t.graded.reason }}</q></div>{% else %}<span class="pta-results__of">— / {{ t.points }}</span>{% endif %}</td>
+              </tr>
+            {%- endfor -%}
+            </tbody>
+          </table>
+        </div>
+        {%- endif -%}
       </div>
     </div>
     {%- endif -%}
     {%- set _hwManager = handler.user.own(tdoc) or handler.user.hasPerm(perm.PERM_EDIT_HOMEWORK) -%}
+    {%- if _hwManager and similarity -%}
+    <style>
+      .sld-myscore__adj { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; background: var(--pta-violet-soft, #f3f0ff); color: var(--pta-violet-text, #5f3dc4); border: 1px solid var(--pta-violet-line, var(--pta-line)); cursor: help; }
+      .sld-myscore__note { margin-top: 4px; padding: 5px 9px; border-radius: 8px; background: var(--pta-violet-soft, #f3f0ff); border: 1px solid var(--pta-violet-line, var(--pta-line)); color: var(--pta-ink); font-size: 12px; white-space: normal; line-height: 1.45; }
+      .sld-myscore__note b { color: var(--pta-violet-text, #5f3dc4); }
+      .sld-myscore__note q { font-style: italic; }
+    </style>
+    {#-
+      PTA fork: one-click code-similarity check (handler/similarity.ts
+      injects `similarity` for staff). The button posts `run` to the report
+      route and moves to the report, which shows progress and the pairs.
+    -#}
+    <div class="section hw-sim" id="hw-sim">
+      <div class="section__header">
+        <h1 class="section__title">{{ _('Code Similarity') }} <small class="text-gray">· Dolos</small></h1>
+        <div class="section__tools">
+          <button type="button" class="rounded primary button" id="hw-sim-run" data-url="{{ similarity.url }}"{% if similarity.status == 'running' or not similarity.programming.length or not similarity.systemEnabled %} disabled{% endif %}>🔍 {{ _('Check code similarity now') }}</button>
+          <a class="rounded button" href="{{ similarity.url }}">{{ _('View report') }}</a>
+        </div>
+      </div>
+      <div class="section__body typo">
+        {%- if similarity.programming.length -%}
+        <p>{{ _('Compares every student’s counted submission to the programming tasks of this homework') }}: <b>{{ similarity.programming|join(', ') }}</b> ({{ similarity.programming.length }} {{ _('task(s)') }}).</p>
+        {%- else -%}
+        <p>{{ _('This homework has no programming task, so there is nothing to compare.') }}</p>
+        {%- endif -%}
+        <p id="hw-sim-status">
+          {%- if not similarity.systemEnabled -%}
+          <span class="pta-chip pta-chip--warn">{{ _('The code-similarity check is disabled in the system settings (similarity.enabled).') }}</span>
+          {%- elif similarity.status == 'running' -%}
+          <span class="pta-chip pta-chip--blue">⏳ {{ _('A check is running') }}{% if similarity.progress %} · {{ similarity.progress.done }}/{{ similarity.progress.total }}{% endif %}</span>
+          {%- elif similarity.status == 'done' -%}
+          <span class="pta-chip {% if similarity.summary.flagged %}pta-chip--bad{% else %}pta-chip--ok{% endif %}">{{ _('Last report') }}: {{ datetimeSpan(similarity.finishedAt, false, 'YYYY-M-D H:mm')|safe }} · {{ similarity.summary.flagged }} {{ _('flagged pair(s)') }} (≥ {{ (similarity.threshold * 100)|round }}%) · {{ similarity.summary.compared }} {{ _('submissions compared') }}</span>
+          {%- elif similarity.status == 'failed' -%}
+          <span class="pta-chip pta-chip--bad">{{ _('The last check failed') }}: {{ similarity.error }}</span>
+          {%- else -%}
+          <span class="pta-chip pta-chip--dim">{{ _('No report yet.') }}</span>
+          {%- endif -%}
+          {%- if similarity.checkSimilarity and not similarity.ended %}
+          <span class="text-gray">{{ _('The check runs automatically when the homework ends') }} ({{ datetimeSpan(similarity.endAt, false, 'YYYY-M-D H:mm')|safe }}).</span>
+          {%- elif not similarity.checkSimilarity %}
+          <span class="text-gray">{{ _('"Check Code Similarity" is not ticked, so nothing runs automatically at the deadline.') }}</span>
+          {%- endif -%}
+        </p>
+      </div>
+    </div>
+    {%- endif -%}
     {%- if pdict and not _hwManager -%}
     {#- PTA: students work on the one-page paper (objective sections inline,
         programming tasks in its rail); the tabular list stays for managers. -#}

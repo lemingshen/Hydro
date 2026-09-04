@@ -639,6 +639,19 @@ export class ProblemDetailHandler extends ContestDetailBaseHandler {
                     : !contest.isDone(this.tdoc) ? 'contest'
                         : problem.canViewBy(this.pdoc, this.user) ? 'correction' : 'none',
         };
+        /*
+         * PTA fork: an OBJECTIVE task of a container that has ended is
+         * read-only — the submit handler refuses a late tid'd submission and
+         * a correction record would be meaningless for a quiz. Programming
+         * tasks stay open (the scratchpad submits through the correction
+         * path); the flag only reaches the objective renderer.
+         */
+        if (tid && contest.isDone(this.tdoc, this.tsdoc)) {
+            this.UiContext.objectiveLocked = true;
+            // …and the left rail keeps the status the deadline froze, whatever
+            // a later correction submission is judged (auto_scratchpad).
+            this.UiContext.railFrozen = true;
+        }
         if (this.tdoc && this.tsdoc) {
             const fields = ['attend', 'startAt', 'endAt'];
             if (contest.canShowSelfRecord.call(this, this.tdoc, true)) fields.push('detail');

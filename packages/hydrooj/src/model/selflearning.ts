@@ -2,6 +2,7 @@ import { ObjectId } from 'mongodb';
 import type { PenaltyRules } from '../interface';
 import db from '../service/db';
 import * as document from './document';
+import type { ScoreOverride, ScoreOverrideEntry } from './contest';
 
 export const TYPE_SELF_LEARNING = 75 as const;
 
@@ -340,6 +341,14 @@ export interface SelfLearningProgressDoc {
      * backfill re-runs the LLM only when the basis changed.
      */
     trajectory?: { level: number, at: Date, basis?: string, flagged?: boolean };
+    /**
+     * ✎ PTA fork: the TEACHER'S SCORE ADJUSTMENTS for this student in this
+     * session (per task 0..100 and/or the final total 0..100, each with a
+     * reason), kept apart from every computed value so an evaluation can
+     * never wipe them — the evaluation re-applies them to its fresh row
+     * (handler applySessionOverride) and the student's own card shows them.
+     */
+    override?: ScoreOverride;
     _id: ObjectId;
     domainId: string;
     ssid: ObjectId;
@@ -535,6 +544,14 @@ export interface SessionResultRow {
     stdTasks?: number;
     /** The session total, out of SESSION_TOTAL_MAX (100): 🅰 Block A + 🅱 Block B. */
     total: number;
+    /**
+     * ✎ Teacher adjustments applied to this row (a copy of the progress
+     * doc's override at evaluation time) and the values they replaced —
+     * the table marks adjusted cells and the evidence pop-up shows
+     * "computed X → adjusted Y: reason". Absent when nothing is adjusted.
+     */
+    override?: { tasks?: Record<string, ScoreOverrideEntry>, total?: ScoreOverrideEntry };
+    computed?: { taskScores: Record<string, number>, blockA?: number, total: number };
     attempts: number;
     done: number;
     skipped: number;
@@ -866,6 +883,17 @@ export class SelfLearningModel {
 
     /* ------------------- task progression (see collProgress) ------------------- */
 
+    /** ✎ Store (or clear, with null) the teacher's score adjustments for one student. */
+    static async setOverride(domainId: string, ssid: ObjectId, uid: number, override: ScoreOverride | null): Promise<void> {
+        await collProgress.updateOne(
+            { domainId, ssid, uid },
+            override
+                ? { $set: { override, updateAt: new Date() }, $setOnInsert: { done: [], skipped: [] } }
+                : { $unset: { override: '' }, $set: { updateAt: new Date() }, $setOnInsert: { done: [], skipped: [] } },
+            { upsert: true },
+        );
+    }
+
     static async getProgress(domainId: string, ssid: ObjectId, uid: number): Promise<SelfLearningProgressDoc | null> {
         return await collProgress.findOne({ domainId, ssid, uid });
     }
@@ -1033,6 +1061,12 @@ export interface AiClassReportDoc {
         done: number;
         total: number;
         startedAt: Date;
+        /**
+         * 💓 Heartbeat: written by every progress update. A running job is
+         * considered dead only when THIS is old — a 200-student run takes
+         * far longer than any fixed limit measured from startedAt.
+         */
+        updatedAt?: Date;
         finishedAt?: Date;
         error?: string;
         by?: number;
@@ -1064,9 +1098,16 @@ export async function setClassReport(doc: Omit<AiClassReportDoc, '_id' | 'genera
 export async function setClassReportJob(domainId: string, tid: string, job: AiClassReportDoc['job']): Promise<void> {
     await collClassReport.updateOne(
         { _id: `${domainId}/${tid}` as any },
-        { $set: { domainId, tid, job } },
+        { $set: { domainId, tid, job: { ...job, updatedAt: new Date() } } },
         { upsert: true },
     );
+}
+
+/** 💓 A running job whose heartbeat (last progress write) is older than `silenceMs` is treated as dead. */
+export function classReportJobStale(job: AiClassReportDoc['job'] | null | undefined, silenceMs: number): boolean {
+    if (!job || job.status !== 'running') return false;
+    const last = job.updatedAt || job.startedAt;
+    return !last || Date.now() - new Date(last).getTime() > silenceMs;
 }
 
 /*

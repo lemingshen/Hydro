@@ -143,10 +143,46 @@
           <input type="hidden" name="pids" value="{{ pids }}">
           <input type="hidden" name="paper" value="">
         </div>
+        {#-
+          PTA fork: the fifth section — SUBJECTIVE (project-level, S-pid)
+          tasks. Picked like programming tasks and given points per task;
+          students hand in a report + files on the task page, and the
+          teacher grades them by hand (they never enter the auto-graded
+          scoreboard). contest_edit.page.ts folds them into the `paper`
+          JSON as `subj`; handler/contest.ts parsePaper validates the kind.
+        -#}
+        <div style="padding-top: 0" class="section__header">
+          <h2 class="section__title">{{ _('Subjective Tasks') }}</h2>
+        </div>
+        <div class="section__body tep" id="tep-subjective">
+          <div class="pta-note pta-note--violet tep__note">{{ _('Project-level tasks: students hand in a report and files on the task page, and you grade them by hand — their points are not added to the automatic score. Give each task the points it is worth in this homework.') }}</div>
+          <label>{{ _('Tasks') }} <small class="tep__hint">{{ _('Search by title or id; hover a row to preview the statement.') }}</small>
+            <input class="textbox tep__pids" name="tep_pids_subj" data-pids-for="subj" placeholder="{{ _('Pick subjective tasks...') }}">
+          </label>
+          <div class="tep__scores" id="tep-subj-scores"></div>
+        </div>
         <div style="padding-top: 0" class="section__header">
           <h2 class="section__title">{{ _('Homework Settings') }}</h2>
         </div>
         <div class="section__body">
+          {#-
+            PTA fork: "Check Code Similarity" — a tick box stored as
+            tdoc.checkSimilarity (handler/homework.ts postUpdate). It records
+            the teacher's choice for the similarity check over the programming
+            submissions of this homework; unticked (or a homework saved before
+            the box existed) means no check.
+          -#}
+          <div class="row">
+            {{ form.form_checkbox({
+              columns:12,
+              label:'Check Code Similarity',
+              name:'checkSimilarity',
+              placeholder:_('Compare the programming submissions of this homework for similar code'),
+              value:tdoc.checkSimilarity|default(false),
+              help_text:_('When enabled, the code students submit to the programming tasks of this homework is compared across the class to flag suspiciously similar submissions. Objective and subjective tasks are not affected.'),
+              row:false
+            }) }}
+          </div>
           <div class="row"><div class="columns">
             <label>
               {{ _('Extension Score Penalty') }}

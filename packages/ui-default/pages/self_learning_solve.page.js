@@ -92,7 +92,9 @@ export default new NamedPage('self_learning_solve', async () => {
   if (slSched && slSched.phase === 'extension') {
     Notification.warn(`⚠️ ${i18n('Late window')} — ${i18n('submissions until')} ${new Date(slSched.hardEndAt).toLocaleString()} ${i18n('count at')} −${slSched.penalty}%`);
   } else if (slSched && slSched.phase === 'ended') {
-    Notification.info(i18n('This session has ended — review and tutoring stay open; submissions are closed.'));
+    // ⏹ The session is over but stays usable: submissions and tutoring are
+    // still available as PRACTICE — none of it changes the recorded score.
+    Notification.info(i18n('This session has ended. You can keep practising here — submissions and tutor answers no longer count towards your score.'));
   }
   /*
    * PTA fork: the AI tutor is a PROGRAMMING-only feature. Objective quizzes

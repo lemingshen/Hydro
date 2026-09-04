@@ -12,6 +12,10 @@ import { ContestNotLiveError, ContestNotAttendedError,
 } from '../error';
 import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
+import { paperFeedbackFor } from '../lib/objective_feedback';
+import {
+    ACTIVITY_JOB_STALE_MS, activityReportContext, buildActivityCorpus, renderActivityStudent, runActivityReportJob,
+} from '../lib/activity_report';
 import { objectiveSubKindOf } from '../lib/objective_markdown';
 import { objectiveTitleOf } from '../lib/objective_title';
 import { ContestDetailBaseHandler, paperOf } from './contest';
@@ -27,11 +31,12 @@ import KnowledgeModel from '../model/knowledge';
 import * as document from '../model/document';
 import { PERM, PRIV } from '../model/builtin';
 import * as contest from '../model/contest';
+import type { ScoreOverride } from '../model/contest';
 import domain from '../model/domain';
 import problem from '../model/problem';
 import record from '../model/record';
 import storage from '../model/storage';
-import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, collProgress, getClassReport, getClassReportMapCache, getSubjective, getSuggestionReportsIn, getTutorThreadsIn, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads } from '../model/selflearning';
+import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, classReportJobStale, collProgress, collTutor, getClassReport, getClassReportMapCache, getSubjective, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
@@ -115,6 +120,40 @@ export function sessionSchedule(sdoc: SelfLearningDoc, now = new Date()) {
  * { 0: (100 - penalty) / 100 }: the same flat factor from the first late
  * second that they had before this feature existed.
  */
+/**
+ * ⏹ THE SESSION CUTOFF — the instant after which nothing a student does can
+ * influence their score. It is the hard end (deadline + extension); a
+ * session without dates never closes, so everything counts.
+ *
+ * After it the session stays OPEN for practice: the student may keep
+ * submitting and keep talking to the tutor. Those records and messages are
+ * simply invisible to every scoring path — scoreRecords already drops late
+ * records, the tutor stores no grades any more (practice mode), and the
+ * loaders below cut records and messages at this instant so the retroactive
+ * graders (🔧 fix-conversion, 💡 initiative, 🧩 reasoning, 📈 trajectory,
+ * 🧠 transfer) can never see post-session activity either.
+ */
+export function sessionCutoff(sdoc: SelfLearningDoc): number {
+    const hard = sessionSchedule(sdoc).hardEndAt;
+    return hard ? hard.getTime() : Number.POSITIVE_INFINITY;
+}
+
+/** Session threads with every post-cutoff message removed (grading input). */
+async function gradedSessionThreads(domainId: string, sdoc: SelfLearningDoc): Promise<TutorThreadDoc[]> {
+    const cap = sessionCutoff(sdoc);
+    const threads = await gradedSessionThreads(domainId, sdoc);
+    if (!Number.isFinite(cap)) return threads;
+    return threads.map((t) => ({
+        ...t,
+        messages: (t.messages || []).filter((m) => !m.at || new Date(m.at).getTime() <= cap),
+    })) as TutorThreadDoc[];
+}
+
+/** True while a record belongs to the session (i.e. was made before the cutoff). */
+function recordCounts(rid: ObjectId, cap: number): boolean {
+    return !Number.isFinite(cap) || rid.getTimestamp().getTime() <= cap;
+}
+
 export function penaltyCoefficientAt(sdoc: SelfLearningDoc, at: Date): number {
     if (!sdoc?.endAt) return 1;
     const exceedSeconds = Math.floor((at.getTime() - sdoc.endAt.getTime()) / 1000);
@@ -576,6 +615,63 @@ export function taskRubricOf(
         iniLevel: fa ? null : iniLevel,
         parts,
     };
+}
+
+/**
+ * ✎ TEACHER SCORE ADJUSTMENTS — apply a student's overrides (model
+ * SelfLearningProgressDoc.override) to a computed results row: an
+ * adjusted task score replaces the rubric's Σ for that task and Block A
+ * (or the ⭐⭐ collapsed total) is re-derived from the task scores with
+ * the same arithmetic as the evaluation, the late factor re-applied; an
+ * adjusted total then replaces the final total outright. The values
+ * replaced are kept in `row.computed`, so the table can mark the cells
+ * and the evidence pop-up can show "computed → adjusted: reason".
+ * Passing no overrides (or empty ones) restores the computed values.
+ */
+export function applySessionOverride(rowIn: SessionResultRow, override?: ScoreOverride | null): SessionResultRow {
+    const row: any = { ...rowIn };
+    const base = row.computed || {
+        taskScores: { ...(row.taskScores || {}) }, blockA: row.blockA, total: row.total,
+    };
+    const tasks = Object.entries(override?.tasks || {}).filter(([pid, o]) => o && typeof o.score === 'number' && pid in base.taskScores);
+    const hasTotal = !!(override?.total && typeof override.total.score === 'number');
+    if (!tasks.length && !hasTotal) {
+        if (row.computed) {
+            row.taskScores = { ...base.taskScores };
+            row.blockA = base.blockA;
+            row.total = base.total;
+            delete row.computed;
+            delete row.override;
+        }
+        return row;
+    }
+    row.computed = base;
+    const taskScores: Record<string, number> = { ...base.taskScores };
+    const applied: NonNullable<SessionResultRow['override']> = {};
+    for (const [pid, o] of tasks) {
+        taskScores[pid] = round1(Math.min(TASK_RUBRIC_MAX, Math.max(0, o.score)));
+        applied.tasks = { ...(applied.tasks || {}), [pid]: { ...o, computed: base.taskScores[pid] ?? null } };
+    }
+    const n = Object.keys(taskScores).length;
+    const sum = Object.values(taskScores).reduce((a, b) => a + (b || 0), 0);
+    let totalBase: number;
+    let blockA = base.blockA;
+    if (row.allFa) {
+        totalBase = n ? round1((sum * SESSION_TOTAL_MAX) / (n * TASK_RUBRIC_MAX)) : 0;
+    } else {
+        blockA = n ? round1((sum * BLOCK_A_MAX) / (n * TASK_RUBRIC_MAX)) : 0;
+        totalBase = round1(blockA + (row.blockB || 0));
+    }
+    let total = row.lateFactor ? round1(totalBase * row.lateFactor) : totalBase;
+    if (hasTotal) {
+        applied.total = { ...override!.total!, computed: total };
+        total = round1(Math.min(SESSION_TOTAL_MAX, Math.max(0, override!.total!.score)));
+    }
+    row.taskScores = taskScores;
+    row.blockA = blockA;
+    row.total = total;
+    row.override = applied;
+    return row;
 }
 
 /**
@@ -1047,7 +1143,7 @@ export async function backfillOwnershipGrades(
     if (!pids.length) return out;
     const pdict = await problem.getList(domainId, pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
     const progPids = new Set(programmingPidsOf(sdoc, pdict));
-    const threads = await getSessionThreads(domainId, sdoc.docId);
+    const threads = await gradedSessionThreads(domainId, sdoc);
     /*
      * PHASE 1 — build the work list without any LLM call: init missing
      * walkthrough states, record asked-never-answered questions (the
@@ -1191,7 +1287,7 @@ export async function backfillFixConversionGrades(
     if (!pids.length) return out;
     const pdict = await problem.getList(domainId, pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
     const progPids = new Set(programmingPidsOf(sdoc, pdict));
-    const threads = await getSessionThreads(domainId, sdoc.docId);
+    const threads = await gradedSessionThreads(domainId, sdoc);
     interface Item {
         thread: TutorThreadDoc;
         cand: FixConvCandidate;
@@ -1203,8 +1299,11 @@ export async function backfillFixConversionGrades(
         const recs = await record.getMulti(domainId, {
             uid: thread.uid, pid: thread.pid, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
         }).sort({ _id: 1 }).limit(60).project({ status: 1, score: 1 }).toArray();
-        if ((recs as any[]).length < 2) continue;
-        const attempts = (recs as any[]).map((r) => ({
+        // ⏹ Only the session's own attempts decide the walkthrough budget.
+        const capOwn = sessionCutoff(sdoc);
+        const inSession = (recs as any[]).filter((r) => recordCounts(r._id, capOwn));
+        if (inSession.length < 2) continue;
+        const attempts = inSession.map((r: any) => ({
             rid: r._id,
             at: r._id.getTimestamp(),
             accepted: r.status === STATUS.STATUS_ACCEPTED,
@@ -1327,14 +1426,17 @@ export async function backfillConceptTransferGrades(
     const tagsByPid = new Map<number, string[]>();
     for (const d of tagDocs as any[]) tagsByPid.set(d.docId, (d.tag || []).map((t: any) => String(t)));
     const sessionUntagged = ![...tagsByPid.values()].some((t) => t.length);
-    const threads = await getSessionThreads(domainId, sdoc.docId);
+    const threads = await gradedSessionThreads(domainId, sdoc);
     const threadOf = new Map<string, TutorThreadDoc>();
     for (const t of threads) threadOf.set(`${t.uid}:${t.pid}`, t);
     const recs = await record.getMulti(domainId, {
         pid: { $in: progPids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
     }).project({ uid: 1, pid: 1, status: 1, score: 1 }).limit(200000).toArray();
+    const cap = sessionCutoff(sdoc);
     const rowsOf = new Map<number, { pid: number, at: Date, accepted: boolean, rid: any, score: number }[]>();
     for (const r of recs as any[]) {
+        // ⏹ Practice made after the session closed never reaches a grader.
+        if (!recordCounts(r._id, cap)) continue;
         if (!rowsOf.has(r.uid)) rowsOf.set(r.uid, []);
         rowsOf.get(r.uid)!.push({
             pid: r.pid, at: r._id.getTimestamp(), accepted: r.status === STATUS.STATUS_ACCEPTED, rid: r._id, score: r.score || 0,
@@ -1497,12 +1599,14 @@ export async function backfillReasoningGrades(
     if (!pids.length) return out;
     const pdict = await problem.getList(domainId, pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
     const progPids = new Set(programmingPidsOf(sdoc, pdict));
-    const threads = await getSessionThreads(domainId, sdoc.docId);
+    const threads = await gradedSessionThreads(domainId, sdoc);
     const recs = await record.getMulti(domainId, {
         pid: { $in: [...progPids] }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
     }).project({ uid: 1, pid: 1, status: 1 }).limit(200000).toArray();
+    const cap = sessionCutoff(sdoc);
     const recRowsOf = new Map<string, { at: number, accepted: boolean, rid: any }[]>();
     for (const r of recs as any[]) {
+        if (!recordCounts(r._id, cap)) continue; // ⏹ post-session practice
         const key = `${r.uid}:${r.pid}`;
         if (!recRowsOf.has(key)) recRowsOf.set(key, []);
         recRowsOf.get(key)!.push({ at: r._id.getTimestamp().getTime(), accepted: r.status === STATUS.STATUS_ACCEPTED, rid: r._id });
@@ -1609,12 +1713,15 @@ export async function backfillInitiativeGrades(
     const progPids = programmingPidsOf(sdoc, pdict);
     const progSet = new Set(progPids);
     if (!progPids.length) return out;
-    const threads = await getSessionThreads(domainId, sdoc.docId);
+    const threads = await gradedSessionThreads(domainId, sdoc);
     const recs = await record.getMulti(domainId, {
         pid: { $in: progPids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
     }).project({ uid: 1, pid: 1, status: 1, score: 1 }).limit(200000).toArray();
+    const cap = sessionCutoff(sdoc);
     const rowsOf = new Map<number, { pid: number, at: Date, accepted: boolean, rid: any, score: number }[]>();
     for (const r of recs as any[]) {
+        // ⏹ Practice made after the session closed never reaches a grader.
+        if (!recordCounts(r._id, cap)) continue;
         if (!rowsOf.has(r.uid)) rowsOf.set(r.uid, []);
         rowsOf.get(r.uid)!.push({
             pid: r.pid, at: r._id.getTimestamp(), accepted: r.status === STATUS.STATUS_ACCEPTED, rid: r._id, score: r.score || 0,
@@ -1709,14 +1816,16 @@ export async function backfillTrajectoryGrades(
     const recs = await record.getMulti(domainId, {
         pid: { $in: progPids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
     }).project({ uid: 1, pid: 1, status: 1, score: 1 }).limit(200000).toArray();
+    const cap = sessionCutoff(sdoc);
     const rowsOf = new Map<number, { pid: number, at: Date, accepted: boolean, score: number }[]>();
     for (const r of recs as any[]) {
+        if (!recordCounts(r._id, cap)) continue; // ⏹ post-session practice
         if (!rowsOf.has(r.uid)) rowsOf.set(r.uid, []);
         rowsOf.get(r.uid)!.push({
             pid: r.pid, at: r._id.getTimestamp(), accepted: r.status === STATUS.STATUS_ACCEPTED, score: r.score || 0,
         });
     }
-    const threads = await getSessionThreads(domainId, sdoc.docId);
+    const threads = await gradedSessionThreads(domainId, sdoc);
     const msgsByUidPid = new Map<number, Map<number, TutorMessage[]>>();
     for (const t of threads) {
         if (!msgsByUidPid.has(t.uid)) msgsByUidPid.set(t.uid, new Map());
@@ -3006,11 +3115,15 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
     }).project({
         uid: 1, pid: 1, score: 1, status: 1,
     }).limit(200000).toArray();
+    // ⏹ The evaluation sees the session's own records only; practice made
+    // after the hard end is invisible to every component of the score.
+    const cap = sessionCutoff(sdoc);
     // Group the raw records per student; scoreRecords — THE shared rubric,
     // also behind the student's own card — turns each group into per-task
     // bests, so this table can never disagree with what a student sees.
     const rowsOf = new Map<number, { pid: number, score: number, at: Date }[]>();
     for (const r of rows as any[]) {
+        if (!recordCounts(r._id, cap)) continue;
         if (!rowsOf.has(r.uid)) rowsOf.set(r.uid, []);
         rowsOf.get(r.uid)!.push({
             pid: r.pid, score: r.score || 0, at: r._id.getTimestamp(), accepted: r.status === STATUS.STATUS_ACCEPTED,
@@ -3181,7 +3294,7 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
                 if (acc.length) bonusState = 'accepted';
             }
         }
-        result.push({
+        result.push(applySessionOverride({
             uid,
             uname: udoc?.uname || String(uid),
             name: `${udoc?.firstName || ''} ${udoc?.lastName || ''}`.trim(),
@@ -3207,7 +3320,7 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
             done: (pg?.done || []).filter((x) => pids.includes(x)).length,
             skipped: (pg?.skipped || []).filter((x) => pids.includes(x)).length,
             bonus: bonusState,
-        });
+        }, pg?.override));
     }
     result.sort((a, b) => b.total - a.total || a.uname.localeCompare(b.uname));
     const results: SessionResults = {
@@ -3676,6 +3789,365 @@ class SelfLearningDetailHandler extends Handler {
         };
     }
 
+    /**
+     * 🔎 SCORE EVIDENCE — the proof behind every cell of the teacher's
+     * score board (self_learning_detail.page.js hover pop-up). Where
+     * postOwnershipDetail re-derives live composites, THIS endpoint
+     * reports the STORED results row (the very numbers the table shows)
+     * and attaches the raw evidence each number was computed from:
+     *   🏆 every judged attempt on the task (verdict, score, time, late /
+     *      excluded), the counted one marked;
+     *   🎓 each walkthrough question with the student's own answers and
+     *      their L0–L4 grades (an asked-but-unanswered question = L0);
+     *   🔧 each judged guidance→fix transition: the failed submission, the
+     *      guidance answered in between, the resubmission, level, trial
+     *      penalty;
+     *   🧩 each failure-phase exchange (tutor question, student answer,
+     *      grade);
+     *   💡 the first engagement's exchanges and its one grade;
+     *   📈 the trajectory judgment (level, basis, class-percentile points);
+     *   🧠 the transfer assessments, the planner's verdict, the surfaced
+     *      knowledge points;
+     *   🚫 the manipulation flags with their audit excerpts.
+     * Texts come straight from the tutor threads (selflearning.tutor) —
+     * the same record the student saw — so a dispute can be settled on
+     * what was actually said. Staff only (owner or homework editors).
+     */
+    @param('ssid', Types.ObjectId)
+    @param('uid', Types.Int)
+    async postScoreEvidence({ domainId }, ssid: ObjectId, uid: number) {
+        const sdoc = await loadSession(domainId, ssid);
+        if (!this.user.own(sdoc) && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)) throw new PermissionError();
+        const pids = sdoc.pids || [];
+        const pdict = await problem.getList(domainId, pids, true, false, problem.PROJECTION_CONTEST_LIST, true);
+        const label = (pid: number) => String((pdict[pid] as any)?.pid || pid);
+        const results: any = sdoc.results || null;
+        const row: any = (results?.rows || []).find((r: any) => r.uid === uid) || null;
+        const schedule = sessionSchedule(sdoc);
+        const udoc: any = await user.getById(domainId, uid).catch(() => null);
+        const cut = (t: any, n: number) => {
+            const str = String(t ?? '');
+            return str.length > n ? `${str.slice(0, n)}…` : str;
+        };
+        // ---- 🏆 every judged attempt of this student on the session's tasks ----
+        const rdocs = await record.getMulti(domainId, {
+            uid, pid: { $in: pids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+        }).project({
+            pid: 1, status: 1, score: 1, lang: 1,
+        }).sort({ _id: 1 }).limit(5000).toArray();
+        const hardEnd = schedule.hardEndAt ? new Date(schedule.hardEndAt) : null;
+        const attemptsByPid = new Map<number, any[]>();
+        const byRid = new Map<string, any>();
+        for (const r of rdocs as any[]) {
+            const at = r._id.getTimestamp();
+            const excluded = !!(hardEnd && at > hardEnd);
+            const late = !!(sdoc.endAt && at > sdoc.endAt);
+            if (!attemptsByPid.has(r.pid)) attemptsByPid.set(r.pid, []);
+            const list = attemptsByPid.get(r.pid)!;
+            const entry = {
+                rid: r._id.toHexString(),
+                no: list.length + 1,
+                at: at.getTime(),
+                status: r.status,
+                statusText: STATUS_TEXTS[r.status] || String(r.status),
+                accepted: r.status === STATUS.STATUS_ACCEPTED,
+                score: r.score || 0,
+                lang: r.lang || '',
+                late,
+                excluded,
+                counted: false,
+            };
+            list.push(entry);
+            byRid.set(entry.rid, { ...entry, pid: r.pid });
+        }
+        // The counting record, by scoreRecords' exact rule: highest score;
+        // on a tie the on-time one; records past the hard end never count.
+        for (const [, list] of attemptsByPid) {
+            let best: any = null;
+            for (const a of list) {
+                if (a.excluded) continue;
+                if (!best || a.score > best.score || (a.score === best.score && best.late && !a.late)) best = a;
+            }
+            if (best) best.counted = true;
+        }
+        // ---- the tutor threads: walkthrough / reasoning / fix / initiative evidence ----
+        const threads = await collTutor.find({ domainId, ssid: sdoc.docId, uid }).toArray() as any[];
+        const tasks: Record<string, any> = {};
+        for (const pid of pids) {
+            tasks[String(pid)] = {
+                pid, pidLabel: label(pid), title: (pdict[pid] as any)?.title || '', kind: pdict[pid] ? sessionKindOf(pdict[pid]) : 'programming',
+                attempts: (attemptsByPid.get(pid) || []).slice(-40),
+                walkthrough: null, reasoning: null, fix: null, initiative: null, integrity: null, surfacedKp: [],
+            };
+        }
+        for (const th of threads) {
+            const t = tasks[String(th.pid)];
+            if (!t) continue;
+            // Pair every student answer with the tutor question it replied to,
+            // and stamp the attempt it belongs to and the phase (before or
+            // after the first acceptance).
+            const msgs: any[] = th.messages || [];
+            let lastQ: any = null;
+            let attemptNo = 0;
+            let accepted = false;
+            const answers: any[] = [];
+            for (let i = 0; i < msgs.length; i++) {
+                const m = msgs[i];
+                if (m.kind === 'attempt' || m.kind === 'accepted') {
+                    attemptNo += 1;
+                    if (m.kind === 'accepted') accepted = true;
+                    lastQ = null;
+                    continue;
+                }
+                if (m.role === 'assistant') {
+                    lastQ = { text: cut(m.content, 600), line: m.line, endLine: m.endLine, at: m.at ? new Date(m.at).getTime() : null };
+                    continue;
+                }
+                if (m.role === 'user' && (m.kind === 'anno' || m.kind === 'chat')) {
+                    answers.push({
+                        idx: i,
+                        text: cut(m.content, 1500),
+                        at: m.at ? new Date(m.at).getTime() : null,
+                        attemptNo,
+                        post: accepted,
+                        level: typeof m.level === 'number' ? m.level : null,
+                        rlevel: typeof m.rlevel === 'number' ? m.rlevel : null,
+                        resolved: !!m.resolved,
+                        question: lastQ,
+                    });
+                }
+            }
+            const own: OwnershipState | undefined = th.ownership;
+            if (own) {
+                const used = new Set<number>();
+                const questions = (own.questions || []).map((q, k) => {
+                    const key = String(q.question || '');
+                    // Answers to THIS question: the stored key is the question's
+                    // first 300 chars (postAnnotate); match the tutor turn by it.
+                    let mine = answers.filter((a) => a.post && a.question && String(a.question.text).slice(0, 300) === key.slice(0, 300) && !used.has(a.idx));
+                    if (!mine.length) {
+                        // Older threads: positional fallback over the post-acceptance answers.
+                        const pool = answers.filter((a) => a.post && !used.has(a.idx));
+                        mine = pool.slice(0, Math.max(1, q.levels?.length || 1));
+                    }
+                    for (const a of mine) used.add(a.idx);
+                    return {
+                        no: k + 1,
+                        question: cut(key, 600),
+                        line: q.line,
+                        at: q.at ? new Date(q.at).getTime() : null,
+                        levels: (q.levels || []).map((l) => Math.min(OWNERSHIP_LEVEL_MAX, Math.max(0, +l || 0))),
+                        answers: mine.map((a) => ({ text: a.text, at: a.at, level: a.level })),
+                    };
+                });
+                const mean = taskMeanOf(own);
+                t.walkthrough = {
+                    acceptedAttempt: own.acceptedAttempt, minQ: own.minQ, maxQ: own.maxQ, done: !!own.done,
+                    mean: mean === null ? null : Math.round(mean * 100) / 100,
+                    questions,
+                };
+            }
+            // 🧩 failure-phase exchanges (graded rlevel when the live grader ran).
+            const failing = answers.filter((a) => !a.post);
+            if (failing.length || th.reasoning?.levels?.length) {
+                const mean = reasoningTaskMeanOf(th.reasoning);
+                t.reasoning = {
+                    levels: (th.reasoning?.levels || []).map((l: number) => Math.min(REASONING_LEVEL_MAX, Math.max(0, +l || 0))),
+                    mean: mean === null ? null : Math.round(mean * 100) / 100,
+                    exchanges: failing.slice(0, 40).map((a) => ({
+                        attemptNo: a.attemptNo, question: a.question?.text || '', line: a.question?.line, answer: a.text, at: a.at, rlevel: a.rlevel,
+                    })),
+                };
+            }
+            // 🔧 judged transitions with the two submissions and the guidance answered between them.
+            const fc: FixConvState | undefined = th.fixconv;
+            if (fc?.transitions?.length) {
+                const mean = taskFixConvMeanOf(fc);
+                t.fix = {
+                    mean: mean === null ? null : Math.round(mean * 100) / 100,
+                    transitions: fc.transitions.map((x) => {
+                        const from = byRid.get(String(x.fromRid)) || null;
+                        const to = byRid.get(String(x.toRid)) || null;
+                        const between = (from && to)
+                            ? answers.filter((a) => a.at && a.at > from.at && a.at <= to.at).slice(0, 12)
+                            : [];
+                        return {
+                            trial: x.trial,
+                            level: Math.min(FIXCONV_LEVEL_MAX, Math.max(0, +x.level || 0)),
+                            penalty: fixConvPenalty(x.trial || 1),
+                            asked: x.asked,
+                            at: x.at ? new Date(x.at).getTime() : null,
+                            from: from ? { no: from.no, at: from.at, statusText: from.statusText, score: from.score, accepted: from.accepted } : null,
+                            to: to ? { no: to.no, at: to.at, statusText: to.statusText, score: to.score, accepted: to.accepted } : null,
+                            exchanges: between.map((a) => ({ question: a.question?.text || '', answer: cut(a.text, 500), rlevel: a.rlevel })),
+                        };
+                    }),
+                };
+            }
+            // 💡 the first engagement: the exchanges of the earliest attempt that has any.
+            if (typeof th.initiative?.level === 'number') {
+                const firstNo = Math.min(...failing.map((a) => a.attemptNo), Number.POSITIVE_INFINITY);
+                const first = Number.isFinite(firstNo) ? failing.filter((a) => a.attemptNo === firstNo).slice(0, 6) : [];
+                t.initiative = {
+                    level: Math.min(INITIATIVE_LEVEL_MAX, Math.max(0, +th.initiative.level || 0)),
+                    at: th.initiative.at ? new Date(th.initiative.at).getTime() : null,
+                    attemptNo: Number.isFinite(firstNo) ? firstNo : null,
+                    exchanges: first.map((a) => ({ question: a.question?.text || '', answer: cut(a.text, 500), at: a.at })),
+                };
+            }
+            if (th.integrity && (th.integrity.own || th.integrity.fix || th.integrity.rea || th.integrity.ini)) {
+                t.integrity = {
+                    own: !!th.integrity.own, fix: !!th.integrity.fix, rea: !!th.integrity.rea, ini: !!th.integrity.ini,
+                    hits: (th.integrity.hits || []).slice(-8).map((h: any) => ({ sub: h.sub, excerpt: cut(h.excerpt, 300), at: h.at ? new Date(h.at).getTime() : null })),
+                };
+            }
+            if (th.surfacedKp?.names?.length) t.surfacedKp = th.surfacedKp.names.slice(0, 12);
+        }
+        // ---- 📈 / 🧠 the session-wide (Block B) judgments ----
+        const progDoc = await SelfLearningModel.getProgress(domainId, sdoc.docId, uid);
+        this.response.body = {
+            uid,
+            uname: udoc?.uname || String(uid),
+            name: `${udoc?.firstName || ''} ${udoc?.lastName || ''}`.trim(),
+            evaluated: !!row,
+            computedAt: results?.computedAt || null,
+            final: !!results?.final,
+            row,
+            shares: {
+                taskMax: results?.taskMax ?? TASK_RUBRIC_MAX,
+                ach: results?.achievementShare ?? ACHIEVEMENT_SHARE,
+                own: results?.ownershipShare ?? OWNERSHIP_SHARE,
+                fix: results?.fixconvShare ?? FIXCONV_SHARE,
+                rea: results?.reasoningShare ?? REASONING_SHARE,
+                ini: results?.initiativeShare ?? INITIATIVE_SHARE,
+                faAch: results?.faAchShare ?? FIRST_ATTEMPT_ACH_MAX,
+                faOwn: results?.faOwnShare ?? FIRST_ATTEMPT_OWN_MAX,
+                trj: results?.trajectoryShare ?? TRAJECTORY_SHARE,
+                trf: results?.transferShare ?? TRANSFER_SHARE,
+                blockA: results?.blockAMax ?? BLOCK_A_MAX,
+                blockB: results?.blockBMax ?? BLOCK_B_MAX,
+                total: results?.maxTotal ?? SESSION_TOTAL_MAX,
+                levelMax: OWNERSHIP_LEVEL_MAX,
+            },
+            schedule: {
+                endAt: sdoc.endAt ? new Date(sdoc.endAt).getTime() : null,
+                hardEndAt: schedule.hardEndAt ? new Date(schedule.hardEndAt).getTime() : null,
+                penaltyRules: sdoc.penaltyRules || (typeof sdoc.penalty === 'number' ? { 0: (100 - sdoc.penalty) / 100 } : null),
+            },
+            programmingPids: programmingPidsOf(sdoc, pdict),
+            tasks,
+            trajectory: progDoc?.trajectory ? {
+                level: Math.min(TRAJECTORY_LEVEL_MAX, Math.max(0, +progDoc.trajectory.level || 0)),
+                at: progDoc.trajectory.at ? new Date(progDoc.trajectory.at).getTime() : null,
+                basis: progDoc.trajectory.basis || '',
+                flagged: !!progDoc.trajectory.flagged,
+                info: row?.trajectoryInfo ? {
+                    level: row.trajectoryInfo.level,
+                    improvement: row.trajectoryInfo.improvement,
+                    slope: row.trajectoryInfo.slope,
+                    points: (row.trajectoryInfo.points || []).map((q: any) => ({ pid: label(q.pid), pos: q.pos, idx: q.idx, pct: q.pct })),
+                } : null,
+            } : null,
+            transfer: {
+                assessments: (progDoc?.transfer?.assessments || []).map((a) => ({
+                    concept: a.concept, fromPid: label(a.fromPid), toPid: label(a.toPid), level: Math.min(TRANSFER_LEVEL_MAX, Math.max(0, +a.level || 0)), at: a.at ? new Date(a.at).getTime() : null, flagged: !!a.flagged,
+                })),
+                plan: progDoc?.transfer?.plan ? { candidates: progDoc.transfer.plan.candidates, untestable: !!progDoc.transfer.plan.untestable, at: progDoc.transfer.plan.at ? new Date(progDoc.transfer.plan.at).getTime() : null } : null,
+                surfaced: threads.filter((th) => th.surfacedKp?.names?.length).map((th) => ({ pid: label(th.pid), names: th.surfacedKp.names.slice(0, 12) })),
+            },
+        };
+    }
+
+    /**
+     * ✎ Teacher: adjust a student's score — one task's Σ (0..100) or the
+     * session total (0..100) — with a mandatory reason, when the student
+     * argues. Stored on the progress doc (survives re-evaluation) and
+     * applied at once to the stored results row, so the board, the CSV
+     * and the student's card all change together.
+     */
+    @param('ssid', Types.ObjectId)
+    @param('uid', Types.Int)
+    @param('pid', Types.Int, true)
+    @param('score', Types.Float)
+    @param('reason', Types.Content)
+    async postOverrideScore({ domainId }, ssid: ObjectId, uid: number, pid: number | undefined, score: number, reason: string) {
+        const sdoc = await loadSession(domainId, ssid);
+        if (!this.user.own(sdoc) && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)) throw new PermissionError();
+        if (!Number.isFinite(score) || score < 0 || score > 100) throw new ValidationError('score');
+        if (pid !== undefined && !(sdoc.pids || []).includes(pid)) throw new ValidationError('pid');
+        const why = String(reason || '').trim().slice(0, 500);
+        if (!why) throw new ValidationError('reason');
+        const prog = await SelfLearningModel.getProgress(domainId, ssid, uid);
+        const override: ScoreOverride = { ...(prog?.override || {}) };
+        override.tasks = { ...(override.tasks || {}) };
+        override.log = [...(override.log || [])].slice(-50);
+        const row: any = (sdoc.results?.rows || []).find((r) => r.uid === uid) || null;
+        const at = new Date();
+        if (pid !== undefined) {
+            const computed = row?.computed?.taskScores?.[String(pid)] ?? row?.taskScores?.[String(pid)] ?? null;
+            override.tasks[String(pid)] = {
+                score, computed, reason: why, by: this.user._id, at,
+            };
+            override.log.push({
+                kind: 'task', pid, from: row?.taskScores?.[String(pid)] ?? null, to: score, reason: why, by: this.user._id, at,
+            });
+        } else {
+            override.total = {
+                score, computed: row?.computed?.total ?? row?.total ?? null, reason: why, by: this.user._id, at,
+            };
+            override.log.push({
+                kind: 'total', from: row?.total ?? null, to: score, reason: why, by: this.user._id, at,
+            });
+        }
+        await SelfLearningModel.setOverride(domainId, ssid, uid, override);
+        const fresh = await this.patchResultsRow(domainId, sdoc, uid, override);
+        this.response.body = { ok: true, override, row: fresh };
+    }
+
+    /** ✎ Teacher: remove one adjustment (a task's, or the total's); the computed value returns. */
+    @param('ssid', Types.ObjectId)
+    @param('uid', Types.Int)
+    @param('pid', Types.Int, true)
+    async postClearOverride({ domainId }, ssid: ObjectId, uid: number, pid?: number) {
+        const sdoc = await loadSession(domainId, ssid);
+        if (!this.user.own(sdoc) && !this.user.hasPerm(PERM.PERM_EDIT_HOMEWORK)) throw new PermissionError();
+        const prog = await SelfLearningModel.getProgress(domainId, ssid, uid);
+        const override: ScoreOverride = { ...(prog?.override || {}) };
+        override.tasks = { ...(override.tasks || {}) };
+        override.log = [...(override.log || [])].slice(-50);
+        const at = new Date();
+        if (pid !== undefined) {
+            if (override.tasks[String(pid)]) {
+                override.log.push({
+                    kind: 'task', pid, from: override.tasks[String(pid)].score, to: null, reason: 'adjustment removed', by: this.user._id, at,
+                });
+            }
+            delete override.tasks[String(pid)];
+        } else if (override.total) {
+            override.log.push({
+                kind: 'total', from: override.total.score, to: null, reason: 'adjustment removed', by: this.user._id, at,
+            });
+            delete override.total;
+        }
+        await SelfLearningModel.setOverride(domainId, ssid, uid, override);
+        const fresh = await this.patchResultsRow(domainId, sdoc, uid, override);
+        this.response.body = { ok: true, override, row: fresh };
+    }
+
+    /** Re-apply a student's overrides to their stored results row (no re-evaluation needed). */
+    async patchResultsRow(domainId: string, sdoc: SelfLearningDoc, uid: number, override: ScoreOverride) {
+        const results = sdoc.results;
+        if (!results?.rows) return null;
+        const idx = results.rows.findIndex((r) => r.uid === uid);
+        if (idx < 0) return null;
+        const fresh = applySessionOverride(results.rows[idx], override);
+        const rows = [...results.rows];
+        rows[idx] = fresh;
+        rows.sort((a, b) => b.total - a.total || a.uname.localeCompare(b.uname));
+        await SelfLearningModel.edit(domainId, sdoc.docId, { results: { ...results, rows } });
+        return fresh;
+    }
+
     /** Teacher: the manual evaluation's background-job state (for the progress card + reattach after reload). */
     @param('ssid', Types.ObjectId)
     async postEvalStatus({ domainId }, ssid: ObjectId) {
@@ -3916,6 +4388,32 @@ class SelfLearningDetailHandler extends Handler {
                     // the evaluation time is the stored table's computedAt.
                     evaluatedAt: evaluated ? (sdoc.results?.computedAt || null) : null,
                 };
+                /*
+                 * ✎ The teacher's adjustments, applied with the very
+                 * function the evaluation uses, so the card and the table
+                 * agree: task scores, Block A, the total — each adjusted
+                 * value carries the computed one and the reason.
+                 */
+                if (myProg?.override && (Object.keys(myProg.override.tasks || {}).length || myProg.override.total)) {
+                    const shaped = applySessionOverride({
+                        taskScores: Object.fromEntries(breakdowns.map((b) => [String(b.pid), b.score])),
+                        blockA, blockB, total, allFa: !!myAllFa, lateFactor: myLp ? myLp.factor : undefined,
+                    } as any, myProg.override);
+                    myScore.total = shaped.total;
+                    myScore.blockA = shaped.blockA;
+                    myScore.adjusted = {
+                        total: shaped.override?.total ? { computed: shaped.override.total.computed, reason: shaped.override.total.reason, at: shaped.override.total.at } : null,
+                        tasks: Object.keys(shaped.override?.tasks || {}).length,
+                    };
+                    for (const t of perTask) {
+                        const pid = breakdowns.find((b) => ((pdict[b.pid] as any)?.pid || String(b.pid)) === t.pid)?.pid;
+                        const o = pid !== undefined ? shaped.override?.tasks?.[String(pid)] : null;
+                        if (o) {
+                            (t as any).adjusted = { computed: o.computed, reason: o.reason, at: o.at };
+                            t.score = shaped.taskScores![String(pid)];
+                        }
+                    }
+                }
             } else {
                 myScore = {
                     released: false,
@@ -4208,6 +4706,10 @@ class SelfLearningProblemBaseHandler extends Handler {
      */
     async finishTask(domainId: string) {
         if (!this.isStudent) return null;
+        // ⏹ Progress (done / skipped, and with it the gate and the results'
+        // 🏁 ⏭ columns) is frozen at the session's hard end: practising a
+        // task afterwards cannot mark it finished retroactively.
+        if (sessionSchedule(this.sdoc).phase === 'ended') return await this.gateView();
         await SelfLearningModel.markDone(domainId, this.sdoc.docId, this.user._id, this.pdoc.docId);
         return await this.refreshGate(domainId, true);
     }
@@ -4327,9 +4829,25 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
             const listPdict = await problem.getList(
                 domainId, this.sdoc.pids, true, false, problem.PROJECTION_CONTEST_LIST, true,
             );
-            const listPsdict = this.user.hasPriv(PRIV.PRIV_USER_PROFILE)
-                ? await problem.getListStatus(domainId, this.user._id, this.sdoc.pids)
-                : {};
+            /*
+             * 🎯 Rail verdict states of a SESSION: the records that COUNT for
+             * it (scoreRecords — inside the window, the same rule the score
+             * card and the evaluation use), never the global problem-status
+             * doc, which would also show practice in the problem set, another
+             * session that reused the task, or a submission made after the
+             * session closed.
+             */
+            const listPsdict: Record<number, { status?: number }> = {};
+            if (this.user.hasPriv(PRIV.PRIV_USER_PROFILE)) {
+                const rows = await record.getMulti(domainId, {
+                    uid: this.user._id, pid: { $in: this.sdoc.pids }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+                }).project({ pid: 1, score: 1, status: 1 }).limit(5000).toArray();
+                const best = scoreRecords(this.sdoc, (rows as any[]).map((r) => ({ pid: r.pid, score: r.score || 0, at: r._id.getTimestamp() })));
+                for (const pid of this.sdoc.pids) {
+                    const b = best.get(pid);
+                    if (b) listPsdict[pid] = { status: b.effective >= 100 ? STATUS.STATUS_ACCEPTED : STATUS.STATUS_WRONG_ANSWER };
+                }
+            }
             const g = this.gate;
             this.UiContext.slProblems = this.sdoc.pids.map((pid) => ({
                 pid,
@@ -4383,9 +4901,15 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
     @param('pretest', Types.Boolean)
     async post({ domainId }, lang: string, code: string, pretest = false) {
         const schedNow = sessionSchedule(this.sdoc);
-        if (this.isStudent && schedNow.phase === 'ended') {
-            throw new ForbiddenError('This session has ended — submissions are closed.');
-        }
+        /*
+         * ⏹ PRACTICE AFTER THE END. A closed session stays usable: the
+         * student may keep submitting (and keep talking to the tutor) on its
+         * tasks. Nothing of it counts — scoreRecords drops records made past
+         * the hard end, every retroactive grader cuts its input at
+         * sessionCutoff, and the progress below is not touched either, so
+         * the rail and the results keep the picture the deadline froze.
+         */
+        const practice = this.isStudent && schedNow.phase === 'ended';
         if (this.sessionKind === 'subjective') {
             throw new BadRequestError('Subjective tasks are not judged: submit the report and files from the task page instead.');
         }
@@ -4435,6 +4959,8 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
             // Lateness is decided HERE, per submission — not from whatever
             // phase the client happened to render at page load.
             late: this.isStudent && schedNow.phase === 'extension',
+            // ⏹ Practice run: the client says so on the verdict card.
+            practice,
             penalty: schedNow.penalty,
         };
     }
@@ -4964,15 +5490,25 @@ class SelfLearningRecordHandler extends SelfLearningProblemBaseHandler {
 }
 
 class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
+    /** ⏹ After the session's hard end the tutor answers but grades nothing. */
+    get practice(): boolean {
+        return !!this.sdoc && sessionSchedule(this.sdoc).phase === 'ended';
+    }
+
     checkTutorAllowed() {
         if (!aiTutor.tutorEnabled()) throw new ForbiddenError('The AI tutor is disabled.');
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
-        // ⏯ The tutor lives and dies with the session clock: questions can
-        // be asked AND answered through the late window (extension), but
-        // once the hard end passes, every tutor operation closes.
-        if (this.sdoc && sessionSchedule(this.sdoc).phase === 'ended') {
-            throw new ForbiddenError('The session has ended — the AI tutor is closed.');
-        }
+        /*
+         * ⏯ The tutor stays OPEN after the session ends — a student may keep
+         * practising and keep talking to it — but from that moment it runs in
+         * PRACTICE MODE: the dialogue is stored so the student can re-read
+         * it, and nothing else is. No walkthrough question is added, no
+         * answer is graded, no integrity flag is raised: the ownership,
+         * reasoning, fix-conversion and initiative evidence the score is
+         * built from is frozen exactly as the deadline left it (the graders
+         * also cut their inputs at sessionCutoff, so a late message could
+         * not reach them even if one were stored).
+         */
         // Programming tasks only — every operation of this handler, history
         // included, is refused for objective / subjective / answer tasks.
         if (!this.tutorEligible) throw new ForbiddenError('The AI tutor is only available for programming tasks.');
@@ -5164,7 +5700,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 const fresh: OwnershipState = {
                     acceptedAttempt: cls.attemptNo, minQ: budget.min, maxQ: budget.max, questions: [],
                 };
-                await SelfLearningModel.initOwnership(thread._id, fresh);
+                if (!this.practice) await SelfLearningModel.initOwnership(thread._id, fresh);
                 thread.ownership = fresh;
             }
             ownership = thread.ownership;
@@ -5178,7 +5714,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             if (ownership.done || ownership.questions.length >= ownership.maxQ) {
                 // Budget spent (or the model already closed the walkthrough):
                 // finish without another model call.
-                if (!ownership.done) await SelfLearningModel.setOwnershipDone(thread._id);
+                if (!this.practice && !ownership.done) await SelfLearningModel.setOwnershipDone(thread._id);
                 const doneGate = await this.finishTask(domainId);
                 this.response.body = {
                     annotation: null, marker, markerAccepted: accepted, gate: doneGate,
@@ -5200,7 +5736,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 // unanswered forever and drag the mean with a phantom L0.
                 const qkey = String(annotation.question).slice(0, 300);
                 if (!(ownership.questions || []).find((x) => x.question === qkey)) {
-                    await SelfLearningModel.pushOwnershipQuestion(thread._id, {
+                    if (!this.practice) await SelfLearningModel.pushOwnershipQuestion(thread._id, {
                         question: qkey, line: annotation.line, at: new Date(), levels: [],
                     });
                 }
@@ -5216,7 +5752,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
              * tutor" button) resumes the remaining questions instead of
              * freezing this task at an unfixable, unmeasured state.
              */
-            if (ownership.questions.length >= ownership.minQ) await SelfLearningModel.setOwnershipDone(thread._id);
+            if (!this.practice && ownership.questions.length >= ownership.minQ) await SelfLearningModel.setOwnershipDone(thread._id);
         }
         // Progression: accepted and nothing left for the tutor to ask → the
         // task is finished right away (the walkthrough's later questions
@@ -5295,15 +5831,15 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 let q0 = (thread.ownership?.questions || []).find((qq) => qq.question === qkey);
                 if (!q0) {
                     q0 = { question: qkey, line, at: new Date(), levels: [], answerKeys: [] } as any;
-                    await SelfLearningModel.pushOwnershipQuestion(thread._id, q0!);
+                    if (!this.practice) await SelfLearningModel.pushOwnershipQuestion(thread._id, q0!);
                 }
-                await SelfLearningModel.pushOwnershipLevel(thread._id, qkey, 0, normalizeAnswerKey(text));
-                await SelfLearningModel.setMessageLevel(thread._id, userIdx, 0);
+                if (!this.practice) await SelfLearningModel.pushOwnershipLevel(thread._id, qkey, 0, normalizeAnswerKey(text));
+                if (!this.practice) await SelfLearningModel.setMessageLevel(thread._id, userIdx, 0);
             } else {
-                await SelfLearningModel.pushReasoningLevel(thread._id, 0, normalizeAnswerKey(text));
-                await SelfLearningModel.setMessageRlevel(thread._id, userIdx, 0);
+                if (!this.practice) await SelfLearningModel.pushReasoningLevel(thread._id, 0, normalizeAnswerKey(text));
+                if (!this.practice) await SelfLearningModel.setMessageRlevel(thread._id, userIdx, 0);
             }
-            await SelfLearningModel.flagIntegrity(thread._id, sub, manip.excerpt || '');
+            if (!this.practice) await SelfLearningModel.flagIntegrity(thread._id, sub, manip.excerpt || '');
             this.response.body = { reply: notice, resolved: false, level: 0, flagged: true };
             return;
         }
@@ -5349,7 +5885,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             const rstate = thread.reasoning || { levels: [], answerKeys: [] };
             const rdup = !!rstate.answerKeys?.includes(rkey);
             if (!rdup && (rstate.levels?.length || 0) < MAX_REASONING_PER_TASK) {
-                await SelfLearningModel.pushReasoningLevel(thread._id, level, rkey);
+                if (!this.practice) await SelfLearningModel.pushReasoningLevel(thread._id, level, rkey);
             }
         }
         if (level !== null && rdoc.status === STATUS.STATUS_ACCEPTED && thread.ownership) {
@@ -5366,7 +5902,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             const duplicate = !!q?.answerKeys?.includes(key);
             const capped = (q?.levels?.length || 0) >= MAX_LEVELS_PER_QUESTION;
             if (!duplicate && !capped) {
-                await SelfLearningModel.pushOwnershipLevel(thread._id, question.slice(0, 300), level, key);
+                if (!this.practice) await SelfLearningModel.pushOwnershipLevel(thread._id, question.slice(0, 300), level, key);
             }
         }
         // Progression: a resolved post-acceptance answer no longer finishes
@@ -5468,18 +6004,36 @@ async function activityKinds(domainId: string, pids: number[], uid?: number, tdo
     const pdict = await problem.getList(domainId, pids, true, false, ['docId', 'pid', 'title', 'config', 'content'], true);
     // Rail sections + running numbers + points of the test paper (see paperLayoutOf).
     const layout = tdoc ? await paperLayoutOf(domainId, tdoc, pids.map((pid) => pdict[pid]).filter((x) => x)) : null;
-    // Rail verdict states: the requester's OWN problem-status docs. The judge
-    // updates these for contest/homework submissions too (handler/judge.ts
-    // calls problem.updateStatus before contest.updateStatus), so accepted /
-    // tried decorations are correct inside activities as well.
-    const psdict: Record<number, { status?: number, score?: number }> = {};
+    /*
+     * 🎯 Rail verdict states. INSIDE a contest / homework the chips must show
+     * what the student did IN THAT ACTIVITY — their contest status document
+     * (tsdoc.detail, exactly what the scoreboard counts) — never the global
+     * problem-status doc, which also carries practice in the problem set, an
+     * earlier activity that reused the task, and correction submissions made
+     * after the deadline. Outside an activity (the problem-set rail) the
+     * global status is the right source.
+     * While an activity is still running the verdicts of OBJECTIVE tasks are
+     * withheld, so those chips report "handed in" instead of a verdict.
+     */
+    const psdict: Record<number, { status?: number, score?: number, submitted?: boolean }> = {};
     if (uid && uid > 1) {
         try {
-            const rows = await problem.getMultiStatus(domainId, { uid, docId: { $in: pids } })
-                .project({ docId: 1, status: 1, score: 1 }).toArray();
-            for (const r of rows) psdict[r.docId] = r as any;
+            if (tdoc) {
+                const tsdoc: any = await contest.getStatus(domainId, tdoc.docId, uid);
+                const detail = tsdoc?.detail || {};
+                for (const pid of pids) {
+                    const d = detail[pid];
+                    if (!d?.rid) continue;
+                    psdict[pid] = { status: d.status || 0, score: d.score, submitted: true };
+                }
+            } else {
+                const rows = await problem.getMultiStatus(domainId, { uid, docId: { $in: pids } })
+                    .project({ docId: 1, status: 1, score: 1 }).toArray();
+                for (const r of rows) psdict[r.docId] = r as any;
+            }
         } catch (e) { /* status decoration is optional */ }
     }
+    const withheld = !!tdoc && !contest.isDone(tdoc);
     return pids.map((pid) => {
         const p: any = pdict[pid] || {};
         let conf: any = p.config;
@@ -5499,12 +6053,15 @@ async function activityKinds(domainId: string, pids: number[], uid?: number, tdo
         else if (/^o/i.test(disp)) kind = 'objective';
         else if (/^p/i.test(disp)) kind = 'programming';
         const st = psdict[pid] || {};
+        // Objective verdicts stay hidden while the activity is live.
+        const hide = withheld && kind === 'objective';
         return {
             pid,
             kind,
             title: p.title || String(pid),
-            status: st.status || 0,
-            score: st.score,
+            status: hide ? 0 : (st.status || 0),
+            submitted: !!st.submitted,
+            score: hide ? undefined : st.score,
             ...(layout ? {
                 group: kind === 'objective' ? (layout.sectionOf[pid] || 'objective') : kind,
                 index: kind === 'objective' ? layout.indexOf[pid] : undefined,
@@ -5765,283 +6322,20 @@ class BulkAddUsersHandler extends Handler {
 
 /* ---------------------- teacher-facing AI class report ---------------------- */
 
-const CLASS_MAX_PARTICIPANTS = 400; // hard safety ceiling
-const CLASS_SINGLE_CALL_MAX = 60; // above this, the map-reduce path runs
-const CLASS_BATCH_SIZE = 40;
-const CLASS_MAX_PIDS = 8;
+/*
+ * PTA fork: the HOMEWORK / TEST report moved to lib/activity_report.ts
+ * (a background map-reduce job over every task, submission and objective
+ * answer). Only the limits the SESSION corpus below still uses remain here.
+ */
 const CLASS_MAX_RECORDS = 20000;
 const NONFINAL_STATUS = [0, 20, 21, 22]; // waiting / judging / compiling / fetched
-
-/**
- * Deterministic collector: everything the LLM may cite is computed HERE.
- * `full` additionally assembles roster lines, code samples, and the harvest
- * from stored per-student AI reports (all anonymized as S-tokens).
- */
-async function buildClassStats(domainId: string, tdoc: any, full: boolean, kind = 'contest') {
-    const pidsAll: number[] = (tdoc.pids || []).filter((x: any) => typeof x === 'number');
-    const pids = pidsAll.slice(0, CLASS_MAX_PIDS);
-    // Code NEVER rides the bulk query (200+ students x attempts would be
-    // hundreds of MB) — samples are re-fetched by rid afterwards.
-    const proj: any = {
-        uid: 1, pid: 1, status: 1, score: 1,
-    };
-    // Self-learning submissions carry NO contest tag, so that kind analyzes
-    // every non-pretest judged submission on the session's problems.
-    const recordQuery = kind === 'self-learning'
-        ? { pid: { $in: pids }, contest: { $ne: record.RECORD_PRETEST } }
-        : { contest: tdoc.docId, pid: { $in: pids } };
-    const rdocs = await record.getMulti(domainId, recordQuery)
-        .sort({ _id: 1 }).limit(CLASS_MAX_RECORDS).project(proj).toArray();
-    const trails = new Map<string, { at: number, status: number, score: number, code?: string }[]>();
-    const uidSet = new Set<number>();
-    for (const r of rdocs as any[]) {
-        if (NONFINAL_STATUS.includes(r.status)) continue;
-        uidSet.add(r.uid);
-        const key = `${r.uid}/${r.pid}`;
-        if (!trails.has(key)) trails.set(key, []);
-        trails.get(key)!.push({
-            at: r._id.getTimestamp().getTime(), status: r.status, score: r.score || 0, rid: r._id,
-        });
-    }
-    const participantsAll = [...uidSet].sort((a, b) => a - b);
-    const sampled = participantsAll.length > CLASS_MAX_PARTICIPANTS
-        || pidsAll.length > pids.length || (rdocs as any[]).length >= CLASS_MAX_RECORDS;
-    const participants = participantsAll.slice(0, CLASS_MAX_PARTICIPANTS);
-    const sOf = new Map<number, string>();
-    participants.forEach((uid, i) => sOf.set(uid, `S${i + 1}`));
-    const pdocs = await problem.getMulti(domainId, { docId: { $in: pids } })
-        .project({ docId: 1, pid: 1, title: 1 }).toArray();
-    const pLabel = new Map<number, string>();
-    const pTitle = new Map<number, string>();
-    for (const pd of pdocs as any[]) {
-        pLabel.set(pd.docId, `P${pd.pid ?? pd.docId}`);
-        pTitle.set(pd.docId, pd.title || '');
-    }
-    for (const pid of pids) if (!pLabel.has(pid)) pLabel.set(pid, `P${pid}`);
-    const perPid: any[] = [];
-    for (const pid of pids) {
-        let attempted = 0;
-        let solved = 0;
-        let thrashers = 0;
-        const verdicts: Record<string, number> = {};
-        const firstFail: Record<string, number> = {};
-        const attemptCounts: number[] = [];
-        for (const uid of participants) {
-            const t = trails.get(`${uid}/${pid}`);
-            if (!t || !t.length) continue;
-            attempted++;
-            attemptCounts.push(t.length);
-            if (t.some((x) => x.status === STATUS.STATUS_ACCEPTED)) solved++;
-            const ff = t.find((x) => x.status !== STATUS.STATUS_ACCEPTED);
-            if (ff) {
-                const k = STATUS_TEXTS[ff.status] || `${ff.status}`;
-                firstFail[k] = (firstFail[k] || 0) + 1;
-            }
-            for (const x of t) {
-                if (x.status === STATUS.STATUS_ACCEPTED) continue;
-                const k = STATUS_TEXTS[x.status] || `${x.status}`;
-                verdicts[k] = (verdicts[k] || 0) + 1;
-            }
-            if (t.length >= 3) {
-                let fast = 0;
-                for (let i = 1; i < t.length; i++) if (t[i].at - t[i - 1].at < 90000) fast++;
-                if (fast / (t.length - 1) >= 0.5) thrashers++;
-            }
-        }
-        attemptCounts.sort((a, b) => a - b);
-        perPid.push({
-            pid,
-            label: pLabel.get(pid),
-            title: pTitle.get(pid),
-            attempted,
-            solved,
-            medianAttempts: attemptCounts.length ? attemptCounts[Math.floor((attemptCounts.length - 1) / 2)] : 0,
-            maxAttempts: attemptCounts[attemptCounts.length - 1] || 0,
-            thrashers,
-            verdicts,
-            firstFail,
-        });
-    }
-    // Self-learning bonus data: tutor-thread engagement per problem —
-    // questions asked, student replies, and silently-skipped questions
-    // (question shown, never answered: the fast-fix path or disengagement).
-    const tutorByPid = new Map<number, { questions: number, replies: number, skipped: number, threads: number }>();
-    if (kind === 'self-learning') {
-        try {
-            const threads = await getTutorThreadsIn(domainId, tdoc.docId, pids, participants);
-            for (const th of threads as any[]) {
-                if (!tutorByPid.has(th.pid)) {
-                    tutorByPid.set(th.pid, {
-                        questions: 0, replies: 0, skipped: 0, threads: 0,
-                    });
-                }
-                const agg = tutorByPid.get(th.pid)!;
-                agg.threads++;
-                let pendingAnswered = true;
-                for (const m of th.messages || []) {
-                    if (m.kind !== 'anno') continue;
-                    if (m.role === 'assistant' && typeof m.resolved !== 'boolean') {
-                        if (!pendingAnswered) agg.skipped++;
-                        agg.questions++;
-                        pendingAnswered = false;
-                    } else if (m.role === 'user') {
-                        agg.replies++;
-                        pendingAnswered = true;
-                    }
-                }
-                if (!pendingAnswered) agg.skipped++;
-            }
-        } catch (e) {
-            logger.warn('[pta-ui] tutor engagement stats failed: %s', e.message);
-        }
-    }
-    const light = {
-        activity: tdoc.title,
-        kind,
-        participants: participantsAll.length,
-        records: (rdocs as any[]).length,
-        sampled,
-        problems: perPid.map((p) => ({
-            label: p.label,
-            title: p.title,
-            attempted: p.attempted,
-            solved: p.solved,
-            medianAttempts: p.medianAttempts,
-            maxAttempts: p.maxAttempts,
-            thrashers: p.thrashers,
-            verdicts: p.verdicts,
-            firstFail: p.firstFail,
-            ...(kind === 'self-learning' ? {
-                tutorQuestions: tutorByPid.get(p.pid)?.questions || 0,
-                tutorReplies: tutorByPid.get(p.pid)?.replies || 0,
-                tutorSkipped: tutorByPid.get(p.pid)?.skipped || 0,
-            } : {}),
-        })),
-    };
-    if (!full) return { light } as any;
-    const roster: string[] = [];
-    for (const uid of participants) {
-        const parts: string[] = [];
-        for (const pid of pids) {
-            const t = trails.get(`${uid}/${pid}`);
-            if (!t || !t.length) continue;
-            const ac = t.some((x) => x.status === STATUS.STATUS_ACCEPTED);
-            const last = t[t.length - 1];
-            parts.push(`${pLabel.get(pid)}:${t.length}${ac ? '(AC)' : `(${STATUS_SHORT_TEXTS[last.status] || last.status})`}`);
-        }
-        roster.push(`${sOf.get(uid)}: ${parts.join(' ') || '(no submissions)'}`.slice(0, 120));
-    }
-    // Pick sample rids first, then fetch just those codes (<= ~32 small reads).
-    const picks: { rid: any, label: string, sTok: string, tag: string, cap: number }[] = [];
-    for (const p of perPid) {
-        const modal = (Object.entries(p.firstFail) as [string, number][]).sort((a, b) => b[1] - a[1])[0]?.[0];
-        let taken = 0;
-        if (modal) {
-            for (const uid of participants) {
-                if (taken >= 3) break;
-                const t = trails.get(`${uid}/${p.pid}`);
-                const hit = t?.find((x) => (STATUS_TEXTS[x.status] || `${x.status}`) === modal);
-                if (hit) {
-                    picks.push({
-                        rid: hit.rid, label: p.label!, sTok: sOf.get(uid)!, tag: `failing sample (${sOf.get(uid)}, ${modal})`, cap: 900,
-                    });
-                    taken++;
-                }
-            }
-        }
-        for (const uid of participants) {
-            const t = trails.get(`${uid}/${p.pid}`);
-            const ac = t?.find((x) => x.status === STATUS.STATUS_ACCEPTED);
-            if (ac) {
-                picks.push({
-                    rid: ac.rid, label: p.label!, sTok: sOf.get(uid)!, tag: `accepted sample (${sOf.get(uid)})`, cap: 1200,
-                });
-                break;
-            }
-        }
-    }
-    const samples: string[] = [];
-    if (picks.length) {
-        const codeDocs = await record.getMulti(domainId, { _id: { $in: picks.map((x) => x.rid) } })
-            .project({ code: 1 }).toArray();
-        const codeById = new Map((codeDocs as any[]).map((d) => [String(d._id), d.code]));
-        for (const pk of picks) {
-            const code = codeById.get(String(pk.rid));
-            if (typeof code === 'string' && code.trim()) {
-                samples.push(`--- ${pk.label} ${pk.tag} ---\n${String(code).slice(0, pk.cap)}`);
-            }
-        }
-    }
-    const harvested: string[] = [];
-    try {
-        const sdocs = await getSuggestionReportsIn(domainId, pids, participants);
-        for (const d of sdocs as any[]) {
-            const idx = String(d.report || '').toLowerCase().indexOf('critical concept');
-            if (idx < 0) continue;
-            const snip = String(d.report).slice(idx, idx + 340).replace(/[*_#`>]/g, ' ').replace(/\s+/g, ' ').trim();
-            harvested.push(`${sOf.get(d.uid) || '(other)'} on ${pLabel.get(d.pid) || `P${d.pid}`}: ${snip}`);
-            if (harvested.length >= 40) break;
-        }
-    } catch (e) { /* the harvest is best-effort */ }
-    return {
-        light, participants, sOf, perPid, roster, samples, harvested,
-    } as any;
-}
-
-/** MAP-stage context: shared per-problem stats + ONE batch's student lines. */
-function classBatchContext(stats: any, batchTokens: Set<string>): string {
-    const L = stats.light;
-    const lines: string[] = [
-        `ACTIVITY TITLE: ${L.activity}`,
-        `TYPE: ${L.kind}`,
-        `Full-class participants: ${L.participants}. THIS BATCH: ${batchTokens.size} students.`,
-        '',
-        '--- Per-problem statistics (full class; read-only reference) ---',
-    ];
-    for (const p of stats.perPid) {
-        lines.push(`${p.label} "${p.title}": attempted ${p.attempted}, solved ${p.solved}, median attempts ${p.medianAttempts}`);
-    }
-    lines.push('', `--- This batch's roster (${[...batchTokens][0]}..${[...batchTokens][batchTokens.size - 1]}) ---`);
-    lines.push(...stats.roster.filter((r: string) => batchTokens.has(r.split(':')[0])));
-    const bh = stats.harvested.filter((h: string) => batchTokens.has(h.split(' ')[0]));
-    if (bh.length) lines.push('', "--- This batch's harvested critical-concept notes ---", ...bh);
-    lines.push('', '--- End of batch. Emit the JSON now. ---');
-    return lines.join('\n');
-}
-
-/** Tolerant parse of one map-stage JSON output. */
-function parseMapOutput(raw: string, validLabels: Set<string>, batchTokens: Set<string>) {
-    const cleaned = String(raw || '').replace(/```(?:json)?/gi, '').trim();
-    const start = cleaned.indexOf('{');
-    if (start < 0) throw new Error('no JSON object');
-    const parsed = JSON.parse(cleaned.slice(start, cleaned.lastIndexOf('}') + 1));
-    const concepts = (Array.isArray(parsed?.concepts) ? parsed.concepts : [])
-        .filter((c: any) => c && typeof c.name === 'string')
-        .map((c: any) => ({
-            name: String(c.name).slice(0, 60).trim(),
-            problems: Object.fromEntries(Object.entries(c.problems || {})
-                .filter(([k, v]) => validLabels.has(String(k)) && Number.isFinite(+(v as any)) && +(v as any) > 0)
-                .map(([k, v]) => [String(k), Math.min(Math.round(+(v as any)), batchTokens.size)])),
-            students: (Array.isArray(c.students) ? c.students : []).map(String).filter((t: string) => batchTokens.has(t)).slice(0, 40),
-        }))
-        .filter((c: any) => Object.keys(c.problems).length);
-    const flags = parsed?.flags || {};
-    return {
-        concepts,
-        intervention: (Array.isArray(flags.intervention) ? flags.intervention : [])
-            .filter((f: any) => f && batchTokens.has(String(f.s)))
-            .map((f: any) => ({ s: String(f.s), reason: String(f.reason || '').slice(0, 90) })).slice(0, 8),
-        stretch: (Array.isArray(flags.stretch) ? flags.stretch : []).map(String).filter((t: string) => batchTokens.has(t)).slice(0, 8),
-        notes: (Array.isArray(parsed?.notes) ? parsed.notes : []).map((x: any) => String(x).slice(0, 140)).slice(0, 3),
-    };
-}
 
 /**
  * Extract and strip the mandatory json:concepts trailer: the prose report
  * stays clean while the structured knowledge points feed the charts.
  */
 function extractConceptBlock(md: string, validLabels?: Set<string>): { report: string, concepts: any[] } {
-    const m = md.match(/```json:concepts\s*\n([\s\S]*?)```/);
+    const m = md.match(/```json:concepts[ \t]*\n([\s\S]*?)```/);
     if (!m) return { report: md.trim(), concepts: [] };
     const report = (md.slice(0, m.index) + md.slice((m.index as number) + m[0].length)).trim();
     let concepts: any[] = [];
@@ -6069,46 +6363,6 @@ function extractConceptBlock(md: string, validLabels?: Set<string>): { report: s
     return { report, concepts };
 }
 
-function classContextBlock(stats: any, agg: any = null): string {
-    const L = stats.light;
-    const lines: string[] = [
-        `ACTIVITY TITLE: ${L.activity}`,
-        `TYPE: ${L.kind}`,
-        `Participants (students with at least one judged submission): ${L.participants}${L.sampled ? ' — NOTE: the data was capped/sampled; state this in the Executive Summary.' : ''}`,
-        `Total judged submissions considered: ${L.records}`,
-        '',
-        '--- Problems and deterministic statistics (server-computed; the ONLY numbers you may cite) ---',
-    ];
-    const lightByLabel = new Map((L.problems || []).map((p: any) => [p.label, p]));
-    for (const p of stats.perPid) {
-        const lp: any = lightByLabel.get(p.label) || {};
-        const tutorBit = lp.tutorQuestions != null
-            ? `, tutor questions ${lp.tutorQuestions}, student replies ${lp.tutorReplies}, silently-skipped ${lp.tutorSkipped}` : '';
-        lines.push(`${p.label} "${p.title}": attempted ${p.attempted}, solved ${p.solved}, median attempts ${p.medianAttempts}, max attempts ${p.maxAttempts}, grader-thrash students ${p.thrashers}${tutorBit}`);
-        lines.push(`  failing verdicts (all attempts): ${Object.entries(p.verdicts).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}`);
-        lines.push(`  first-failure verdicts: ${Object.entries(p.firstFail).map(([k, v]) => `${k}=${v}`).join(', ') || '(none)'}`);
-    }
-    if (agg) {
-        lines.push('', `--- Batch analysis (per-student lines were processed in ${agg.batchCount} disjoint batches covering ALL ${L.participants} participants; concept counts below are exact sums) ---`);
-        for (const c of agg.concepts) {
-            const per = Object.entries(c.problems).map(([k, v]) => `${k}:${v}`).join(' ');
-            lines.push(`concept "${c.name}" — total ${c.total} student(s) (${per || 'no per-problem split'}) — e.g. ${c.students.slice(0, 10).join(', ') || '-'}`);
-        }
-        if (agg.intervention.length) lines.push('', 'Flagged for intervention:', ...agg.intervention.map((f: any) => `- ${f.s}: ${f.reason}`));
-        if (agg.stretch.length) lines.push('', `Ready for stretch material: ${agg.stretch.join(', ')}`);
-        if (agg.notes.length) lines.push('', 'Batch observations:', ...agg.notes.map((x: string) => `- ${x}`));
-        const flagged = new Set([...agg.intervention.map((f: any) => f.s), ...agg.stretch]);
-        const flaggedLines = stats.roster.filter((r: string) => flagged.has(r.split(':')[0])).slice(0, 40);
-        if (flaggedLines.length) lines.push('', '--- Roster lines of flagged students only ---', ...flaggedLines);
-    } else {
-        lines.push('', '--- Anonymized roster (per-problem attempt counts and final state) ---', ...stats.roster);
-    }
-    if (stats.harvested.length && !agg) lines.push('', '--- Harvested "critical concept" notes from per-student AI reports ---', ...stats.harvested);
-    if (stats.samples.length) lines.push('', '--- Representative code excerpts (the ONLY code you may quote) ---', ...stats.samples);
-    lines.push('', '--- End of context. Write the report now. ---');
-    return lines.join('\n');
-}
-
 /* ------------- self-learning SESSION report: the whole corpus, in batches ------------- */
 
 /*
@@ -6133,7 +6387,8 @@ const SESSION_MAX_CALLS = () => Math.max(8, +system.get('ai_tutor.report_max_cal
 const SESSION_CODE_AC_CAP = 1200;
 const SESSION_CODE_FAIL_CAP = 900;
 const SESSION_MSG_CAP = 320; // characters per tutor message in the corpus
-const SESSION_JOB_STALE_MS = 30 * 60 * 1000;
+/** 💓 Session report jobs: dead after this long WITHOUT a progress heartbeat (see model classReportJobStale). */
+const SESSION_JOB_STALE_MS = 15 * 60 * 1000;
 /** Compaction levels: [dialogue messages per task, chars per message, code chars, collapse attempt runs]. */
 const SESSION_LEVELS: { msgs: number, msgChars: number, code: number, collapse: boolean }[] = [
     { msgs: 24, msgChars: SESSION_MSG_CAP, code: SESSION_CODE_AC_CAP, collapse: false },
@@ -6679,12 +6934,19 @@ async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: 
          */
         let done = 0;
         const analyzeItems = async (items: MapItem[], depth = 0): Promise<void> => {
-            try {
-                const raw = await aiTutor.runSessionMapBatch(sessionBatchContext(corpus, items));
-                absorb(parseSessionMap(raw, tokens, labels, pointNames), items);
-                return;
-            } catch (e) {
-                logger.warn('[pta-ui] session report map call failed (%d block(s), depth %d): %s', items.length, depth, e.message);
+            // 🔁 Transient provider errors are retried with backoff (shared
+            // cooldown on 429) before the batch is split; a malformed reply
+            // gets one fresh call.
+            const ctx = sessionBatchContext(corpus, items);
+            for (let ask = 0; ask < 2; ask++) {
+                try {
+                    const raw = await aiTutor.callWithRetry(() => aiTutor.runSessionMapBatch(ctx), { label: `session map (${items.length} block(s))` });
+                    absorb(parseSessionMap(raw, tokens, labels, pointNames), items);
+                    return;
+                } catch (e) {
+                    logger.warn('[pta-ui] session report map call failed (%d block(s), depth %d, ask %d): %s', items.length, depth, ask + 1, e.message);
+                    if (aiTutor.isTransientProviderError(e)) break;
+                }
             }
             if (items.length > 1) {
                 const mid = Math.ceil(items.length / 2);
@@ -6725,7 +6987,8 @@ async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: 
         };
         const failed = unanalyzed.length;
         await progress({ stage: 'reduce', done: batches.length, total: batches.length, students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed });
-        const raw = await aiTutor.runSessionReport(sessionReportContext(corpus, findings));
+        const sessionCtx = sessionReportContext(corpus, findings);
+        const raw = await aiTutor.callWithRetry(() => aiTutor.runSessionReport(sessionCtx), { label: 'session reduce' });
         await progress({ stage: 'finalize', done: batches.length, total: batches.length, students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed });
         const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(raw, labels);
         const sidMap = [...corpus.sOf.entries()].map(([uid, sTok]) => ({ s: sTok, uid, uname: corpus.udict[uid]?.uname || `user#${uid}` }));
@@ -6775,19 +7038,33 @@ class AiClassReportHandler extends Handler {
 
     @param('tid', Types.ObjectId)
     @param('dry', Types.Boolean, true)
-    async get({ domainId }, tid: ObjectId, dry = false) {
+    @param('job', Types.Boolean, true)
+    async get({ domainId }, tid: ObjectId, dry = false, jobOnly = false) {
         const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        const staleMs = kind === 'self-learning' ? SESSION_JOB_STALE_MS : ACTIVITY_JOB_STALE_MS;
+        // 💓 Dead = no heartbeat for staleMs (every batch writes one), never
+        // "started long ago": a 200-student run legitimately takes an hour.
+        const jobOf = (doc: any) => {
+            let job = doc?.job || null;
+            if (classReportJobStale(job, staleMs)) {
+                job = { ...job, status: 'failed', error: 'The report job stopped reporting progress (the server may have restarted). Generate it again.' };
+            }
+            return job;
+        };
+        // 📡 The poll while a job runs: the job state alone, no statistics
+        // (the page re-fetches everything once the job ends).
+        if (jobOnly) {
+            const doc = await getClassReport(domainId, String(tid));
+            this.response.body = { kind, job: jobOf(doc), generatedAt: doc?.generatedAt || null };
+            return;
+        }
         if (kind === 'self-learning') {
             // 📊 The session report: cached report + live statistics + the
-            // state of a running job (the page polls this while it runs).
+            // state of a running job.
             const [doc, corpus] = await Promise.all([
                 getClassReport(domainId, String(tid)),
                 buildSessionCorpus(domainId, tdoc, true),
             ]);
-            let job = doc?.job || null;
-            if (job && job.status === 'running' && Date.now() - new Date(job.startedAt).getTime() > SESSION_JOB_STALE_MS) {
-                job = { ...job, status: 'failed', error: 'The report job was interrupted (the server restarted). Generate it again.' };
-            }
             this.response.body = {
                 kind,
                 report: doc?.reportNamed || null,
@@ -6795,38 +7072,43 @@ class AiClassReportHandler extends Handler {
                 participants: doc?.participants ?? null,
                 concepts: doc?.concepts || [],
                 stats: corpus.light,
-                job,
+                job: jobOf(doc),
             };
             return;
         }
+        /*
+         * 📊 HOMEWORK / TEST: the same shape, from lib/activity_report —
+         * every task with its knowledge points and answer key, every
+         * student's every submission and answer, the scoreboard and the
+         * timeline (dry=1 returns the assembled reduce context for auditing,
+         * no LLM call).
+         */
         if (dry) {
-            const stats = await buildClassStats(domainId, tdoc, true, kind);
-            const big = stats.participants.length > CLASS_SINGLE_CALL_MAX;
-            const firstBatch = big
-                ? new Set<string>(stats.participants.slice(0, CLASS_BATCH_SIZE).map((uid: number) => stats.sOf.get(uid)))
-                : null;
+            const corpus = await buildActivityCorpus(domainId, tdoc, kind as any, false);
             this.response.body = {
-                mode: big ? 'map-reduce' : 'single-call',
-                batchCount: big ? Math.ceil(stats.participants.length / CLASS_BATCH_SIZE) : 1,
-                light: stats.light,
-                roster: stats.roster,
-                samplesCount: stats.samples.length,
-                harvestedCount: stats.harvested.length,
-                sampleBatchContext: firstBatch ? classBatchContext(stats, firstBatch) : undefined,
-                context: classContextBlock(stats, null),
+                kind,
+                light: corpus.light,
+                tasks: corpus.tasks,
+                students: corpus.students.length,
+                sampleStudent: corpus.students.length ? renderActivityStudent(corpus.students[0], 0) : '',
+                context: activityReportContext(corpus, {
+                    errors: [], misconceptions: [], students: [], notes: [], coverage: { students: corpus.uids.length, analyzed: 0, cached: 0, unanalyzed: [] },
+                }),
             };
             return;
         }
-        const [doc, stats] = await Promise.all([
+        const [doc, corpus] = await Promise.all([
             getClassReport(domainId, String(tid)),
-            buildClassStats(domainId, tdoc, false, kind),
+            buildActivityCorpus(domainId, tdoc, kind as any, true),
         ]);
         this.response.body = {
+            kind,
             report: doc?.reportNamed || null,
             generatedAt: doc?.generatedAt || null,
             participants: doc?.participants ?? null,
             concepts: doc?.concepts || [],
-            stats: stats.light,
+            stats: corpus.light,
+            job: jobOf(doc),
         };
     }
 
@@ -6834,127 +7116,30 @@ class AiClassReportHandler extends Handler {
     async post({ domainId }, tid: ObjectId) {
         const { tdoc, kind } = await this.classTdoc(domainId, tid);
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
-        if (kind === 'self-learning') {
-            /*
-             * 📡 A BACKGROUND JOB, never the request: reading every student's
-             * every submission and tutor exchange takes minutes. One job per
-             * session at a time; a second click while it runs just returns
-             * the progress the page is already polling.
-             */
-            const doc = await getClassReport(domainId, String(tid));
-            const running = doc?.job && doc.job.status === 'running' && Date.now() - new Date(doc.job.startedAt).getTime() < SESSION_JOB_STALE_MS;
-            if (running) {
-                this.response.body = { kind, started: false, job: doc!.job };
-                return;
-            }
-            await this.limitRate('ai_class_report', 600, 3, '{{user}}');
-            const startedAt = new Date();
-            const job = { status: 'running' as const, stage: 'collect' as const, done: 0, total: 0, startedAt, by: this.user._id };
-            await setClassReportJob(domainId, String(tid), job);
-            runSessionReportJob(domainId, tdoc, this.user._id); // detached on purpose
-            this.response.body = { kind, started: true, job };
+        /*
+         * 📡 ALWAYS A BACKGROUND JOB, never the request: reading every
+         * student's every submission (and, for sessions, every tutor
+         * exchange) takes minutes, and the page may be refreshed or closed
+         * meanwhile — the job carries on and the report is there when the
+         * teacher returns. One job per activity at a time; a second click
+         * while it runs just returns the progress the page is polling.
+         */
+        const staleMs = kind === 'self-learning' ? SESSION_JOB_STALE_MS : ACTIVITY_JOB_STALE_MS;
+        const doc = await getClassReport(domainId, String(tid));
+        const running = doc?.job && doc.job.status === 'running' && !classReportJobStale(doc.job, staleMs);
+        if (running) {
+            this.response.body = { kind, started: false, job: doc!.job };
             return;
         }
-        await this.limitRate('ai_class_report', 600, 2, '{{user}}');
-        const stats = await buildClassStats(domainId, tdoc, true, kind);
-        if (!stats.light.participants) throw new BadRequestError('No judged submissions yet — nothing to analyze.');
-        const validLabels = new Set<string>(stats.perPid.map((p: any) => String(p.label)));
-        let agg: any = null;
-        if (stats.participants.length > CLASS_SINGLE_CALL_MAX) {
-            // MAP stage: disjoint 40-student batches -> structured JSON, with a
-            // small concurrency pool. Deterministic stats never need batching.
-            const tokens: string[] = stats.participants.map((uid: number) => stats.sOf.get(uid));
-            const batches: Set<string>[] = [];
-            for (let i = 0; i < tokens.length; i += CLASS_BATCH_SIZE) batches.push(new Set(tokens.slice(i, i + CLASS_BATCH_SIZE)));
-            const results: any[] = new Array(batches.length).fill(null);
-            let cursor = 0;
-            const worker = async () => {
-                for (;;) {
-                    const idx = cursor++;
-                    if (idx >= batches.length) return;
-                    try {
-                        const rawMap = await aiTutor.runClassMapBatch(classBatchContext(stats, batches[idx]));
-                        results[idx] = parseMapOutput(rawMap, validLabels, batches[idx]);
-                    } catch (e) {
-                        logger.warn('[pta-ui] class report map batch %d/%d failed: %s', idx + 1, batches.length, e.message);
-                    }
-                }
-            };
-            await Promise.all([worker(), worker(), worker()]);
-            const byName = new Map<string, any>();
-            const intervention: any[] = [];
-            const stretch: string[] = [];
-            const notes: string[] = [];
-            let okBatches = 0;
-            for (const r of results) {
-                if (!r) continue;
-                okBatches++;
-                for (const c of r.concepts) {
-                    const key = c.name.toLowerCase();
-                    if (!byName.has(key)) {
-                        byName.set(key, {
-                            name: c.name, problems: {}, students: [], total: 0,
-                        });
-                    }
-                    const m = byName.get(key);
-                    for (const [k, v] of Object.entries(c.problems)) {
-                        m.problems[k] = (m.problems[k] || 0) + (v as number);
-                        m.total += v as number;
-                    }
-                    m.students.push(...c.students);
-                }
-                intervention.push(...r.intervention);
-                stretch.push(...r.stretch);
-                notes.push(...r.notes);
-            }
-            if (okBatches) {
-                agg = {
-                    batchCount: batches.length,
-                    concepts: [...byName.values()].sort((a, b) => b.total - a.total).slice(0, 25),
-                    intervention: intervention.slice(0, 25),
-                    stretch: [...new Set(stretch)].slice(0, 25),
-                    notes: notes.slice(0, 8),
-                };
-                if (okBatches < batches.length) {
-                    agg.notes.push(`${batches.length - okBatches} batch(es) failed to analyze; their students are covered by the statistics only.`);
-                }
-                logger.info('[pta-ui] class report map stage: %d/%d batches ok, %d merged concept(s)', okBatches, batches.length, agg.concepts.length);
-            } else {
-                logger.warn('[pta-ui] class report: all map batches failed; reducing on statistics only');
-            }
-        }
-        const raw = await aiTutor.runClassReport(classContextBlock(stats, agg));
-        const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(raw, validLabels);
-        // Teacher-only artifact: substitute S-tokens with real usernames. The
-        // provider only ever saw the anonymous tokens.
-        let udict: any = {};
-        try {
-            udict = await user.getList(domainId, [...stats.sOf.keys()]);
-        } catch (e) { /* fall back to uid placeholders */ }
-        const sidMap = [...stats.sOf.entries()].map(([uid, sTok]) => ({
-            s: sTok, uid, uname: udict[uid]?.uname || `user#${uid}`,
-        }));
-        const byTok = new Map(sidMap.map((e) => [e.s, e.uname]));
-        const substitute = (text: string) => text.replace(/\bS(\d+)\b/g, (m) => byTok.get(m) || m);
-        const reportNamed = substitute(reportAnon);
-        const concepts = conceptsAnon.map((c: any) => ({
-            ...c, students: (c.students || []).map((tok: string) => byTok.get(tok) || tok),
-        }));
-        const generatedAt = await setClassReport({
-            domainId,
-            tid: String(tid),
-            reportAnon,
-            reportNamed,
-            sidMap,
-            concepts,
-            statsSnapshot: stats.light,
-            participants: stats.light.participants,
-            generatedBy: this.user._id,
-        });
-        this.response.body = {
-            report: reportNamed, updateAt: generatedAt, stats: stats.light, concepts,
+        await this.limitRate('ai_class_report', 600, 3, '{{user}}');
+        const startedAt = new Date();
+        const job = {
+            status: 'running' as const, stage: 'collect' as const, done: 0, total: 0, startedAt, by: this.user._id,
         };
-        logger.info('[pta-ui] AI class report generated for %s/%s by uid=%d (%d participants)', domainId, tid, this.user._id, stats.light.participants);
+        await setClassReportJob(domainId, String(tid), job);
+        if (kind === 'self-learning') runSessionReportJob(domainId, tdoc, this.user._id); // detached on purpose
+        else runActivityReportJob(domainId, tdoc, kind as any, this.user._id); // detached on purpose
+        this.response.body = { kind, started: true, job };
     }
 }
 
@@ -7147,8 +7332,19 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
         this.UiContext.tsdoc = this.tsdoc ? {
             attend: this.tsdoc.attend, startAt: this.tsdoc.startAt, ...((tdoc.duration || this.tsdoc.endAt) ? { endAt: this.tsdoc.endAt } : {}),
         } : null;
+        /*
+         * PTA fork: once a HOMEWORK has ended, every objective question the
+         * student did not get right carries an "Explain" button on the paper
+         * (lib/objective_feedback.ts) and its rail chip turns red.
+         */
+        const feedback = (isHomework && !resultsWithheld && !canManage && this.tsdoc?.attend)
+            ? await paperFeedbackFor(this, domainId, tdoc, this.tsdoc?.detail || {}).catch(() => null)
+            : null;
         await respondObjectivePaper(this, domainId, {
             resultsWithheld,
+            locked: contest.isDone(tdoc, this.tsdoc),
+            feedback,
+            statusOf: (docId) => this.tsdoc?.detail?.[docId]?.status || 0,
             // Sections (true/false, choice, fill-in) with their points, from
             // the test editor's layout or classified from the tasks.
             tdoc,
@@ -7196,13 +7392,25 @@ class SelfLearningPaperHandler extends Handler {
         }
         const closed = isStudentView && schedule.phase === 'ended';
         const solveUrl = (docId: number) => this.url('self_learning_solve', { ssid, pid: docId });
+        // 🎯 The rail shows THIS session's counted records (scoreRecords),
+        // not the student's global problem status.
+        const sessionRows = await record.getMulti(domainId, {
+            uid: this.user._id, pid: { $in: sdoc.pids || [] }, contest: { $ne: record.RECORD_PRETEST }, status: { $nin: JUDGING },
+        }).project({ pid: 1, score: 1, status: 1 }).limit(5000).toArray();
+        const sessionBest = scoreRecords(sdoc, (sessionRows as any[]).map((r) => ({ pid: r.pid, score: r.score || 0, at: r._id.getTimestamp() })));
         await respondObjectivePaper(this, domainId, {
+            statusOf: (docId) => {
+                const b = sessionBest.get(docId);
+                if (!b) return 0;
+                return b.effective >= 100 ? STATUS.STATUS_ACCEPTED : STATUS.STATUS_WRONG_ANSWER;
+            },
             heading: sdoc.title,
             backUrl: this.url('self_learning_detail', { ssid }),
             pageName: 'self_learning_paper',
             storeKey: ssid.toHexString(),
             docIds: sdoc.pids || [],
             canSubmit: !closed,
+            locked: closed,
             submitUrlFor: (docId) => solveUrl(docId),
             recordUrlFor: (docId) => `${solveUrl(docId)}/record`,
             chipHrefFor: (pdoc) => this.url('self_learning_solve', { ssid, pid: pdoc.docId }),
@@ -7220,6 +7428,12 @@ class SelfLearningPaperHandler extends Handler {
  * assembly, UiContext for the page script — is identical by construction.
  */
 async function respondObjectivePaper(h: Handler, domainId: string, opts: {
+    /** PTA fork: the container has ended — the objective sheet is read-only. */
+    locked?: boolean,
+    /** PTA fork: per-task outcome + stored explanations, once a homework has ended. */
+    feedback?: { url: string, byPid: Record<string, any>, outcomeOf: (docId: number) => string } | null,
+    /** The counted record's status inside this container (the rail prefers it over the global one). */
+    statusOf?: (docId: number) => number,
     heading: string, backUrl: string, pageName: string, storeKey: string,
     docIds: number[], submitUrlFor: (docId: number) => string,
     chipHrefFor: (pdoc: any) => string,
@@ -7271,6 +7485,10 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
         // the number and pid alone in that case.
         titleFromContent: pdoc.title === objectiveTitleOf(pdoc.content || '', pdoc.title),
         submitUrl: opts.submitUrlFor(pdoc.docId),
+        // ✅/✗ once the container has ended (null while results are withheld).
+        outcome: opts.feedback ? opts.feedback.outcomeOf(pdoc.docId) : null,
+        explained: !!opts.feedback?.byPid?.[String(pdoc.docId)]?.hasReport,
+        explaining: !!opts.feedback?.byPid?.[String(pdoc.docId)]?.running,
         recordUrl: opts.recordUrlFor ? opts.recordUrlFor(pdoc.docId) : '',
         content: pdoc.content,
     }));
@@ -7284,8 +7502,16 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
             total: round2(tasks.filter((t) => t.section === key).reduce((a, t) => a + (t.points || 0), 0)),
         })).filter((g) => g.tasks.length)
         : [{ key: '', name: '', icon: '', tasks, total: 0 }];
+    const programmingPdocs = pdocs.filter((p) => !/^[os]/i.test(String(p.pid || '')));
+    const subjectivePdocs = pdocs.filter((p) => /^s/i.test(String(p.pid || '')));
     const programmingPoints = opts.tdoc
-        ? round2(pdocs.filter((p) => !/^[os]/i.test(String(p.pid || ''))).reduce((a, p) => a + (pointsOf[p.docId] || 0), 0))
+        ? round2(programmingPdocs.reduce((a, p) => a + (pointsOf[p.docId] || 0), 0))
+        : 0;
+    // PTA fork: subjective tasks (the homework editor's fifth section) are
+    // handed in on their own pages and graded by hand; the overview lists
+    // their points separately so the total still reads as the whole paper.
+    const subjectivePoints = opts.tdoc
+        ? round2(subjectivePdocs.reduce((a, p) => a + (pointsOf[p.docId] || 0), 0))
         : 0;
     const objectivePoints = round2(groups.reduce((a, g) => a + g.total, 0));
     h.response.template = 'objective_paper.html';
@@ -7297,15 +7523,28 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
         showScores: !!opts.tdoc,
         objectivePoints,
         programmingPoints,
-        totalPoints: round2(objectivePoints + programmingPoints),
+        subjectivePoints,
+        totalPoints: round2(objectivePoints + programmingPoints + subjectivePoints),
         canSubmit: !!opts.canSubmit,
         othersCount: pdocs.length - objective.length,
+        programmingCount: programmingPdocs.length,
+        subjectiveCount: subjectivePdocs.length,
         page_name: opts.pageName,
     };
     h.UiContext.paperTasks = tasks.map(({ content, ...t }) => t);
     h.UiContext.paperKey = opts.storeKey;
     h.UiContext.paperWithheld = !!opts.resultsWithheld;
     h.UiContext.paperCanSubmit = !!opts.canSubmit;
+    /*
+     * PTA fork: once the container has ended the objective sheet is FROZEN —
+     * the page disables every control so a student cannot keep ticking boxes
+     * (a submission would be refused by the server anyway). Programming tasks
+     * stay open through the correction path, but nothing they do then may
+     * repaint the rail: it keeps the status the deadline froze.
+     */
+    h.UiContext.paperLocked = !!opts.locked;
+    h.UiContext.railFrozen = !!opts.locked;
+    h.response.body.paperLocked = !!opts.locked;
     h.UiContext.noCopy = !(h.user.hasPerm(PERM.PERM_EDIT_PROBLEM) || h.user.hasPerm(PERM.PERM_CREATE_PROBLEM));
     /*
      * The fixed-left problems rail (auto_scratchpad's sl-rail) replaces the
@@ -7317,6 +7556,7 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
     const psdict = await problem.getListStatus(domainId, (h as any).user._id, pdocs.map((p) => p.docId));
     const indexOf: Record<number, number> = {};
     for (const t of tasks) indexOf[t.docId] = t.index;
+    if (opts.feedback) h.UiContext.paperFeedback = { url: opts.feedback.url, byPid: opts.feedback.byPid };
     h.UiContext.paperRail = {
         items: pdocs.map((pdoc) => {
             const pidStr = String(pdoc.pid || '');
@@ -7334,7 +7574,19 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
                 // While results are withheld, objective chips stay neutral:
                 // the global problem status would reveal exactly what the
                 // record mask is hiding.
-                status: (opts.resultsWithheld && kind === 'objective') ? 0 : (psdict[pdoc.docId]?.status || 0),
+                /*
+                 * 🎯 The chip's verdict comes from the ACTIVITY (statusOf:
+                 * the contest status doc, or a session's counted records),
+                 * never from the global problem-status doc — that would show
+                 * practice done outside this activity. `statusOf` is supplied
+                 * by every caller; psdict remains only for a legacy caller
+                 * that does not.
+                 */
+                status: (opts.resultsWithheld && kind === 'objective') ? 0
+                    : (opts.statusOf ? opts.statusOf(pdoc.docId) : (psdict[pdoc.docId]?.status || 0)),
+                // 🔴 A wrong objective answer paints its rail chip red (and
+                // a partial one amber) once the container has ended.
+                outcome: (kind === 'objective' && opts.feedback) ? opts.feedback.outcomeOf(pdoc.docId) : null,
                 title: pdoc.title,
                 href: kind === 'objective' ? `#q-${pdoc.docId}` : opts.chipHrefFor(pdoc),
             };

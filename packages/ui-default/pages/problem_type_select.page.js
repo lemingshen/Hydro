@@ -43,7 +43,7 @@ const STYLE = [
   '.ptsc__row { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }',
 
   '.ptsc__name { font-weight: bold; font-size: 13.5px; color: var(--pta-ink); }',
-  '.ptsc__key { font: bold 11px/1 ui-monospace, Consolas, monospace; color: #fff; border-radius: 6px; padding: 3px 7px; letter-spacing: .04em; }',
+  '.ptsc__key { font: bold 11px/1 var(--font-family); font-variant-numeric: tabular-nums; color: #fff; border-radius: 6px; padding: 3px 7px; letter-spacing: .04em; }',
   '.ptsc__check { position: absolute; top: 9px; right: 11px; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 12px; line-height: 18px; text-align: center; opacity: 0; transform: scale(.6); transition: opacity .15s, transform .18s var(--pta-ease); }',
   '.ptsc__desc { display: block; color: var(--pta-ink-soft); font-size: 12px; line-height: 1.5; }',
   '.ptsc input:checked + .ptsc__body { box-shadow: 0 3px 14px rgba(52,64,90,.10); }',

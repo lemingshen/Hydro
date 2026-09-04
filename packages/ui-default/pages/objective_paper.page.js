@@ -78,6 +78,23 @@ export default new NamedPage(['contest_paper', 'homework_paper', 'self_learning_
 
   $('.paper-q').each((i, sec) => renderSection($(sec), ans));
 
+  /*
+   * PTA fork: after the deadline the sheet is READ-ONLY. Every generated
+   * control is disabled (the server refuses a late objective submission
+   * anyway), the draft store is left untouched, and a note says so. The
+   * answers the student handed in stay visible — this is the review copy.
+   */
+  const locked = !!window.UiContext.paperLocked;
+  const lockInputs = () => {
+    $('.paper-q .objective-input').prop('disabled', true).attr('aria-disabled', 'true');
+    $('.paper-q .paper-opt, .paper-q .paper-blank, .paper-q .paper-dd, .paper-q .paper-area').addClass('is-locked');
+  };
+  if (locked) {
+    lockInputs();
+    // Markers are re-rendered when a statement is swapped in by pjax.
+    $(document).on('vjContentNew', () => setTimeout(lockInputs, 0));
+  }
+
   // pid lookup for rail interactions (chips are keyed by pid, sections by docId)
   const pidOf = {};
   for (const t of (window.UiContext.paperTasks || [])) pidOf[t.docId] = String(t.pid);
@@ -111,6 +128,7 @@ export default new NamedPage(['contest_paper', 'homework_paper', 'self_learning_
   Object.keys(ans).forEach(markState);
 
   $(document).on('input change', '.objective-input', function onAnswer() {
+    if (locked) return; // frozen sheet: nothing is recorded any more
     const doc = $(this).data('doc');
     const qid = String($(this).data('q'));
     const map = (ans[doc] = ans[doc] || {});
