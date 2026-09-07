@@ -10,7 +10,13 @@
   <div class="row"><div class="columns clearfix">
     <ol class="nav__list nav__list--main clearfix">
       <li class="nav__list-item">
-        <a href="/"><img class="nav__logo" src="{{ ctx.setting.get('ui-default.nav_logo_dark') }}"></a>
+        {#-
+          PTA fork: the site logo is static/logo.svg (copied to the build root
+          by webpack, so served at /logo.svg behind the CDN prefix like the
+          favicons). System Settings → Branding → ui.nav_logo still wins when
+          set, so a domain can swap it without a rebuild.
+        -#}
+        <a href="/"><img class="nav__logo" src="{{ model.system.get('ui.nav_logo') or (UiContext.cdn_prefix + 'logo.svg') }}" alt="{{ model.system.get('server.name') or 'Home' }}"></a>
       </li>
       {%- for item in overrideNav|default(ui.getNodes('Nav')) -%}{% if item.checker(handler) %}
         {{ nav_item(item) }}

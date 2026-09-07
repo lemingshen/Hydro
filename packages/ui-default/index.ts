@@ -187,7 +187,12 @@ export function apply(ctx: Context, config: ReturnType<typeof Config>) {
     c.setting.SystemSetting(Schema.object({
       'ui-default': Schema.object({
         footer_extra_html: Schema.string().role('textarea').default(''),
-        nav_logo_dark: Schema.string().default('/components/navigation/nav-logo-small_dark.png'),
+        // PTA fork: the site's own logo lives at components/navigation/logo.svg
+        // and is copied to /components/navigation/logo.svg by
+        // build/config/webpack.ts (assets under components/ are only served
+        // if that list copies them). System Settings → Branding → ui.nav_logo
+        // overrides this per deployment without a rebuild.
+        nav_logo_dark: Schema.string().default('/components/navigation/logo.svg'),
         domainNavigation: Schema.boolean().default(true).description('Show Domain Navigation'),
         about: Schema.string().role('markdown').default(defaultAbout),
         enableScratchpad: Schema.boolean().default(true).description('Enable Scratchpad Mode'),

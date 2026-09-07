@@ -142,16 +142,26 @@ export default function ConfigEditor({
   const updateFromMonaco = React.useCallback((v) => {
     if (v === stringConfig) return;
     setStringConfig(v);
-    setValue(yaml.load(v));
+    // Text mid-edit is often not valid YAML; the editor already surfaces the
+    // error, so a parse failure here must never escape as an uncaught one.
+    try { setValue(yaml.load(v)); } catch (e) { /* keep the previous value */ }
   }, [stringConfig]);
 
   // FIXME: Otherwise first form change will be ignored
   React.useEffect(() => {
     setTimeout(() => {
-      updateFromMonaco(stringConfig === '{}' ? 'dummy: 1' : `${stringConfig}\n\ndummy: 1`);
+      /*
+       * PTA fork: an empty config is stored as "{}\n" (yaml.dump), not "{}".
+       * Appending "dummy: 1" after a flow mapping is not valid YAML, and the
+       * throw inside this timer was uncaught — the settings page crashed on
+       * every deployment that had never saved a setting here. Compare the
+       * trimmed source, and treat an empty one the same way.
+       */
+      const base = String(stringConfig || '').trim();
+      updateFromMonaco(!base || base === '{}' ? 'dummy: 1' : `${stringConfig}\n\ndummy: 1`);
       setTimeout(() => {
         setStringConfig(stringConfig || '\n');
-        setValue(yaml.load(stringConfig));
+        try { setValue(yaml.load(stringConfig)); } catch (e) { setValue({}); }
       }, 300);
     }, 300);
   }, []);

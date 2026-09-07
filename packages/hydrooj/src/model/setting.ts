@@ -367,6 +367,16 @@ SystemSetting(
     Setting('setting_limits', 'limit.submission_user', 15, 'number', 'limit.submission_user', 'Max submission count per user per minute'),
     Setting('setting_limits', 'limit.pretest', 60, 'number', 'limit.pretest', 'Max pretest count per minute'),
     Setting('setting_limits', 'limit.codelength', 128 * 1024, 'number', 'limit.codelength', 'Max code length'),
+    /*
+     * PTA fork — SITE BRANDING on the System Settings page. The upstream
+     * logo lives in the schema-driven config (ui-default.nav_logo_dark),
+     * which this deployment's configuration page does not surface; this
+     * key sits beside the tutor settings admins already use, and the nav
+     * prefers it whenever it is set (partials/nav.html). A URL, so the
+     * image can be hosted anywhere — a domain file, a CDN, or a static
+     * path on this server. Empty = the built-in logo.
+     */
+    Setting('setting_branding', 'ui.nav_logo', '', 'text', 'ui.nav_logo', 'Navigation logo image URL (leave empty for the built-in logo; shown 32px tall, any width)'),
     Setting('setting_basic', 'avatar.gravatar_url', '//cn.gravatar.com/avatar/', 'text', 'avatar.gravatar_url', 'Gravatar URL Prefix'),
     Setting('setting_basic', 'default.priv', builtin.PRIV.PRIV_DEFAULT, 'number', 'default.priv', 'Default Privilege', FLAG_HIDDEN),
     Setting('setting_basic', 'discussion.nodes', builtin.DEFAULT_NODES, 'yaml', 'discussion.nodes', 'Discussion Nodes'),
