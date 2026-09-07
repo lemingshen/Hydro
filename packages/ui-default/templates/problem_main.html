@@ -5,7 +5,7 @@
   <div class="row">
     <div class="medium-9 columns">
       <div class="ptabs">
-        {%- for k, label in [['programming', 'Programming'], ['objective', 'Objective'], ['subjective', 'Subjective']] -%}
+        {%- for k, label in [['programming', 'Programming'], ['function', 'Function'], ['objective', 'Objective'], ['subjective', 'Subjective']] -%}
         <a class="ptabs__tab ptabs__tab--{{ k[0] }}{% if kind == k %} ptabs__tab--on{% endif %}"
            href="{{ url('problem_main') }}?{{ utils.buildQueryString({kind: k, q: qs, sort: '' if sort == 'default' else sort}) }}">
           <span class="ptabs__label">{{ _(label) }}</span>

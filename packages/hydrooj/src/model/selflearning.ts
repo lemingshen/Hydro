@@ -1035,6 +1035,18 @@ export async function getOwnershipIn(domainId: string, ssid: ObjectId, uid?: num
 
 /* ------------------- persisted AI class reports (teachers) ------------------- */
 
+export interface RemedialPrompt {
+    concept: string;
+    kind: 'programming' | 'function';
+    difficulty: 'intro' | 'medium' | 'challenge';
+    title: string;
+    brief: string;
+    /** Task labels of the activity (P7, F2…) the new task must NOT resemble. */
+    avoid: string[];
+    students: string[];
+    uids: number[];
+}
+
 export interface AiClassReportDoc {
     _id: string; // `${domainId}/${tid}` — one latest report per activity
     domainId: string;
@@ -1044,6 +1056,24 @@ export interface AiClassReportDoc {
     sidMap: { s: string, uid: number, uname: string }[];
     /** AI-classified knowledge points: name -> per-problem affected-student counts. */
     concepts: { name: string, problems: Record<string, number>, students: string[] }[];
+    /**
+     * PTA fork — REMEDIAL PROMPTS: one AI-written Studio brief per concept,
+     * emitted by the same reduce call as `concepts` (json:remedial trailer).
+     * Shown as editable cards on the report; the teacher ticks the ones to
+     * turn into tasks and the Studio drafts them (handler/self_learning.ts
+     * AiClassReportHandler.postRemedialCreate). `students` are display
+     * names after substitution; `uids` keep the real ids so the report can
+     * rank existing tasks by how many affected students have not solved them.
+     */
+    remedial?: RemedialPrompt[];
+    /**
+     * The Studio drafts already created from `remedial` (appended by
+     * postRemedialCreate). Reopening the report shows THESE — with live
+     * status pulled from the Studio — instead of the create cards for the
+     * concepts they cover; only concepts without a draft still get a card.
+     * Survives report regeneration (setClassReport $sets other fields).
+     */
+    remedialDrafts?: { concept: string, draftId: ObjectId, title: string, kind: string, createdAt: Date }[];
     statsSnapshot: any;
     participants: number;
     generatedBy: number;
@@ -1082,6 +1112,15 @@ const collClassReport = db.collection('ai.class_report' as any);
 
 export async function getClassReport(domainId: string, tid: string): Promise<AiClassReportDoc | null> {
     return await collClassReport.findOne({ _id: `${domainId}/${tid}` as any }) as any;
+}
+
+/** Record drafts created from a report's remedial cards (kept across regenerations). */
+export async function addClassReportDrafts(domainId: string, tid: string, entries: NonNullable<AiClassReportDoc['remedialDrafts']>): Promise<void> {
+    if (!entries.length) return;
+    await collClassReport.updateOne(
+        { _id: `${domainId}/${tid}` as any },
+        { $push: { remedialDrafts: { $each: entries } } },
+    );
 }
 
 export async function setClassReport(doc: Omit<AiClassReportDoc, '_id' | 'generatedAt' | 'job'>): Promise<Date> {

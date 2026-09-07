@@ -36,5 +36,25 @@ export async function parseConfig(config: string | ProblemConfigFile = {}, files
     if (cfg.langs) result.langs = cfg.langs;
     if (cfg.redirect) result.redirect = cfg.redirect.split('/', 2) as any;
     if (cfg.filename && result.type === 'default') result.subType = cfg.filename;
+    /*
+     * PTA fork — function tasks. This function is a WHITELIST: any key not
+     * copied here is dropped from pdoc.config, and the server-side wrap
+     * (model/record.ts) reads the harness from pdoc.config. So these two
+     * must be carried through explicitly, or a function task silently
+     * judges the bare fragment and fails to compile.
+     */
+    const asStringMap = (v: any): Record<string, string> | null => {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+        const out: Record<string, string> = {};
+        for (const [k, val] of Object.entries(v)) if (typeof val === 'string' && val.trim()) out[k] = val;
+        return Object.keys(out).length ? out : null;
+    };
+    const template = asStringMap((cfg as any).template);
+    const stub = asStringMap((cfg as any).stub);
+    // The language list is NOT derived here: `langs` is intersected by exact
+    // id, and harness keys are families (`cc`), which would drop `cc.cc11`.
+    // ProblemDetailHandler filters by family instead (handler/problem.ts).
+    if (template) result.template = template;
+    if (stub) result.stub = stub;
     return result;
 }

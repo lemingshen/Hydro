@@ -18,6 +18,103 @@ import problem from './problem';
 import SystemModel from './system';
 import task from './task';
 
+
+/* ------------------------------------------------------------------ */
+/*  PTA fork — FUNCTION TASKS: splice the fragment into the harness    */
+/* ------------------------------------------------------------------ */
+/**
+ * A function task (pid `F…`) asks for ONE FUNCTION, not a program. The
+ * student's fragment is stored as-is in `rdoc.code` — every reader (the
+ * tutor, the analyzer, similarity, the code viewer) keeps seeing exactly
+ * what they wrote — and is spliced into the teacher's judge program only at
+ * the moment the task is dispatched to the judge, in RecordModel.judge().
+ * That is the one place every path funnels through: submit, contest,
+ * homework, self-learning, pretest and rejudge all end up there, and the
+ * judge itself never learns the task was anything but an ordinary program.
+ */
+
+/** PTA's own splice marker; matched loosely so `// ...`, `# ...` and spacing variants all work. */
+export const FUNCTION_SPLICE_RE = /^[ \t]*(?:\/\*|\/\/|#)\s*Your function will be put here\.?\s*(?:\*\/)?[ \t]*$/im;
+
+/** Language families where the C preprocessor `#line` directive exists. */
+const LINE_DIRECTIVE_FAMILIES = new Set(['c', 'cc']);
+
+/** `cc.cc14o2` → the harness written for `cc`; an exact key wins if present. */
+export function harnessFor(map: Record<string, string> | undefined, lang: string): string | null {
+    if (!map || !lang) return null;
+    if (map[lang]) return map[lang];
+    const family = lang.split('.')[0];
+    return map[family] || null;
+}
+
+export interface WrappedCode {
+    code: string;
+    /**
+     * Lines of harness ABOVE the fragment. Zero for C/C++, where `#line`
+     * makes the compiler report the fragment's own numbering; for other
+     * languages the judge callback uses it to re-base compiler messages.
+     */
+    lineOffset: number;
+}
+
+export function wrapFunctionCode(harness: string, fragment: string, lang: string): WrappedCode {
+    const src = harness.replace(/\r\n/g, '\n');
+    const body = String(fragment ?? '').replace(/\r\n/g, '\n');
+    const m = FUNCTION_SPLICE_RE.exec(src);
+    let before: string;
+    let after: string;
+    if (m) {
+        before = src.slice(0, m.index);
+        after = src.slice(m.index + m[0].length);
+    } else {
+        // No marker: append. PTA's sample program forward-declares the
+        // function and expects it after main(), which is exactly this.
+        before = src.endsWith('\n') ? src : `${src}\n`;
+        after = '';
+    }
+    if (before && !before.endsWith('\n')) before += '\n';
+    if (after && !after.startsWith('\n')) after = `\n${after}`;
+    const beforeLines = before ? before.split('\n').length - 1 : 0;
+    if (LINE_DIRECTIVE_FAMILIES.has(lang.split('.')[0])) {
+        /*
+         * `#line 1` makes every diagnostic inside the fragment carry the
+         * fragment's own line numbers, and the second directive re-syncs
+         * the suffix so a harness error is attributed to "judge" rather
+         * than to the student. No offset arithmetic anywhere downstream.
+         */
+        return {
+            code: `${before}#line 1 "your_function"\n${body}\n#line ${beforeLines + 2} "judge"${after}`,
+            lineOffset: 0,
+        };
+    }
+    return { code: `${before}${body}${after}`, lineOffset: beforeLines };
+}
+
+/** Is this problem a function task the wrap applies to for this language? */
+export function functionHarnessOf(pdoc: { pid?: string, config?: any }, lang: string): string | null {
+    if (!/^f/i.test(String(pdoc?.pid || ''))) return null;
+    if (!pdoc?.config || typeof pdoc.config === 'string') return null;
+    return harnessFor(pdoc.config.template, lang);
+}
+
+/**
+ * Re-base compiler messages for languages without `#line`. Conservative on
+ * purpose: only numbers in the well-known "line N" / "file:N:" shapes are
+ * touched, only when they fall inside the fragment, and a note explains
+ * the harness either way so nothing is silently misleading.
+ */
+export function rebaseCompilerText(text: string, lineOffset: number): string {
+    if (!text || !lineOffset) return text;
+    const fix = (n: string) => {
+        const v = parseInt(n, 10);
+        return v > lineOffset ? String(v - lineOffset) : n;
+    };
+    const out = text
+        .replace(/(\bline\s+)(\d+)/gi, (_, a, n) => `${a}${fix(n)}`)
+        .replace(/(\.[A-Za-z0-9]+:)(\d+)(:)/g, (_, a, n, b) => `${a}${fix(n)}${b}`);
+    return `${out}\n(Line numbers above refer to your function; ${lineOffset} line(s) of judge program precede it.)`;
+}
+
 export default class RecordModel {
     static coll = db.collection('record');
     static collStat = db.collection('record.stat');
@@ -107,9 +204,24 @@ export default class RecordModel {
             if (typeof pdoc.config === 'string') throw new Error(pdoc.config);
             if (pdoc.config.type === 'remote_judge' && rdoc.contest?.toHexString() !== '0'.repeat(24)) type = 'remotejudge';
             else if (meta?.type === 'generate') type = 'generate';
+            /*
+             * PTA fork — FUNCTION TASKS. `rdoc.code` stays the student's
+             * fragment; what the judge compiles is the fragment spliced into
+             * the harness. Doing it here, and only here, is what makes
+             * pretest and rejudge free — both come back through this call.
+             */
+            let judgeCode = rdoc.code;
+            let functionMeta: Partial<JudgeMeta> = {};
+            const harness = functionHarnessOf(pdoc, rdoc.lang);
+            if (harness) {
+                const wrapped = wrapFunctionCode(harness, rdoc.code, rdoc.lang);
+                judgeCode = wrapped.code;
+                functionMeta = { functionTask: true, lineOffset: wrapped.lineOffset } as any;
+            }
             return ({
                 ...rdoc,
                 ...(pdoc.config as any), // TODO deprecate this
+                code: judgeCode,
                 priority,
                 type,
                 rid: rdoc._id,
@@ -121,7 +233,7 @@ export default class RecordModel {
                 data: pdoc.data,
                 source,
                 trusted: ddoc.isTrusted,
-                meta,
+                meta: { ...meta, ...functionMeta },
             } as any);
         }));
     }

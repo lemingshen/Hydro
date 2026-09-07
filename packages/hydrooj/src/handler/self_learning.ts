@@ -12,11 +12,11 @@ import { ContestNotLiveError, ContestNotAttendedError,
 } from '../error';
 import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
-import { activityPids } from '../lib/activity_pids';
+import { activityPids, repairLegacyHiddenFlags } from '../lib/activity_pids';
 import { paperFeedbackFor } from '../lib/objective_feedback';
 import { seesEveryProblem } from './problem';
 import {
-    ACTIVITY_JOB_STALE_MS, activityReportContext, buildActivityCorpus, renderActivityStudent, runActivityReportJob,
+    ACTIVITY_JOB_STALE_MS, activityReportContext, buildActivityCorpus, extractRemedialBlock, renderActivityStudent, runActivityReportJob,
 } from '../lib/activity_report';
 import { objectiveSubKindOf } from '../lib/objective_markdown';
 import { objectiveTitleOf } from '../lib/objective_title';
@@ -27,7 +27,7 @@ import { PROBLEM_KIND_FILTERS } from './problem';
 // function import: under dev-mode hot reload an edit to ai_author.ts keeps
 // these references on the previous module instance until a restart.)
 import {
-    bonusState, createBonusDraft, ensureBonusPublished, hasBonusDraft, materializeBonus, retryBonus,
+    bonusState, createBonusDraft, createRemedialDrafts, draftSummariesIn, ensureBonusPublished, hasBonusDraft, materializeBonus, publishReadyBonusTasks, retryBonus,
 } from './ai_author';
 import KnowledgeModel from '../model/knowledge';
 import * as document from '../model/document';
@@ -36,12 +36,13 @@ import * as contest from '../model/contest';
 import type { ScoreOverride } from '../model/contest';
 import domain from '../model/domain';
 import problem from '../model/problem';
-import record from '../model/record';
+import record, { harnessFor } from '../model/record';
 import storage from '../model/storage';
-import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, classReportJobStale, collProgress, collTutor, getClassReport, getClassReportMapCache, getSubjective, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads } from '../model/selflearning';
+import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, classReportJobStale, collProgress, collTutor, getClassReport, getClassReportMapCache, getSubjective, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads, RemedialPrompt, addClassReportDrafts } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
+import db from '../service/db';
 import { Handler, param, Types } from '../service/server';
 
 const logger = new Logger('self-learning');
@@ -55,7 +56,17 @@ async function loadSession(domainId: string, ssid: ObjectId): Promise<SelfLearni
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type SessionTaskKind = 'programming' | 'objective' | 'subjective';
+export type SessionTaskKind = 'programming' | 'function' | 'objective' | 'subjective';
+
+/**
+ * Kinds answered WITH CODE. A function task (pid F…) is a programming task
+ * whose answer is one function — it enters the scratchpad, is judged by
+ * compiling (model/record.ts splices the harness in), gets the tutor, and
+ * is graded by the programming rubric. Every "is this programming?" gate in
+ * this file asks this instead, so the two kinds never drift apart.
+ */
+export const CODE_SESSION_KINDS = new Set<SessionTaskKind>(['programming', 'function']);
+export const isCodeSessionKind = (k: SessionTaskKind | string) => CODE_SESSION_KINDS.has(k as SessionTaskKind);
 
 /**
  * Site convention (handler/problem.ts problemKindOf): the display pid's
@@ -72,6 +83,7 @@ export function sessionKindOf(pdoc: any): SessionTaskKind {
     const pid = String(pdoc?.pid || '');
     if (/^s/i.test(pid)) return 'subjective';
     if (/^o/i.test(pid)) return 'objective';
+    if (/^f/i.test(pid)) return 'function';
     if (/^p/i.test(pid)) return 'programming';
     const conf = pdoc?.config;
     if (typeof conf === 'string') return /^\s*type:\s*['"]?objective/im.test(conf) ? 'objective' : 'programming';
@@ -796,7 +808,7 @@ export const SESSION_ACHIEVEMENT_MAX = 20;
  * problems are absent from pdict and therefore drop out of the scale.
  */
 export function programmingPidsOf(sdoc: SelfLearningDoc, pdict: Record<number, any>): number[] {
-    return (sdoc.pids || []).filter((pid) => pdict[pid] && sessionKindOf(pdict[pid]) === 'programming');
+    return (sdoc.pids || []).filter((pid) => pdict[pid] && isCodeSessionKind(sessionKindOf(pdict[pid])));
 }
 
 /**
@@ -2774,6 +2786,11 @@ class SelfLearningEditHandler extends Handler {
          * rejection never comes as a surprise.
          */
         let legacyTasks: { pid: string, title: string, kind: SessionTaskKind }[] = [];
+        // The editor picks programming and function tasks in two sections
+        // that merge into the ordered `pids`; on edit the stored list is
+        // split back by kind so each section prefills with its own tasks.
+        const progPids: number[] = [];
+        const fnPids: number[] = [];
         if (this.sdoc?.pids?.length) {
             try {
                 const pdict = await problem.getList(
@@ -2781,14 +2798,20 @@ class SelfLearningEditHandler extends Handler {
                 );
                 legacyTasks = this.sdoc.pids
                     .map((pid) => pdict[pid])
-                    .filter((pdoc) => pdoc && pdoc.docId && sessionKindOf(pdoc) !== 'programming')
+                    .filter((pdoc) => pdoc && pdoc.docId && !isCodeSessionKind(sessionKindOf(pdoc)))
                     .map((pdoc) => ({ pid: String(pdoc.pid || pdoc.docId), title: pdoc.title, kind: sessionKindOf(pdoc) }));
+                for (const pid of this.sdoc.pids) {
+                    const k = pdict[pid] ? sessionKindOf(pdict[pid]) : 'programming';
+                    (k === 'function' ? fnPids : progPids).push(pid);
+                }
             } catch (e) { /* the warning is best-effort; postUpdate still enforces the rule */ }
         }
         this.response.template = 'self_learning_edit.html';
         this.response.body = {
             sdoc: this.sdoc,
             pids: this.sdoc ? this.sdoc.pids.join(',') : '',
+            progPids: progPids.join(','),
+            fnPids: fnPids.join(','),
             legacyTasks,
             advisorAvailable: aiTutor.tutorEnabled() && aiTutor.tutorConfigured(),
             dateBeginText: beginAt.format('YYYY-M-D'),
@@ -2824,7 +2847,8 @@ class SelfLearningEditHandler extends Handler {
 
         // Candidates: the domain's programming tasks this teacher may see.
         const visible = KnowledgeModel.visibilityFilter(this.user, PERM.PERM_VIEW_PROBLEM_HIDDEN);
-        const rows = await problem.getMulti(domainId, { $and: [PROBLEM_KIND_FILTERS.programming, visible] },
+        // Both code kinds: a progression may mix programming and function tasks.
+        const rows = await problem.getMulti(domainId, { $and: [PROBLEM_KIND_FILTERS.code, visible] },
             ['docId', 'pid', 'title', 'tag', 'difficulty', 'nSubmit', 'nAccept', 'hidden'] as any)
             .limit(2000).toArray();
         const all: AdvisorCandidate[] = rows.map((p: any) => ({
@@ -3030,10 +3054,10 @@ class SelfLearningEditHandler extends Handler {
         // be refused with the offending pids named.
         const rejected = pids
             .map((pid) => pdict[pid])
-            .filter((pdoc) => pdoc && sessionKindOf(pdoc) !== 'programming')
+            .filter((pdoc) => pdoc && !isCodeSessionKind(sessionKindOf(pdoc)))
             .map((pdoc) => `${pdoc.pid || pdoc.docId} (${sessionKindOf(pdoc)})`);
         if (rejected.length) {
-            throw new ValidationError('pids', null, `Only programming tasks can be added to a self-learning session. Remove: ${rejected.join(', ')}`);
+            throw new ValidationError('pids', null, `Only programming and function tasks can be added to a self-learning session. Remove: ${rejected.join(', ')}`);
         }
         /*
          * A task with its own language list that shares NOTHING with the
@@ -4632,6 +4656,19 @@ class SelfLearningProblemBaseHandler extends Handler {
                 ? cfg.langs.filter((l: string) => sessionLangs.includes(l))
                 : sessionLangs;
         }
+        /*
+         * FUNCTION TASKS: a harness exists per language FAMILY, so offer only
+         * the variants that can actually be judged — the same family filter
+         * ProblemDetailHandler applies. Without it the session's solve page
+         * listed every judge language and a Python submission to a C-only
+         * task would have compiled the bare fragment.
+         */
+        if (cfg && typeof cfg === 'object' && cfg.template && /^f/i.test(String(this.pdoc.pid || ''))) {
+            const base: string[] = Array.isArray(cfg.langs) && cfg.langs.length
+                ? cfg.langs
+                : Object.keys(setting.langs).filter((l) => !setting.langs[l].disabled);
+            cfg.langs = base.filter((l: string) => !!harnessFor(cfg.template, l));
+        }
         // Homework-style schedule: before beginAt the session is closed to
         // students on every surface this base serves (solve, record, tutor).
         // After the end everything stays OPEN for review and tutoring; only
@@ -4746,7 +4783,9 @@ class SelfLearningProblemBaseHandler extends Handler {
      */
     get tutorEligible() {
         if (this.bonus) return false; // bonus tasks: submit, see the verdict, retry — no tutor
-        return this.sessionKind === 'programming' && this.problemKind === 'programming';
+        // sessionKind is the pid letter (F is a code kind); problemKind is
+        // the judge config, which for a function task is still `default`.
+        return isCodeSessionKind(this.sessionKind) && this.problemKind === 'programming';
     }
 
     /**
@@ -6053,6 +6092,7 @@ async function activityKinds(domainId: string, pids: number[], uid?: number, tdo
         let kind: string = aiTutor.problemKindOf(conf);
         if (/^s/i.test(disp)) kind = 'subjective';
         else if (/^o/i.test(disp)) kind = 'objective';
+        else if (/^f/i.test(disp)) kind = 'function';
         else if (/^p/i.test(disp)) kind = 'programming';
         const st = psdict[pid] || {};
         // Objective verdicts stay hidden while the activity is live.
@@ -6992,14 +7032,23 @@ async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: 
         const sessionCtx = sessionReportContext(corpus, findings);
         const raw = await aiTutor.callWithRetry(() => aiTutor.runSessionReport(sessionCtx), { label: 'session reduce' });
         await progress({ stage: 'finalize', done: batches.length, total: batches.length, students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed });
-        const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(raw, labels);
         const sidMap = [...corpus.sOf.entries()].map(([uid, sTok]) => ({ s: sTok, uid, uname: corpus.udict[uid]?.uname || `user#${uid}` }));
+        // Remedial prompts first (so their block is stripped), then concepts.
+        const { report: withoutRemedial, remedial: remedialAnon } = extractRemedialBlock(raw, labels, new Set(sidMap.map((e) => e.s)));
+        const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(withoutRemedial, labels);
         const byTok = new Map(sidMap.map((e) => [e.s, e.uname]));
+        const uidByTok = new Map(sidMap.map((e) => [e.s, e.uid]));
         const substitute = (text: string) => text.replace(/\bS(\d+)\b/g, (m) => byTok.get(m) || m);
         const reportNamed = substitute(reportAnon);
         const concepts = conceptsAnon.map((c: any) => ({ ...c, students: (c.students || []).map((tok: string) => byTok.get(tok) || tok) }));
+        const remedial = remedialAnon.map((r: any) => ({
+            ...r,
+            brief: substitute(r.brief),
+            students: (r.students || []).map((tok: string) => byTok.get(tok) || tok),
+            uids: (r.students || []).map((tok: string) => uidByTok.get(tok)).filter((u: any) => typeof u === 'number'),
+        }));
         await setClassReport({
-            domainId, tid, reportAnon, reportNamed, sidMap, concepts, statsSnapshot: corpus.light, participants: corpus.uids.length, generatedBy: by,
+            domainId, tid, reportAnon, reportNamed, sidMap, concepts, remedial, statsSnapshot: corpus.light, participants: corpus.uids.length, generatedBy: by,
         });
         await setClassReportJob(domainId, tid, {
             status: 'done', stage: 'done', done: batches.length, total: batches.length, startedAt, finishedAt: new Date(), by,
@@ -7018,6 +7067,95 @@ async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: 
  * auditing, no LLM call); POST collects, generates, name-substitutes, and
  * stores both the anonymous and the named variants.
  */
+/**
+ * PTA fork — REMEDIAL CARDS. Enrich the report's stored prompts with what
+ * only the live catalog and problem set can say:
+ *
+ *  • `catalog` — does the concept resolve to a knowledge point (by name or
+ *    alias)? A draft targeting an unresolved name would create a near-
+ *    duplicate point, so the card flags it instead of hiding it.
+ *  • `existing` — tasks ALREADY in the problem set that carry the point and
+ *    were not in this activity, ranked by how many of the affected students
+ *    have not solved them. Reuse is cheaper and faster than creation, and
+ *    the knowledge map targets a reused task at once; creating is the
+ *    fallback when nothing fits.
+ *  • `avoidTitles` — the activity tasks the new one must not resemble.
+ */
+async function enrichRemedial(domainId: string, remedial: RemedialPrompt[], activityPids: number[]): Promise<any[]> {
+    if (!remedial?.length) return [];
+    const own = new Set(activityPids.map(Number));
+    const activityPdict = activityPids.length
+        ? await problem.getList(domainId, activityPids, true, false, ['docId', 'pid', 'title'] as any, true)
+        : {};
+    const titleOfLabel = new Map<string, string>();
+    for (const pd of Object.values(activityPdict) as any[]) if (pd) titleOfLabel.set(String(pd.pid || `P${pd.docId}`), pd.title || '');
+    const out: any[] = [];
+    for (const r of remedial) {
+        // eslint-disable-next-line no-await-in-loop
+        const canonical = await KnowledgeModel.resolve(domainId, r.concept);
+        let existing: any[] = [];
+        if (canonical) {
+            // eslint-disable-next-line no-await-in-loop
+            const candidates = await problem.getMulti(domainId, { tag: canonical, hidden: { $ne: true } }, ['docId', 'pid', 'title', 'difficulty'] as any)
+                .limit(24).toArray() as any[];
+            const pool = candidates.filter((c) => !own.has(c.docId));
+            const uids = (r.uids || []).filter((u) => typeof u === 'number');
+            const solvedBy = new Map<number, number>();
+            if (pool.length && uids.length) {
+                // eslint-disable-next-line no-await-in-loop
+                const psdocs = await problem.getMultiStatus(domainId, { uid: { $in: uids }, docId: { $in: pool.map((c) => c.docId) }, status: STATUS.STATUS_ACCEPTED })
+                    .project({ docId: 1 }).toArray();
+                for (const ps of psdocs as any[]) solvedBy.set(ps.docId, (solvedBy.get(ps.docId) || 0) + 1);
+            }
+            existing = pool
+                .map((c) => ({
+                    docId: c.docId, pid: String(c.pid || c.docId), title: c.title || '', difficulty: c.difficulty || 0,
+                    unsolvedBy: Math.max(0, uids.length - (solvedBy.get(c.docId) || 0)),
+                }))
+                .sort((a, b) => b.unsolvedBy - a.unsolvedBy || a.difficulty - b.difficulty)
+                .slice(0, 3);
+        }
+        out.push({
+            ...r,
+            catalog: !!canonical,
+            canonical: canonical || r.concept,
+            avoidTitles: (r.avoid || []).map((l) => ({ label: l, title: titleOfLabel.get(l) || '' })),
+            existing,
+        });
+    }
+    return out;
+}
+
+/**
+ * The drafts already created from this report, with their CURRENT Studio
+ * state — so a reopened report shows "Verifying…" / "Published as F12"
+ * rather than the create cards again. A draft the teacher discarded since
+ * is reported as gone.
+ */
+async function createdRemedialDrafts(h: Handler, domainId: string, doc: any): Promise<any[]> {
+    const entries: any[] = doc?.remedialDrafts || [];
+    if (!entries.length) return [];
+    const live = await draftSummariesIn(domainId, entries.map((e) => e.draftId));
+    return entries.map((e) => {
+        const d = live.get(String(e.draftId));
+        return {
+            concept: e.concept,
+            draftId: String(e.draftId),
+            title: d?.title || e.title,
+            kind: d?.kind || e.kind,
+            createdAt: e.createdAt,
+            gone: !d,
+            status: d ? (d.published ? (d.publishedHidden ? 'published_hidden' : 'published') : (d.status || 'idle')) : 'gone',
+            stage: d?.stage || '',
+            hasStatement: !!d?.title,
+            pids: d?.pids || [],
+            docId: d?.docId || null,
+            url: h.url('ai_studio_detail', { id: e.draftId }),
+            problemUrl: d?.docId ? h.url('problem_detail', { pid: d.docId }) : null,
+        };
+    });
+}
+
 class AiClassReportHandler extends Handler {
     async classTdoc(domainId: string, tid: ObjectId) {
         let tdoc: any = null;
@@ -7073,6 +7211,8 @@ class AiClassReportHandler extends Handler {
                 generatedAt: doc?.generatedAt || null,
                 participants: doc?.participants ?? null,
                 concepts: doc?.concepts || [],
+                remedial: await enrichRemedial(domainId, doc?.remedial || [], tdoc.pids || []),
+                remedialDrafts: await createdRemedialDrafts(this, domainId, doc),
                 stats: corpus.light,
                 job: jobOf(doc),
             };
@@ -7109,13 +7249,89 @@ class AiClassReportHandler extends Handler {
             generatedAt: doc?.generatedAt || null,
             participants: doc?.participants ?? null,
             concepts: doc?.concepts || [],
+            remedial: await enrichRemedial(domainId, doc?.remedial || [], tdoc.pids || []),
+            remedialDrafts: await createdRemedialDrafts(this, domainId, doc),
             stats: corpus.light,
             job: jobOf(doc),
         };
     }
 
+    /**
+     * 🧩 "Create N tasks" from the remedial cards. The teacher's EDITED
+     * cards arrive (brief, kind, difficulty, title — whatever they changed
+     * on screen), so what gets drafted is what they approved, not what the
+     * model first wrote. Each becomes a Studio draft via the same creator
+     * the Studio form uses; every statement starts at once, and the page
+     * opens a tab per draft so the teacher decides each one — Continue
+     * (solutions, tests, verification) or Discard — in the Studio itself.
+     */
+    @param('tid', Types.ObjectId)
+    @param('items', Types.Content)
+    async postRemedialCreate({ domainId }, tid: ObjectId, items: string) {
+        const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        await this.limitRate('ai_class_report_remedial', 60, 4, '{{user}}');
+        let picked: any[];
+        try {
+            picked = JSON.parse(items);
+        } catch {
+            throw new BadRequestError('Bad remedial payload.');
+        }
+        if (!Array.isArray(picked) || !picked.length) throw new BadRequestError('Nothing selected.');
+        if (picked.length > 8) throw new BadRequestError('At most 8 tasks at a time.');
+        const doc = await getClassReport(domainId, String(tid));
+        const stored = doc?.remedial || [];
+        const activityTitle = String(tdoc.title || '');
+        const activityLang = (Array.isArray(tdoc.langs) ? tdoc.langs : []).find((l: string) => setting.langs[l] && !setting.langs[l].disabled) || '';
+        const pidsList: number[] = tdoc.pids || [];
+        const pdict = pidsList.length ? await problem.getList(domainId, pidsList, true, false, ['docId', 'pid', 'title'] as any, true) : {};
+        const titleOfLabel = new Map<string, string>();
+        for (const pd of Object.values(pdict) as any[]) if (pd) titleOfLabel.set(String(pd.pid || `P${pd.docId}`), pd.title || '');
+        const briefs = picked.map((it: any, i: number) => {
+            const base = stored.find((r) => r.concept === it.concept) || stored[i] || {} as any;
+            const concept = String(it.concept || base.concept || '').slice(0, 60);
+            const avoid: string[] = Array.isArray(it.avoid) ? it.avoid.map(String) : (base.avoid || []);
+            const affected = base.students?.length || 0;
+            const notes = [
+                String(it.brief || base.brief || '').trim(),
+                '',
+                `Context: this task is remedial practice generated from the AI class report of ${kind === 'self-learning' ? 'self-learning session' : kind} "${activityTitle}", where ${affected} student(s) struggled with "${concept}".`,
+                avoid.length ? `Do NOT resemble these tasks the students already saw: ${avoid.map((l) => `${l}${titleOfLabel.get(l) ? ` "${titleOfLabel.get(l)}"` : ''}`).join(', ')}. Same knowledge point, different scenario, different input shape.` : '',
+            ].filter((x) => x !== undefined).join('\n');
+            return {
+                topic: String(it.title || base.title || concept).slice(0, 200),
+                notes,
+                // Only code kinds are remedial tasks; anything else is a programming task.
+                kind: ['programming', 'function'].includes(String(it.kind || base.kind)) ? String(it.kind || base.kind) : 'programming',
+                difficulty: String(it.difficulty || base.difficulty || 'intro'),
+                language: activityLang,
+                knowledge: concept,
+                crosscheck: true,
+                origin: `class report of "${activityTitle}"`,
+            };
+        });
+        const created = await createRemedialDrafts(domainId, this.user._id, briefs);
+        // Remember them on the report: reopening it shows these drafts (with
+        // live status) instead of the create cards for their concepts.
+        await addClassReportDrafts(domainId, String(tid), created.map((c, i) => ({
+            concept: String(briefs[i]?.knowledge || ''), draftId: c.id, title: c.title, kind: c.kind, createdAt: new Date(),
+        })));
+        this.response.body = {
+            created: created.map((c) => ({ ...c, url: this.url('ai_studio_detail', { id: c.id }) })),
+            studioUrl: this.url('ai_studio'),
+        };
+    }
+
     @param('tid', Types.ObjectId)
     async post({ domainId }, tid: ObjectId) {
+        /*
+         * ⚠ The framework runs `post` BEFORE `post<Operation>` on EVERY
+         * operation POST (framework/server.ts: the step list is
+         * `method` then `post${operation}`). A bare POST from the page
+         * means "start the report"; an operation POST (remedial_create)
+         * must NOT — without this guard, creating remedial drafts silently
+         * kicked off a full report regeneration each time.
+         */
+        if (this.request.body?.operation) return;
         const { tdoc, kind } = await this.classTdoc(domainId, tid);
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
         /*
@@ -7504,10 +7720,16 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
             total: round2(tasks.filter((t) => t.section === key).reduce((a, t) => a + (t.points || 0), 0)),
         })).filter((g) => g.tasks.length)
         : [{ key: '', name: '', icon: '', tasks, total: 0 }];
-    const programmingPdocs = pdocs.filter((p) => !/^[os]/i.test(String(p.pid || '')));
+    // Function tasks (pid F…) are listed as their own cell, like the rail's
+    // own FUNCTION section: same scratchpad, different ask.
+    const programmingPdocs = pdocs.filter((p) => !/^[osf]/i.test(String(p.pid || '')));
+    const functionPdocs = pdocs.filter((p) => /^f/i.test(String(p.pid || '')));
     const subjectivePdocs = pdocs.filter((p) => /^s/i.test(String(p.pid || '')));
     const programmingPoints = opts.tdoc
         ? round2(programmingPdocs.reduce((a, p) => a + (pointsOf[p.docId] || 0), 0))
+        : 0;
+    const functionPoints = opts.tdoc
+        ? round2(functionPdocs.reduce((a, p) => a + (pointsOf[p.docId] || 0), 0))
         : 0;
     // PTA fork: subjective tasks (the homework editor's fifth section) are
     // handed in on their own pages and graded by hand; the overview lists
@@ -7525,11 +7747,13 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
         showScores: !!opts.tdoc,
         objectivePoints,
         programmingPoints,
+        functionPoints,
         subjectivePoints,
-        totalPoints: round2(objectivePoints + programmingPoints + subjectivePoints),
+        totalPoints: round2(objectivePoints + programmingPoints + functionPoints + subjectivePoints),
         canSubmit: !!opts.canSubmit,
         othersCount: pdocs.length - objective.length,
         programmingCount: programmingPdocs.length,
+        functionCount: functionPdocs.length,
         subjectiveCount: subjectivePdocs.length,
         page_name: opts.pageName,
     };
@@ -7562,7 +7786,7 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
     h.UiContext.paperRail = {
         items: pdocs.map((pdoc) => {
             const pidStr = String(pdoc.pid || '');
-            const kind = /^o/i.test(pidStr) ? 'objective' : (/^s/i.test(pidStr) ? 'subjective' : 'programming');
+            const kind = /^o/i.test(pidStr) ? 'objective' : (/^s/i.test(pidStr) ? 'subjective' : (/^f/i.test(pidStr) ? 'function' : 'programming'));
             return {
                 pid: pdoc.pid || pdoc.docId,
                 kind,
@@ -7631,7 +7855,24 @@ export async function apply(ctx: Context) {
         const sweep = () => finalizeDueSessions().catch((e) => logger.warn('[self-learning] results sweep failed: %s', e.message));
         const first = setTimeout(sweep, 60 * 1000);
         const every = setInterval(sweep, 10 * 60 * 1000);
-        ctx.on('dispose', () => { clearTimeout(first); clearInterval(every); });
+        // 👁 Task visibility + 📚 bonus publication run on the same worker
+        // and cadence, offset so the two sweeps never start in the same tick.
+        // The first pass also repairs everything left hidden by the earlier
+        // end-gated behaviour, and publishes any bonus task whose pipeline
+        // finished while nobody had the session page open.
+        const visibility = async () => {
+            const released = await repairLegacyHiddenFlags();
+            if (released) logger.info('[visibility] %d stale hidden flag(s) cleared', released);
+            const n = await publishReadyBonusTasks();
+            if (n) logger.info('[visibility] %d bonus task(s) confirmed in the problem set', n);
+        };
+        const runVisibility = () => visibility().catch((e) => logger.warn('[visibility] sweep failed: %s', e.message));
+        const firstVisibility = setTimeout(runVisibility, 90 * 1000);
+        const everyVisibility = setInterval(runVisibility, 10 * 60 * 1000);
+        ctx.on('dispose', () => {
+            clearTimeout(first); clearInterval(every);
+            clearTimeout(firstVisibility); clearInterval(everyVisibility);
+        });
     }
     const setKinds = async (h: any, source: string) => {
         if (!h?.UiContext || h.UiContext.tdocKinds || h.UiContext.trainingRail || h.UiContext.psetRail) return;

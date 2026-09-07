@@ -78,6 +78,52 @@ const STYLE = [
   '.acr__spinner { width: 28px; height: 28px; border: 3px solid #dbe7f8; border-top-color: #4c6ef5; border-right-color: #845ef7; border-radius: 50%; animation: ptaSpin .8s linear infinite; flex: 0 0 auto; }',
   '.pta-dark .acr__spinner { border-color: #3a4a63; border-top-color: #91a7ff; border-right-color: #845ef7; }',
   '.acr__report { line-height: 1.65; animation: ptaFadeIn .3s ease both; }',
+  // 🧩 Remedial cards: the report's suggestions turned into editable Studio briefs.
+  '.acr-rem { margin: 18px 0 6px; padding: 14px 16px; border: 1.5px solid #f08c00; border-radius: 14px; background: linear-gradient(180deg, #fff8ec, #fffdf8); animation: ptaFadeIn .3s ease both; }',
+  '.pta-dark .acr-rem { background: linear-gradient(180deg, #2b2214, #23201a); }',
+  '.acr-rem__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }',
+  '.acr-rem__title { font-weight: 800; font-size: 15px; color: var(--pta-ink); }',
+  '.acr-rem__lead { font-size: 12.5px; color: var(--pta-ink-soft); margin: 0 0 12px; line-height: 1.5; }',
+  '.acr-rem__cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }',
+  '.acr-rem__card { border: 1px solid var(--pta-line); border-radius: 12px; background: var(--pta-card); padding: 12px 13px; display: flex; flex-direction: column; gap: 8px; transition: opacity .15s ease; }',
+  '.acr-rem__card.is-off { opacity: .55; }',
+  '.acr-rem__card-top { display: flex; align-items: flex-start; gap: 8px; }',
+  '.acr-rem__card-top input[type=checkbox] { margin-top: 3px; }',
+  '.acr-rem__concept { font-weight: 700; font-size: 13.5px; color: var(--pta-ink); flex: 1; }',
+  '.acr-rem__badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--pta-line); color: var(--pta-ink-soft); white-space: nowrap; }',
+  '.acr-rem__badge--warn { border-color: #ffc9c9; background: #fff5f5; color: #c92a2a; }',
+  '.acr-rem__row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }',
+  '.acr-rem__row label, .acr-rem__lbl { display: block; font-size: 11px; color: var(--pta-ink-faint); margin-bottom: 2px; }',
+  '.acr-rem__card select, .acr-rem__card input[type=text], .acr-rem__card textarea { width: 100%; font-size: 12.5px; }',
+  '.acr-rem__card textarea { min-height: 96px; resize: vertical; line-height: 1.45; }',
+  '.acr-rem__avoid { font-size: 11.5px; color: var(--pta-ink-soft); }',
+  '.acr-rem__reuse { font-size: 12px; padding: 8px 10px; border-radius: 9px; background: var(--pta-card-2); border: 1px dashed var(--pta-line); }',
+  '.acr-rem__reuse b { color: var(--pta-ink); }',
+  '.acr-rem__reuse a { display: inline-block; margin: 3px 6px 0 0; padding: 2px 9px; border-radius: 999px; border: 1px solid #a5d0f7; color: #1864ab; background: #f4f9ff; font-size: 12px; text-decoration: none; }',
+  '.pta-dark .acr-rem__reuse a { border-color: #2b74b8; background: #16222f; color: #8fc6ff; }',
+  '.acr-rem__foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }',
+  '.acr-rem__create { border: none; border-radius: 999px; padding: 8px 16px; font-weight: 700; color: #fff; cursor: pointer; background: linear-gradient(120deg, #fcc419, #f08c00); font-size: 13px; }',
+  '.acr-rem__create:disabled { opacity: .55; cursor: default; }',
+  '.acr-rem__auto { font-size: 12.5px; color: var(--pta-ink-soft); display: flex; align-items: center; gap: 6px; }',
+  '.acr-rem__done { margin-top: 10px; font-size: 13px; color: var(--pta-ink); }',
+  '.acr-rem__done a { margin-right: 10px; }',
+  '.acr-rem__opens { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0; }',
+  '.acr-rem__made { margin: 6px 0 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }',
+  '.acr-rem__madecard { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--pta-line); border-radius: 11px; background: var(--pta-card); font-size: 13px; }',
+  '.acr-rem__madecard.is-gone { opacity: .55; }',
+  '.acr-rem__madebody { flex: 1; min-width: 0; }',
+  '.acr-rem__madetitle { font-weight: 700; color: var(--pta-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+  '.acr-rem__madecpt { font-size: 11.5px; color: var(--pta-ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+  '.acr-rem__st { font-size: 11px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; border: 1px solid var(--pta-line); color: var(--pta-ink-soft); }',
+  '.acr-rem__st--running { border-color: #a5d0f7; background: #eef6fe; color: #1864ab; }',
+  '.acr-rem__st--idle { border-color: #ffd28a; background: #fff4e0; color: #e67700; }',
+  '.acr-rem__st--passed { border-color: #a9e0b8; background: #f0fbf3; color: #2f7d43; }',
+  '.acr-rem__st--published, .acr-rem__st--published_hidden { border-color: #40c057; background: #40c057; color: #fff; }',
+  '.acr-rem__st--failed, .acr-rem__st--gone { border-color: #ffc9c9; background: #fff5f5; color: #c92a2a; }',
+  '.acr-rem__madecard a.acr-rem__go { font-size: 12px; white-space: nowrap; }',
+  '.acr-rem__row-open { font-size: 12.5px; }',
+  '.acr-rem__tip { margin-top: 8px; padding: 9px 12px; border-radius: 10px; background: var(--pta-warn-soft, #fff4e0); border: 1px solid var(--pta-warn-line, #ffd28a); font-size: 12.5px; line-height: 1.5; color: var(--pta-ink); }',
+  '.acr-rem__openall { margin-top: 6px; border: none; border-radius: 999px; padding: 5px 12px; font-weight: 600; color: #fff; cursor: pointer; background: linear-gradient(120deg, #fcc419, #f08c00); font-size: 12px; }',
   '.acr__report h1 { font-size: 18px; margin: 0 0 10px; color: #5f3dc4; }',
   '.acr__report h2 { font-size: 15px; margin: 18px 0 8px; color: #5f3dc4; border-bottom: 1px solid #eee3ff; padding-bottom: 4px; }',
   '.acr__report h3 { font-size: 13.5px; margin: 12px 0 4px; color: #4b3b8f; }',
@@ -507,6 +553,8 @@ function openModal() {
 
   let stats = null;
   let concepts = [];
+  let remedial = [];
+  let remedialDrafts = [];
   let currentMd = '';
   let kind = 'contest';
 
@@ -629,6 +677,8 @@ function openModal() {
         if (closed) return;
         stats = (res && res.stats) || stats;
         concepts = (res && res.concepts) || [];
+        remedial = (res && res.remedial) || [];
+        remedialDrafts = (res && res.remedialDrafts) || [];
         if (job && job.status === 'failed' && !newerReportThan(res.generatedAt, job.finishedAt)) {
           Notification.error(job.error || i18n('The report could not be generated.'));
           if (res.report) showReport(res.report, res.generatedAt);
@@ -644,11 +694,193 @@ function openModal() {
   }
 
   let lastJob = null;
+  /**
+   * 🧩 REMEDIAL CARDS — the report's "what to re-teach" turned into
+   * editable Studio briefs. Each card is what the teacher is approving:
+   * the brief text, the task kind, the difficulty, all editable; a tick to
+   * include it. Reuse comes first where it exists (a task already in the
+   * problem set that most affected students have not solved is cheaper and
+   * instantly targeted by the knowledge map); creating is the fallback.
+   * "Create" makes the drafts, starts EVERY statement at once, and opens
+   * ONE TAB PER DRAFT so the teacher watches them written side by side,
+   * then decides each in its own tab: Continue (solutions, tests,
+   * verification) or Discard. Nothing beyond the statement runs without
+   * that decision.
+   *
+   * TABS AND POPUP BLOCKERS. Browsers allow exactly ONE new tab per user
+   * gesture unless the site is allow-listed for pop-ups; Chrome consumes
+   * the gesture on the first window.open and blocks the rest. So the order
+   * matters: the FIRST tab — the one always allowed — is the Studio batch
+   * overview (?ids=…), which shows every new draft with live status and an
+   * Open button per row. The per-draft tabs are attempted after it; when
+   * they are blocked the teacher still has the overview, plus per-draft
+   * Open buttons here (each click is its own gesture, so each always
+   * opens) and a one-line tip on allowing pop-ups for the site, after
+   * which "Open all" works in one go. All tabs are opened synchronously
+   * INSIDE the click, before the request — an await in between ends the
+   * gesture and everything gets blocked.
+   */
+  // Remedial practice is always code: programming or function, never a quiz.
+  const KIND_OPTS = [['programming', 'Programming task'], ['function', 'Function task']];
+  const DIFF_OPTS = [['intro', 'intro'], ['medium', 'medium'], ['challenge', 'challenge']];
+  const domainPrefix = () => (window.location.pathname.match(/^\/d\/[^/]+/) || [''])[0];
+  const STATUS_LABEL = {
+    idle: 'Statement ready — review', running: 'Working…', failed: 'Failed', passed: 'Verified — ready to publish', published: 'Published', published_hidden: 'Published · hidden', gone: 'Discarded',
+  };
+  /** The drafts already created from this report, with live Studio status. */
+  function createdHtml(drafts) {
+    if (!drafts || !drafts.length) return '';
+    return `<div class="acr-rem__made">${drafts.map((d) => {
+      const st = d.status || 'idle';
+      const pid = (d.pids || [])[0];
+      const go = d.gone ? '' : (st.startsWith('published') && d.problemUrl
+        ? `<a class="acr-rem__go" href="${esc(d.problemUrl)}" target="_blank" rel="noopener">${esc(pid ? `${pid} ↗` : i18n('Open task') + ' ↗')}</a>`
+        : `<a class="acr-rem__go" href="${esc(d.url)}" target="_blank" rel="noopener">${esc(i18n('Open in Studio'))} ↗</a>`);
+      return `<div class="acr-rem__madecard${d.gone ? ' is-gone' : ''}">
+        <span class="acr-rem__st acr-rem__st--${esc(st)}">${esc(i18n(STATUS_LABEL[st] || st))}</span>
+        <div class="acr-rem__madebody"><div class="acr-rem__madetitle">${esc(d.title || d.concept)}</div><div class="acr-rem__madecpt">${esc(d.concept)}${d.kind ? ` · ${esc(i18n(d.kind === 'function' ? 'Function task' : 'Programming task'))}` : ''}</div></div>
+        ${go}</div>`;
+    }).join('')}</div>`;
+  }
+  function remedialHtml(items, drafts) {
+    const made = drafts || [];
+    const covered = new Set(made.map((d) => String(d.concept || '').toLowerCase()));
+    // Cards only for concepts that have no draft yet.
+    const pending = (items || []).filter((r) => !covered.has(String(r.canonical || r.concept || '').toLowerCase()));
+    if (!(items || []).length && !made.length) return '';
+    if (!pending.length) {
+      return `<div class="acr-rem">
+        <div class="acr-rem__head"><span class="acr-rem__title">🧩 ${esc(i18n('Tasks created from this report'))}</span>
+          <span class="acr-rem__badge">${esc(i18n('{0} created').replace('{0}', made.length))}</span></div>
+        <p class="acr-rem__lead">${esc(i18n('Every suggestion has been turned into a draft. Status is live from the AI Studio: open a draft to review its statement and press Continue to generate tests and verify, or Discard it.'))}</p>
+        ${createdHtml(made)}
+        <div class="acr-rem__done"></div>
+      </div>`;
+    }
+    items = pending;
+    lastPending = pending;
+    const sel = (cls, opts, cur) => `<select class="${cls}">${opts.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(i18n(l))}</option>`).join('')}</select>`;
+    const cards = items.map((r, i) => `<div class="acr-rem__card" data-i="${i}">
+      <div class="acr-rem__card-top">
+        <input type="checkbox" class="acr-rem__pick" checked>
+        <span class="acr-rem__concept">${esc(r.canonical || r.concept)}</span>
+        ${r.catalog ? `<span class="acr-rem__badge">${esc(i18n('{0} students').replace('{0}', (r.students || []).length))}</span>`
+    : `<span class="acr-rem__badge acr-rem__badge--warn" title="${esc(i18n('Not a knowledge point in this domain yet — creating will add it to the catalog.'))}">⚠ ${esc(i18n('new point'))}</span>`}
+      </div>
+      ${(r.existing || []).length ? `<div class="acr-rem__reuse"><b>♻ ${esc(i18n('Already in the problem set'))}</b> — ${esc(i18n('the knowledge map will recommend these to the affected students as they are:'))}<br>${r.existing.map((t) => `<a href="${domainPrefix()}/p/${esc(t.docId)}" target="_blank" rel="noopener" title="${esc(t.title)}">${esc(t.pid)} · ${esc(i18n('{0} unsolved').replace('{0}', t.unsolvedBy))}</a>`).join('')}</div>` : ''}
+      <div><span class="acr-rem__lbl">${esc(i18n('Working title'))}</span><input type="text" class="acr-rem__title-in textbox" value="${esc(r.title || '')}"></div>
+      <div class="acr-rem__row">
+        <label>${esc(i18n('Task kind'))}${sel('acr-rem__kind', KIND_OPTS, r.kind)}</label>
+        <label>${esc(i18n('Difficulty'))}${sel('acr-rem__diff', DIFF_OPTS, r.difficulty)}</label>
+      </div>
+      <div><span class="acr-rem__lbl">${esc(i18n('Brief for the AI Studio (editable)'))}</span><textarea class="acr-rem__brief textbox">${esc(r.brief || '')}</textarea></div>
+      ${(r.avoidTitles || []).length ? `<div class="acr-rem__avoid">🚫 ${esc(i18n('Must not resemble'))}: ${r.avoidTitles.map((a) => esc(a.title ? `${a.label} "${a.title}"` : a.label)).join(', ')}</div>` : ''}
+    </div>`).join('');
+    return `<div class="acr-rem">
+      ${made.length ? `<div class="acr-rem__head"><span class="acr-rem__title">🧩 ${esc(i18n('Tasks created from this report'))}</span>
+        <span class="acr-rem__badge">${esc(i18n('{0} created').replace('{0}', made.length))}</span></div>${createdHtml(made)}` : ''}
+      <div class="acr-rem__head"><span class="acr-rem__title">🧩 ${esc(made.length ? i18n('Remaining suggestions') : i18n('Turn the suggestions into practice tasks'))}</span>
+        <span class="acr-rem__badge">${esc(i18n('{0} suggested').replace('{0}', items.length))}</span></div>
+      <p class="acr-rem__lead">${esc(i18n('One brief per concept the report found, written from the students’ actual mistakes. Edit anything, untick what you do not want, then create — each becomes an AI Studio draft targeting that knowledge point, and once published the knowledge map recommends it to exactly the students who need it.'))}</p>
+      <div class="acr-rem__cards">${cards}</div>
+      <div class="acr-rem__foot">
+        <button type="button" class="acr-rem__create">✨ ${esc(i18n('Create {0} task(s) in AI Studio').replace('{0}', items.length))}</button>
+        <span class="acr-rem__auto">${esc(i18n('Each draft opens in its own tab; the statements are written at the same time. In each tab, press Continue to generate tests and verify, or Discard.'))}</span>
+      </div>
+      <div class="acr-rem__done"></div>
+    </div>`;
+  }
+  let lastPending = [];
+  function wireRemedial() {
+    const $rem = $body.find('.acr-rem');
+    if (!$rem.length) return;
+    const count = () => $rem.find('.acr-rem__pick:checked').length;
+    const refresh = () => {
+      $rem.find('.acr-rem__card').each(function mark() { $(this).toggleClass('is-off', !$(this).find('.acr-rem__pick').is(':checked')); });
+      $rem.find('.acr-rem__create').text(`✨ ${i18n('Create {0} task(s) in AI Studio').replace('{0}', count())}`).prop('disabled', !count());
+    };
+    $rem.on('change', '.acr-rem__pick', refresh);
+    $rem.on('click', '.acr-rem__create', async function onCreate() {
+      const $b = $(this);
+      const items = [];
+      $rem.find('.acr-rem__card').each(function collect() {
+        if (!$(this).find('.acr-rem__pick').is(':checked')) return;
+        const r = lastPending[+$(this).data('i')] || {};
+        items.push({
+          concept: r.canonical || r.concept,
+          title: String($(this).find('.acr-rem__title-in').val() || r.title || ''),
+          kind: String($(this).find('.acr-rem__kind').val() || r.kind),
+          difficulty: String($(this).find('.acr-rem__diff').val() || r.difficulty),
+          brief: String($(this).find('.acr-rem__brief').val() || r.brief || ''),
+          avoid: r.avoid || [],
+        });
+      });
+      if (!items.length) return;
+      // Open the tabs NOW, while the click still counts as a user gesture.
+      const openBlank = (title, line) => {
+        let w = null;
+        try { w = window.open('', '_blank'); } catch (err) { w = null; }
+        if (w) {
+          try {
+            w.document.write(`<!doctype html><title>${esc(title)}</title>`
+              + `<body style="font-family:system-ui,sans-serif;padding:40px;color:#33415c"><h2>✨ ${esc(title)}</h2><p>${esc(line)}</p></body>`);
+          } catch (err) { /* placeholder is cosmetic */ }
+        }
+        return w;
+      };
+      // First — the one tab every browser allows — the batch overview.
+      const overview = openBlank(i18n('AI Studio'), i18n('Creating the drafts and starting their statements...'));
+      const tabs = items.map((it) => openBlank(it.title || it.concept, i18n('Creating the draft and starting its statement...')));
+      $b.prop('disabled', true).text(i18n('Creating...'));
+      try {
+        const res = await request.post(reportUrl(), { operation: 'remedial_create', items: JSON.stringify(items) });
+        const created = res.created || [];
+        const overviewUrl = `${res.studioUrl}?ids=${created.map((c) => encodeURIComponent(String(c.id))).join(',')}`;
+        if (overview) overview.location.href = overviewUrl;
+        created.forEach((c, i) => { if (tabs[i]) tabs[i].location.href = c.url; });
+        tabs.slice(created.length).forEach((w) => { if (w) w.close(); });
+        const blocked = created.filter((c, i) => !tabs[i]);
+        const rows = created.map((c, i) => `<span class="acr-rem__row-open">${tabs[i] ? '✅' : '↗'} <a href="${esc(c.url)}" target="_blank" rel="noopener" class="acr-rem__open">${esc(c.title)}</a></span>`).join('');
+        $rem.find('.acr-rem__done').html(`✅ ${esc(i18n('{0} draft(s) created — statements being written now.').replace('{0}', created.length))}`
+          + ` <a href="${esc(overviewUrl)}" target="_blank" rel="noopener"><b>${esc(i18n('Overview of all {0} in AI Studio').replace('{0}', created.length))} →</b></a>`
+          + `<div class="acr-rem__opens">${rows}</div>`
+          + (blocked.length ? `<div class="acr-rem__tip">⚠ ${esc(i18n('Your browser allowed only one new tab per click and blocked {0} — the overview tab is open, and each draft above opens with a click of its own. To get all tabs at once next time, allow pop-ups for this site (the blocked-pop-up icon in the address bar).').replace('{0}', blocked.length))}
+              <button type="button" class="acr-rem__openall">↗ ${esc(i18n('Open the remaining {0} now').replace('{0}', blocked.length))}</button></div>` : ` ${esc(i18n('Each draft is open in its own tab. In each, press Continue to generate tests and verify, or Discard.'))}`));
+        $rem.find('.acr-rem__openall').on('click', () => {
+          // One gesture: works in full once pop-ups are allowed; otherwise
+          // opens one more and the rest stay as links.
+          blocked.forEach((c) => { try { window.open(c.url, '_blank'); } catch (err) { /* blocked */ } });
+        });
+        Notification.success(i18n('Drafts created.'));
+        // Flip the section to its "created" form right away, keeping the
+        // note above; reopening the report later lands on the same view.
+        try {
+          const fresh = await request.get(reportUrl());
+          remedial = fresh.remedial || remedial;
+          remedialDrafts = fresh.remedialDrafts || remedialDrafts;
+          const note = $rem.find('.acr-rem__done').html();
+          const $next = $(remedialHtml(remedial, remedialDrafts));
+          $rem.replaceWith($next);
+          $next.find('.acr-rem__done').html(note);
+          wireRemedial();
+        } catch (err) { /* the next open shows it */ }
+      } catch (e) {
+        if (overview) overview.close();
+        tabs.forEach((w) => { if (w) w.close(); });
+        Notification.error(e.message);
+        $b.prop('disabled', false);
+        refresh();
+      }
+    });
+    refresh();
+  }
+
   function showReport(reportMd, generatedAt) {
     currentMd = String(reportMd || '');
     const html = aiMarkdown.render(currentMd);
-    $body.html(statsStrip(stats) + '<div class="acr__charts"></div>' + `<div class="acr__report typo">${html}</div>`);
+    $body.html(statsStrip(stats) + '<div class="acr__charts"></div>' + `<div class="acr__report typo">${html}</div>` + remedialHtml(remedial, remedialDrafts));
     renderCharts($body.find('.acr__charts'), stats, concepts);
+    wireRemedial();
     import('vj/components/highlighter/prismjs')
       .then(({ default: prism }) => prism.highlightBlocks($body))
       .catch(() => { /* highlighting is optional */ });
@@ -708,6 +940,8 @@ function openModal() {
     if (closed) return;
     stats = (res && res.stats) || null;
     concepts = (res && res.concepts) || [];
+    remedial = (res && res.remedial) || [];
+    remedialDrafts = (res && res.remedialDrafts) || [];
     kind = (res && res.kind) || kind;
     lastJob = (res && res.job) || null;
     if (res && res.job && res.job.status === 'running') {

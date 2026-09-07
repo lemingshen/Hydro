@@ -61,7 +61,7 @@
             {%- for t in g.tasks -%}
               <tr class="{% if t.status == 1 %}is-pass{% elif t.submitted %}is-fail{% else %}is-none{% endif %}">
                 <td class="col--idx"><span class="pta-results__idx">{{ t.index }}</span></td>
-                <td class="col--task">{% if g.key == 'prog' %}<a href="{{ url('problem_detail', pid=t.docId, query={tid:tdoc.docId}) }}">{{ t.title }}</a>{% else %}{{ t.title }}{% endif %}</td>
+                <td class="col--task">{% if g.key == 'prog' or g.key == 'fn' %}<a href="{{ url('problem_detail', pid=t.docId, query={tid:tdoc.docId}) }}">{{ t.title }}</a>{% else %}{{ t.title }}{% endif %}</td>
                 <td class="col--status">
                   {%- if not t.submitted -%}<span class="pta-chip pta-chip--dim">{{ _('Not answered') }}</span>
                   {%- elif t.status == 1 -%}<span class="pta-chip pta-chip--ok">✓ {{ _('Correct') if g.key != 'prog' else _('Accepted') }}</span>

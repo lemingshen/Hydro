@@ -23,10 +23,18 @@ function initPaperEditor() {
   const $obj = $('#tep-objective');
   if (!$obj.length) return;
   const OBJ = ['tf', 'choice', 'blank'];
-  /** Per-task-points sections and their UI; `subj` only exists on the homework editor. */
+  /**
+   * Per-task-points sections and their UI. `fn` (function tasks, pid F…)
+   * is scored exactly like `prog` but picked in its own section, so the
+   * editor mirrors the rail and the paper; `subj` only exists on the
+   * homework editor. A section is live only if its input is on the page.
+   */
   const SCORED_META: Record<string, { box: string, lockKind: string, head: string, empty: string }> = {
     prog: {
       box: '#tep-prog-scores', lockKind: 'programming', head: 'Points per programming task', empty: 'Pick programming tasks above, then give each its points.',
+    },
+    fn: {
+      box: '#tep-fn-scores', lockKind: 'function', head: 'Points per function task', empty: 'Pick function tasks above, then give each its points.',
     },
     subj: {
       box: '#tep-subj-scores', lockKind: 'subjective', head: 'Points per subjective task', empty: 'Pick subjective tasks above, then give each its points.',
@@ -71,7 +79,7 @@ function initPaperEditor() {
       return;
     }
     $box.html(`<div class="tep__scores-head">${esc(i18n(meta.head))}</div>${ids.map((id, i) => `<div class="tep__prow">`
-      + `<span class="tep__prow-idx">${sec === 'subj' ? `S${i + 1}` : String.fromCharCode(65 + (i % 26))}</span>`
+      + `<span class="tep__prow-idx">${sec === 'subj' ? `S${i + 1}` : sec === 'fn' ? `F${i + 1}` : String.fromCharCode(65 + (i % 26))}</span>`
       + `<span class="tep__prow-title" title="${esc(titleOf(id))}">${esc(titleOf(id))}</span>`
       + `<input type="number" min="0" step="0.5" class="textbox tep__pscore" data-score-sec="${sec}" data-score-for="${id}" value="${scores[sec][id] !== undefined ? fmt(+scores[sec][id]) : ''}" placeholder="0">`
       + `<span class="tep__prow-unit">${esc(i18n('pts'))}</span></div>`).join('')}`);

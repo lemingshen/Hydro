@@ -25,20 +25,15 @@ const domainPrefix = () => (window.location.pathname.match(/^\/d\/[^/]+/) || [''
  * (teacher turns + the compact summaries the server returns) and sends it
  * back with every message.
  */
-function initAdvisor(picker) {
+function initAdvisor(selection) {
   const $box = $('#sl-advisor');
   if (!$box.length) return;
   const available = $box.attr('data-available') === 'yes';
   const turns = []; // [{role:'user'|'assistant', content}]
   let busy = false;
 
-  const selectedDocIds = () => new Set((picker.ref?.getSelectedItemKeys?.() || String($('[name="pids"]').val() || '').split(','))
-    .map((k) => String(k).trim()).filter((k) => k));
-  const setSelected = (ids) => {
-    const clean = [...new Set(ids.map((x) => String(x).trim()).filter((x) => x))];
-    picker.ref?.setSelectedKeys?.(clean);
-    $('[name="pids"]').val(clean.join(','));
-  };
+  const selectedDocIds = () => new Set(selection.ids());
+  const setSelected = (ids) => selection.set(ids);
 
   const QUICK = [
     i18n('For and while loops'),
@@ -107,7 +102,7 @@ function initAdvisor(picker) {
     return `
       <div class="sla__step" style="animation-delay:${80 * i}ms">
         <div class="sla__rail"><span class="sla__num">${t.step || i + 1}</span>${last ? '' : '<i></i>'}</div>
-        <div class="sla__card" data-doc="${esc(t.docId)}">
+        <div class="sla__card" data-doc="${esc(t.docId)}" data-pid="${esc(t.pid)}">
           <div class="sla__card-head">
             <a href="${domainPrefix()}/p/${esc(t.pid)}" target="_blank" rel="noopener"><b>${esc(t.pid)}</b> ${esc(t.title)}</a>
             ${t.level ? `<span class="sla__level sla__level--${esc(t.level)}">${esc(LEVEL_LABEL[t.level] || t.level)}</span>` : ''}
@@ -129,7 +124,11 @@ function initAdvisor(picker) {
       <div class="sla__avatar">🤖</div>
       <div class="sla__bubble">${inner}</div>
     </div>`;
-  const replyHtml = (res) => aiMsg(`
+  const replyHtml = (res) => {
+    // Every proposed task carries its pid, which is how the selection knows
+    // which section to drop it into when the teacher clicks "add".
+    selection.learnPids(res.tasks || []);
+    return aiMsg(`
       ${res.points?.length ? `<div class="sla__row"><span class="sla__lbl">🎯 ${esc(i18n('Knowledge points for this goal'))}</span> ${res.points.map((p) => `<span class="sla__pt sla__pt--goal">${esc(p)}</span>`).join('')}</div>` : ''}
       ${res.tasks?.length ? `
       ${res.path ? `<div class="sla__path">📈 <b>${esc(i18n('Learning path'))}</b> — ${esc(res.path)}</div>` : ''}
@@ -144,6 +143,7 @@ function initAdvisor(picker) {
     : `<div>${esc(i18n('No suitable task was found among the domain\u2019s programming tasks.'))}</div>`}
       ${res.notes ? `<div class="sla__notes">${esc(res.notes)}</div>` : ''}
       <div class="sla__muted sla__meta">${esc(i18n('{0} candidate tasks considered ({1} with knowledge points).').replace('{0}', res.candidates).replace('{1}', res.labeled))}</div>`, 'sla__msg--in');
+  };
 
   const refreshAddButtons = () => {
     const have = selectedDocIds();
@@ -154,7 +154,7 @@ function initAdvisor(picker) {
         .attr('title', on ? i18n('Click to remove from the session') : i18n('Add to the session'));
     });
   };
-  picker.onChange(refreshAddButtons);
+  selection.onChange(refreshAddButtons);
 
   $chat.on('click', '.sla__add', function onAdd() {
     const id = String($(this).attr('data-doc'));
@@ -266,14 +266,89 @@ function initAdvisor(picker) {
   autoGrow();
 }
 
+/**
+ * PTA fork — TWO SECTIONS, ONE ORDERED LIST.
+ *
+ * The editor picks PROGRAMMING and FUNCTION tasks in separate sections
+ * (matching the rail, the paper and the test/homework editors), but a
+ * session is one ordered `pids` list that students walk in sequence. So
+ * the two pickers are merged into the hidden `pids` — programming first,
+ * then function — on every change and on submit; the handler reads `pids`
+ * exactly as before and still refuses quiz/subjective tasks.
+ *
+ * The AI advisor proposes from both kinds and never sees two pickers: it
+ * talks to this facade, which routes each docId to its section by kind.
+ * Kinds are learned from the server's prefill (progPids / fnPids), from
+ * the advisor's own proposals (each carries its pid), and from whatever
+ * a picker currently holds.
+ */
+function initSelection() {
+  const $prog = $('[name="sl_pids_prog"]');
+  const $fn = $('[name="sl_pids_fn"]');
+  const $pids = $('[name="pids"]');
+  const pickers = {
+    programming: ProblemSelectAutoComplete.getOrConstruct($prog, { multi: true, clearDefaultValue: false, lockKind: 'programming' }),
+    function: ProblemSelectAutoComplete.getOrConstruct($fn, { multi: true, clearDefaultValue: false, lockKind: 'function' }),
+  };
+  const kindByDoc = {};
+  const learn = (docId, kind) => { if (docId && kind) kindByDoc[String(docId)] = kind; };
+  const split = (val) => String(val || '').split(',').map((x) => x.trim()).filter((x) => x);
+  for (const id of split($prog.val())) learn(id, 'programming');
+  for (const id of split($fn.val())) learn(id, 'function');
+  const kindOfPid = (pid) => (/^f/i.test(String(pid || '')) ? 'function' : 'programming');
+  /*
+   * Anything a picker holds tells us its kind. getSelectedItems() is
+   * `selectedKeys.map((k) => valueCache[k])`, so a key whose item has not
+   * been fetched yet — every prefilled key on the first onChange, before
+   * the lookup returns — comes back as `undefined`. Skip those; the keys
+   * themselves are learned right after from getSelectedItemKeys(), which
+   * never depends on the cache.
+   */
+  const learnFromPicker = (kind) => {
+    for (const it of (pickers[kind].ref?.getSelectedItems?.() || [])) {
+      if (!it) continue;
+      learn(it.docId ?? it._id ?? it.id, kind);
+    }
+  };
+  const idsOf = (kind) => (pickers[kind].ref?.getSelectedItemKeys?.() || split(kind === 'programming' ? $prog.val() : $fn.val()))
+    .map((k) => String(k).trim()).filter((k) => k);
+  const merge = () => {
+    learnFromPicker('programming'); learnFromPicker('function');
+    for (const id of idsOf('programming')) learn(id, 'programming');
+    for (const id of idsOf('function')) learn(id, 'function');
+    $pids.val([...idsOf('programming'), ...idsOf('function')].join(','));
+  };
+  const listeners = [];
+  const changed = () => { merge(); for (const cb of listeners) cb(); };
+  pickers.programming.onChange?.(changed);
+  pickers.function.onChange?.(changed);
+  $prog.on('change', changed); $fn.on('change', changed);
+  $pids.closest('form').on('submit', merge);
+  merge();
+  return {
+    ids: () => [...idsOf('programming'), ...idsOf('function')],
+    /** Route by known kind; a docId whose kind is unknown falls back to programming. */
+    set: (ids) => {
+      const clean = [...new Set(ids.map((x) => String(x).trim()).filter((x) => x))];
+      const prog = clean.filter((id) => (kindByDoc[id] || 'programming') !== 'function');
+      const fn = clean.filter((id) => kindByDoc[id] === 'function');
+      pickers.programming.ref?.setSelectedKeys?.(prog); $prog.val(prog.join(','));
+      pickers.function.ref?.setSelectedKeys?.(fn); $fn.val(fn.join(','));
+      merge();
+    },
+    /** The advisor tells us the kind of every task it proposes. */
+    learnPids: (tasks) => { for (const t of tasks || []) if (t) learn(t.docId, kindOfPid(t.pid)); },
+    /** Fires after either section changes (the advisor re-marks its Add buttons). */
+    onChange: (cb) => { listeners.push(cb); },
+  };
+}
+
 export default new NamedPage(['self_learning_create', 'self_learning_edit'], () => {
-  // Sessions are programming-only: the picker never lists quiz or
-  // subjective tasks (the handler refuses them as well).
-  const picker = ProblemSelectAutoComplete.getOrConstruct($('[name="pids"]'), { multi: true, clearDefaultValue: false, lockKind: 'programming' });
+  const selection = initSelection();
   // 🌐 Allowed submission languages — the contest editor's picker on the
   // same comma-joined `langs` field; empty = every judge language.
   LanguageSelectAutoComplete.getOrConstruct($('[name="langs"]'), { multi: true });
-  initAdvisor(picker);
+  initAdvisor(selection);
   $(document).on('click', '[value="delete"]', (ev) => {
     ev.preventDefault();
     new ConfirmDialog({

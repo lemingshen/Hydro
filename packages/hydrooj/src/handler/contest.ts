@@ -18,6 +18,7 @@ import { ContestStatusDoc, FileInfo, ScoreboardConfig, Tdoc } from '../interface
 import { gradeObjectiveAnswer } from '../lib/objective_grade';
 import { readRawProblemConfig } from '../lib/problem_config';
 import { objectiveSubKindOf } from '../lib/objective_markdown';
+import { repairLegacyHiddenFlags } from '../lib/activity_pids';
 import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
@@ -179,12 +180,20 @@ export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
 /* ------------------------------------------------------------------ */
 const PAPER_SECTIONS = ['tf', 'choice', 'blank'] as const;
 /** Sections whose tasks carry their own points (typed per task in the editor). */
-const SCORED_SECTIONS = ['prog', 'subj'] as const;
+const SCORED_SECTIONS = ['prog', 'fn', 'subj'] as const;
 export interface PaperSections {
     tf: { total: number, pids: number[] };
     choice: { total: number, pids: number[] };
     blank: { total: number, pids: number[] };
     prog: { pids: number[], scores: Record<number, number> };
+    /**
+     * PTA fork: FUNCTION tasks (pid F…) — the editors' own section, beside
+     * programming. Judged and scored exactly like programming (the server
+     * splices the harness in, model/record.ts), so they share the scored
+     * shape; kept apart because the student is asked for something
+     * different, and the rail / paper list them apart too.
+     */
+    fn: { pids: number[], scores: Record<number, number> };
     /**
      * PTA fork: SUBJECTIVE (project-level, S-pid) tasks — the homework
      * editor's fifth section. Students hand in a report and files on the
@@ -205,7 +214,7 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
  */
 export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSections> {
     const empty: PaperSections = {
-        tf: { total: 0, pids: [] }, choice: { total: 0, pids: [] }, blank: { total: 0, pids: [] }, prog: { pids: [], scores: {} }, subj: { pids: [], scores: {} },
+        tf: { total: 0, pids: [] }, choice: { total: 0, pids: [] }, blank: { total: 0, pids: [] }, prog: { pids: [], scores: {} }, fn: { pids: [], scores: {} }, subj: { pids: [], scores: {} },
     };
     if (!tdoc) return empty;
     const stored = (tdoc as any).sections;
@@ -231,6 +240,9 @@ export async function paperOf(domainId: string, tdoc?: Tdoc): Promise<PaperSecti
         } else if (pdoc && /^s/i.test(String(pdoc.pid || ''))) {
             empty.subj.pids.push(pid);
             empty.subj.scores[pid] = weight;
+        } else if (pdoc && /^f/i.test(String(pdoc.pid || ''))) {
+            empty.fn.pids.push(pid);
+            empty.fn.scores[pid] = weight;
         } else {
             empty.prog.pids.push(pid);
             empty.prog.scores[pid] = weight;
@@ -264,17 +276,19 @@ export async function parsePaper(domainId: string, raw: string, viewer: any) {
         choice: { total: points(j.choice?.total), pids: ids(j.choice?.pids) },
         blank: { total: points(j.blank?.total), pids: ids(j.blank?.pids) },
         prog: { pids: ids(j.prog?.pids), scores: {} },
+        fn: { pids: ids(j.fn?.pids), scores: {} },
         subj: { pids: ids(j.subj?.pids), scores: {} },
     };
     for (const k of SCORED_SECTIONS) for (const pid of sections[k].pids) sections[k].scores[pid] = points(j[k]?.scores?.[pid]);
-    const all = [...sections.tf.pids, ...sections.choice.pids, ...sections.blank.pids, ...sections.prog.pids, ...sections.subj.pids];
+    const all = [...sections.tf.pids, ...sections.choice.pids, ...sections.blank.pids, ...sections.prog.pids, ...sections.fn.pids, ...sections.subj.pids];
     const pids = [...new Set(all)];
     const pdict = await problem.getList(domainId, pids, viewer.hasPerm(PERM.PERM_VIEW_PROBLEM_HIDDEN) || viewer._id, false, ['docId', 'pid'] as any, true);
     for (const pid of pids) if (!pdict[pid]) throw new ValidationError('paper', `problem ${pid}`);
     // Kind guard: objective sections hold O-tasks, the programming section
-    // P-tasks, the subjective section S-tasks.
+    // P-tasks, the function section F-tasks, the subjective section S-tasks.
     for (const k of PAPER_SECTIONS) for (const pid of sections[k].pids) if (!/^o/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not an objective task`);
-    for (const pid of sections.prog.pids) if (/^[os]/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a programming task`);
+    for (const pid of sections.prog.pids) if (/^[osf]/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a programming task`);
+    for (const pid of sections.fn.pids) if (!/^f/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a function task`);
     for (const pid of sections.subj.pids) if (!/^s/i.test(String(pdict[pid].pid || ''))) throw new ValidationError('paper', `${pid} is not a subjective task`);
     const score: Record<number, number> = {};
     for (const k of PAPER_SECTIONS) {
@@ -341,11 +355,18 @@ export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<n
         };
     }).filter((g) => g.tasks.length);
     const isSubjective = (pid: number) => /^s/i.test(String(pdict[pid]?.pid || ''));
-    const progPids = tdoc.pids.filter((pid) => !sectionOf[pid] && !isSubjective(pid));
+    const isFunction = (pid: number) => /^f/i.test(String(pdict[pid]?.pid || ''));
+    const progPids = tdoc.pids.filter((pid) => !sectionOf[pid] && !isSubjective(pid) && !isFunction(pid));
     const programming = progPids.map((pid, i) => rowOf(pid, i + 1));
+    // Function tasks: their own group in "Your results", as in the editor and the rail.
+    const fnPids = tdoc.pids.filter((pid) => !sectionOf[pid] && isFunction(pid));
+    const fnRows = fnPids.map((pid, i) => rowOf(pid, i + 1));
     const groups = [...objective, ...(programming.length ? [{
         key: 'prog', name: 'Programming', icon: '⌨', tasks: programming,
         total: round2(programming.reduce((a, t) => a + t.points, 0)), earned: round2(programming.reduce((a, t) => a + t.earned, 0)),
+    }] : []), ...(fnRows.length ? [{
+        key: 'fn', name: 'Function', icon: '🧩', tasks: fnRows,
+        total: round2(fnRows.reduce((a, t) => a + t.points, 0)), earned: round2(fnRows.reduce((a, t) => a + t.earned, 0)),
     }] : [])];
     /*
      * PTA fork: SUBJECTIVE tasks are handed in as a report + files (no
@@ -875,10 +896,20 @@ export class ContestEditHandler extends Handler {
         };
         await ScheduleModel.deleteMany(task);
         const operation = [];
-        if (Date.now() <= endAt.getTime() && autoHide) {
-            await Promise.all(pids.map((pid) => problem.edit(domainId, pid, { hidden: true })));
-            operation.push('unhide');
-        }
+        /*
+         * 👁 autoHide no longer writes `hidden` on the problems.
+         *
+         * Visibility of activity tasks is owned by lib/activity_pids.ts,
+         * which hides them from students at VIEW TIME until the activity
+         * starts. Setting the flag here as well would be a second, worse
+         * copy of that rule: the flag persists after the test begins (so the
+         * task would stay invisible when it should be practice material),
+         * and it overwrites whatever `hidden` the teacher chose for the
+         * problem itself, which is exactly what the view-time rule was built
+         * to avoid. The checkbox still stands for "keep this out of the
+         * problem set until the test starts" — that is just enforced in one
+         * place now instead of two.
+         */
         // Objective answers are scored on the problem set only when the test ends.
         if (Date.now() <= endAt.getTime() && hasObjectiveTask(pids, pdict)) operation.push('syncObjective');
         if (tid && this.tdoc && (this.tdoc as any).objectiveSynced && Date.now() <= endAt.getTime()) {
@@ -1404,9 +1435,15 @@ export async function apply(ctx: Context) {
         const tasks = [];
         for (const op of doc.operation) {
             if (op === 'unhide') {
-                for (const pid of tdoc.pids) {
-                    tasks.push(problem.edit(doc.domainId, pid, { hidden: false }));
-                }
+                /*
+                 * Legacy operation: schedules queued before visibility moved
+                 * to lib/activity_pids still carry it. Delegated to the flag
+                 * repair rather than executed, because the old code un-hid
+                 * `tdoc.pids` unconditionally and would publish a task that
+                 * another activity has not started yet. Nothing enqueues
+                 * this any more; the branch drains what is already queued.
+                 */
+                tasks.push(repairLegacyHiddenFlags());
             }
             if (op === 'syncObjective') tasks.push(evaluateContainerResults(doc.domainId, tdoc));
         }

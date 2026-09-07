@@ -152,6 +152,11 @@ const RAIL_STYLE = [
   '.sl-rail__chip.quiz:hover { border-color: #0ca678; }',
   '.sl-rail__chip.subj { border-style: dashed; border-color: #c3b2f7; color: #845ef7; background: #f8f5ff; }',
   '.sl-rail__chip.subj:hover { border-color: #845ef7; background: #f3edff; }',
+  // Function tasks: solid border (they are code, like programming), amber
+  // like the problem-set tab, so the FUNCTION section reads as its own.
+  '.sl-rail__chip.fn { border-color: #ffd28a; color: #e67700; background: #fff8ec; }',
+  '.sl-rail__chip.fn:hover { border-color: #f08c00; }',
+  '.sl-rail__chip.fn.ac { border-color: #f08c00; }',
   '.sl-rail__chip.tried { border-style: solid; border-color: #ffc9c9; color: #e03131; background: #fff5f5; }',
   // 🔴 A judged-wrong objective question (paper rail, after the deadline): solid red, like .ac is solid green.
   '.sl-rail__chip.wrong { border-style: solid; border-color: transparent; color: #fff; background: linear-gradient(135deg, #ff6b6b, #e03131); box-shadow: 0 4px 10px -4px rgba(224,49,49,.55); }',
@@ -228,6 +233,7 @@ const RAIL_STYLE = [
   '.sl-rail__bonus .sl-bonus__retry:hover { text-decoration: underline; }',
   '@media (prefers-reduced-motion: reduce) { .sl-rail__bonus .sl-bjob, .sl-rail__bonus .sl-bjob::before, .sl-rail__bonus .sl-bjob__orb::before, .sl-rail__bonus .sl-bjob__orb-ico, .sl-rail__bonus .sl-bjob__track i::after, .sl-rail__bonus .sl-bjob__kp { animation: none !important; } }',
   '.sl-rail__chip.subj.current { border-style: solid; border-color: #845ef7; box-shadow: 0 0 0 2px rgba(132,94,247,.28), 0 4px 12px -4px rgba(132,94,247,.5); color: #5f3dc4; background: #f3edff; }',
+  '.sl-rail__chip.fn.current { border-color: #f08c00; box-shadow: 0 0 0 2px rgba(240,140,0,.28), 0 4px 12px -4px rgba(240,140,0,.5); color: #d9480f; background: #fff4e0; }',
   '.sl-rail__expander { position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 260; width: 26px; height: 62px; border: 1px solid #dfe5ef; border-left: none; border-radius: 0 10px 10px 0; background: linear-gradient(180deg, #ffffff, #f6f8fc); cursor: pointer; color: #7d8aa3; font-size: 15px; box-shadow: 3px 0 12px -4px rgba(15,23,42,.18); transition: color .15s ease, box-shadow .15s ease; }',
   '.sl-rail__expander:hover { color: #1c7ed6; box-shadow: 3px 0 16px -4px rgba(28,126,214,.4); }',
   '.sl-rail__foot { flex: 0 0 auto; padding: 10px 12px; border-top: 1px solid #eef1f6; background: linear-gradient(180deg, #fbfcfe, #f6f8fc); }',
@@ -248,6 +254,7 @@ const RAIL_STYLE = [
   '.pta-dark .sl-rail__chip:hover { border-color: #4dabf7; color: #4dabf7; }',
   '.pta-dark .sl-rail__chip.quiz { background: #12241f; border-color: #1d5c49; color: #3dd6a5; }',
   '.pta-dark .sl-rail__chip.subj { background: #241f33; border-color: #4d3f7d; color: #b197fc; }',
+  '.pta-dark .sl-rail__chip.fn { background: #2b2214; border-color: #7a5316; color: #ffc078; }',
   '.pta-dark .sl-rail__chip.tried { background: #2c1e21; border-color: #6e3038; color: #ff8787; }',
   '.pta-dark .sl-rail__chip.ac { background: linear-gradient(135deg, #2f9e44, #237032); color: #eafbea; }',
   '.pta-dark .sl-rail__chip.current { border-color: #4dabf7; box-shadow: 0 0 0 2px rgba(77,171,247,.35); }',
@@ -279,6 +286,7 @@ const RAIL_STYLE = [
   '.pta-dark .sl-rail__bonus .sl-bjob__note { background: rgba(255,255,255,.05); border-color: #4d3f7d; color: #d0bdfb; }',
   '.pta-dark .sl-rail__bonus .sl-bonus__retry { color: #b197fc; }',
   '.pta-dark .sl-rail__chip.subj.current { border-color: #b197fc; background: #2c2440; color: #d0bdfb; box-shadow: 0 0 0 2px rgba(177,151,252,.35); }',
+  '.pta-dark .sl-rail__chip.fn.current { border-color: #ffa94d; background: #3a2a10; color: #ffd8a8; box-shadow: 0 0 0 2px rgba(255,169,77,.35); }',
   '.pta-dark .sl-rail__foot { background: linear-gradient(180deg, #22262c, #1e2227); border-top-color: #2e3338; }',
   '.pta-dark .sl-rail__expander { background: linear-gradient(180deg, #23272c, #1e2227); border-color: #2e3338; color: #9aa4ad; }',
   '.pta-dark .sl-rail__pbar { background: #2a3036; }',
@@ -332,13 +340,51 @@ function fetchActivityKinds() {
  */
 const RAIL_SECTIONS = [
   ['tf', 'True / False'], ['choice', 'Single / Multiple Choice'], ['blank', 'Fill in the Blank'],
-  ['objective', 'Objectives'], ['subjective', 'Subjective Tasks'], ['programming', 'Programming'],
+  ['objective', 'Objectives'], ['subjective', 'Subjective Tasks'], ['programming', 'Programming'], ['function', 'Function'],
 ];
+
+/**
+ * PTA fork — the rail's FOUR sections, resolved in one place.
+ *
+ *   objective   — 'objective' and its sub-kinds ('tf', 'choice', 'blank')
+ *   subjective
+ *   programming — the default for anything unlabelled
+ *   function    — F tasks (PTA 函数题) get their OWN section, next to
+ *                 Programming: they are solved in the same scratchpad but
+ *                 the student is being asked for something different (one
+ *                 function, not a program), and a rail that hid that
+ *                 difference made the switch between the two invisible.
+ *
+ * Every rail builder below goes through this and chipCls(), so the four
+ * rails cannot disagree on where a task belongs or how its chip looks.
+ */
+function railKind(kind) {
+  if (!kind || kind === 'programming') return 'programming';
+  if (kind === 'subjective') return 'subjective';
+  if (kind === 'function') return 'function';
+  return 'objective';
+}
+
+/** Chip modifier class for a rail kind; function chips carry ' fn' (amber ring, see the theme). */
+function chipCls(kind) {
+  return kind === 'objective' ? ' quiz' : kind === 'subjective' ? ' subj' : kind === 'function' ? ' fn' : '';
+}
+
+/** Group a four-list rail into sections, in the rail's fixed order. */
+function fourGroups(quizzes, subj, programming, fn) {
+  const groups = [];
+  if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
+  if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
+  if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
+  if (fn.length) groups.push({ header: i18n('Function'), items: fn });
+  return groups;
+}
 
 function groupRailItems(items) {
   const bucket = Object.fromEntries(RAIL_SECTIONS.map(([k]) => [k, []]));
   for (const it of items) {
-    const group = bucket[it.group] ? it.group : (it.kind || 'programming');
+    const kind = railKind(it.kind);
+    const group = bucket[it.group] ? it.group : kind;
     bucket[group].push(it);
   }
   const groups = [];
@@ -348,8 +394,8 @@ function groupRailItems(items) {
       const n = it.index || (i + 1);
       it.label = it.accepted ? '✓' : String(n);
       it.title = `${n}. ${it.name}${typeof it.points === 'number' ? ` — ${it.points} ${i18n('pts')}` : ''}`;
-      // Points are visible on programming chips (objective points sit on the paper).
-      if (g.key === 'programming' && typeof it.points === 'number') it.pts = it.points;
+      // Points are visible on code chips (objective points sit on the paper).
+      if ((g.key === 'programming' || g.key === 'function') && typeof it.points === 'number') it.pts = it.points;
     });
   }
   return groups;
@@ -366,19 +412,19 @@ function buildTdocGroups(kinds) {
     const items = [];
     for (const pid of pids) {
       const info = byPid[String(pid)] || {};
-      const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
+      const kind4 = railKind(info.kind);
       const st = info.status || 0;
       // "Handed in, verdict withheld" (a live activity's objective task) is
       // neither accepted nor wrong: a neutral blue chip, as on the paper.
       const handedIn = !st && info.submitted ? ' submitted' : '';
       items.push({
         pid: String(pid),
-        kind: kind3,
+        kind: kind4,
         group: info.group,
         index: info.index,
         points: info.points,
         accepted: st === 1,
-        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${handedIn}${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(pid) === String(current) ? ' current' : ''}`,
+        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${handedIn}${chipCls(kind4)}${String(pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(pid),
         href: `${prefix}/p/${pid}?tid=${uc.tdoc.docId}`,
       });
@@ -447,8 +493,10 @@ async function getRailGroups() {
     const quizzes = [];
     const subj = [];
     const programming = [];
+    const fn = [];
     for (const p of uc.slProblems) {
-      const kindCls = p.kind === 'objective' ? ' quiz' : (p.kind === 'subjective' ? ' subj' : '');
+      const pk = railKind(p.kind);
+      const kindCls = chipCls(pk);
       // One task at a time (students): locked chips are inert, skipped and
       // finished ones stay open for retries, the current one is highlighted.
       const gate = p.gate || '';
@@ -462,12 +510,9 @@ async function getRailGroups() {
         name: p.title || String(p.pid),
         href: gate === 'locked' ? 'javascript:;' : `${prefix}/self-learning/${uc.slSsid}/p/${p.pid}`,
       };
-      (p.kind === 'programming' ? programming : (p.kind === 'subjective' ? subj : quizzes)).push(item);
+      (pk === 'programming' ? programming : pk === 'function' ? fn : pk === 'subjective' ? subj : quizzes).push(item);
     }
-    const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
-    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
-    if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
+    const groups = fourGroups(quizzes, subj, programming, fn);
     for (const g of groups) {
       g.items.forEach((it, i) => {
         it.label = it.gate === 'locked' ? '🔒' : it.gate === 'skipped' && !it.accepted ? '⏭' : it.accepted ? '✓' : String(i + 1);
@@ -523,22 +568,20 @@ async function getRailGroups() {
     const quizzes = [];
     const subj = [];
     const programming = [];
+    const fn = [];
     for (const info of tr.kinds) {
-      const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
+      const kind4 = railKind(info.kind);
       const st = info.status || 0;
       const item = {
         pid: String(info.pid),
         accepted: st === 1,
-        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(info.pid) === String(current) ? ' current' : ''}`,
+        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${chipCls(kind4)}${String(info.pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(info.pid),
         href: `${prefix}/p/${info.pid}?trid=${tr.trid}`,
       };
-      (kind3 === 'programming' ? programming : (kind3 === 'subjective' ? subj : quizzes)).push(item);
+      (kind4 === 'programming' ? programming : kind4 === 'function' ? fn : kind4 === 'subjective' ? subj : quizzes).push(item);
     }
-    const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
-    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
-    if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
+    const groups = fourGroups(quizzes, subj, programming, fn);
     for (const g of groups) {
       g.items.forEach((it, i) => {
         it.label = it.accepted ? '✓' : String(i + 1);
@@ -557,22 +600,20 @@ async function getRailGroups() {
     const quizzes = [];
     const subj = [];
     const programming = [];
+    const fn = [];
     for (const info of ps.kinds) {
-      const kind3 = info.kind === 'subjective' ? 'subjective' : (info.kind && info.kind !== 'programming' ? 'objective' : 'programming');
+      const kind4 = railKind(info.kind);
       const st = info.status || 0;
       const item = {
         pid: String(info.pid),
         accepted: st === 1,
-        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${kind3 === 'objective' ? ' quiz' : (kind3 === 'subjective' ? ' subj' : '')}${String(info.pid) === String(current) ? ' current' : ''}`,
+        cls: `${st === 1 ? ' ac' : (st ? ' tried' : '')}${chipCls(kind4)}${String(info.pid) === String(current) ? ' current' : ''}`,
         name: info.title || String(info.pid),
         href: `${prefix}/p/${info.pid}`,
       };
-      (kind3 === 'programming' ? programming : (kind3 === 'subjective' ? subj : quizzes)).push(item);
+      (kind4 === 'programming' ? programming : kind4 === 'function' ? fn : kind4 === 'subjective' ? subj : quizzes).push(item);
     }
-    const groups = [];
-    if (quizzes.length) groups.push({ header: i18n('Objectives'), items: quizzes });
-    if (subj.length) groups.push({ header: i18n('Subjective Tasks'), items: subj });
-    if (programming.length) groups.push({ header: i18n('Programming'), items: programming });
+    const groups = fourGroups(quizzes, subj, programming, fn);
     for (const g of groups) {
       g.items.forEach((it, i) => {
         it.label = it.accepted ? '✓' : String(i + 1);

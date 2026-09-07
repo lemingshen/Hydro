@@ -34,7 +34,7 @@ import domain from '../model/domain';
 import * as oplog from '../model/oplog';
 import KnowledgeModel from '../model/knowledge';
 import problem from '../model/problem';
-import record from '../model/record';
+import record, { harnessFor } from '../model/record';
 import * as setting from '../model/setting';
 import solution from '../model/solution';
 import storage from '../model/storage';
@@ -126,23 +126,48 @@ export interface QueryContext {
  * into an object at read time), hence the regex matching here.
  */
 const KIND_OBJECTIVE_RE = /^\s*type:\s*['"]?objective/im;
+/**
+ * Four kinds now. F = FUNCTION TASK (PTA 函数题): the student submits one
+ * function and the server splices it into the teacher's judge program
+ * (model/record.ts wrapFunctionCode). Its letter is authoritative like the
+ * other three; it never falls out of the legacy config fallback, because a
+ * function task cannot exist without a pid — the harness is keyed by it.
+ */
 export const PROBLEM_KIND_FILTERS: Record<string, any> = {
     subjective: { pid: /^s/i },
+    function: { pid: /^f/i },
     objective: {
         $or: [
             { pid: /^o/i },
-            { pid: { $not: /^[sp]/i }, config: KIND_OBJECTIVE_RE },
+            { pid: { $not: /^[spf]/i }, config: KIND_OBJECTIVE_RE },
         ],
     },
     programming: {
         $and: [
-            { pid: { $not: /^[so]/i } },
+            { pid: { $not: /^[sof]/i } },
             { $or: [{ pid: /^p/i }, { config: { $not: KIND_OBJECTIVE_RE } }] },
         ],
     },
 };
 
-export type ProblemKind = 'programming' | 'objective' | 'subjective';
+/*
+ * `code` is not a fifth kind but a PICKER FILTER: programming ∪ function,
+ * for the surfaces that accept anything solved in the scratchpad (the
+ * self-learning session editor). The tabs never use it.
+ */
+PROBLEM_KIND_FILTERS.code = { $or: [PROBLEM_KIND_FILTERS.programming, PROBLEM_KIND_FILTERS.function] };
+
+export type ProblemKind = 'programming' | 'function' | 'objective' | 'subjective';
+export const PROBLEM_KINDS: ProblemKind[] = ['programming', 'function', 'objective', 'subjective'];
+
+/**
+ * Kinds that are SOLVED BY CODE — everything that enters the scratchpad,
+ * is judged by compiling, and is graded by the programming rubric. Function
+ * tasks are programming tasks with a narrower answer, so every place that
+ * used to ask "is this programming?" now asks this instead.
+ */
+export const CODE_KINDS = new Set<ProblemKind>(['programming', 'function']);
+export const isCodeKind = (k: string) => CODE_KINDS.has(k as ProblemKind);
 
 /**
  * Single-document twin of PROBLEM_KIND_FILTERS above: same precedence (pid
@@ -155,6 +180,7 @@ export function problemKindOf(pdoc: Pick<ProblemDoc, 'pid' | 'config'>): Problem
     const pid = String(pdoc.pid || '');
     if (/^s/i.test(pid)) return 'subjective';
     if (/^o/i.test(pid)) return 'objective';
+    if (/^f/i.test(pid)) return 'function';
     if (/^p/i.test(pid)) return 'programming';
     return typeof pdoc.config === 'string' && KIND_OBJECTIVE_RE.test(pdoc.config) ? 'objective' : 'programming';
 }
@@ -215,7 +241,7 @@ export class ProblemMainHandler extends Handler {
     @param('pjax', Types.Boolean)
     @param('quick', Types.Boolean)
     @param('sort', Types.Range(['default', 'recent']), true)
-    @param('kind', Types.Range(['programming', 'objective', 'subjective']), true)
+    @param('kind', Types.Range(['programming', 'function', 'objective', 'subjective', 'code']), true)
     @param('tags', Types.Content, true)
     @param('difficultyMin', Types.UnsignedInt, true)
     @param('difficultyMax', Types.UnsignedInt, true)
@@ -329,12 +355,15 @@ export class ProblemMainHandler extends Handler {
             // are hidden there instead of shown wrong.
             const baseAnd = query.$and ? [...query.$and] : [];
             const countOf = (f: any) => problem.count(domainId, { ...query, $and: [...baseAnd, f] });
-            const [pc, oc, sc] = await Promise.all([
+            const [pc, fc, oc, sc] = await Promise.all([
                 countOf(PROBLEM_KIND_FILTERS.programming),
+                countOf(PROBLEM_KIND_FILTERS.function),
                 countOf(PROBLEM_KIND_FILTERS.objective),
                 countOf(PROBLEM_KIND_FILTERS.subjective),
             ]);
-            kindCounts = { programming: pc, objective: oc, subjective: sc };
+            kindCounts = {
+                programming: pc, function: fc, objective: oc, subjective: sc,
+            };
         }
         if (kindFilter) query.$and = [...(query.$and || []), kindFilter];
         const sort = this.queryContext.sort;
@@ -680,6 +709,16 @@ export class ProblemDetailHandler extends ContestDetailBaseHandler {
                 baseLangs = Object.keys(setting.langs).filter((i) =>
                     (needHiddenLangs ? !setting.langs[i].remote : !setting.langs[i].remote && !setting.langs[i].hidden));
             }
+            /*
+             * PTA fork — FUNCTION TASKS: a harness exists per language
+             * FAMILY (`cc` covers cc.cc11, cc.cc17o2, …), so offer exactly
+             * the variants that can be judged and nothing else. Done here,
+             * by family, rather than through `config.langs`, which is
+             * intersected by exact id and would have dropped every variant.
+             */
+            if (this.pdoc.config.template && problemKindOf(this.pdoc) === 'function') {
+                baseLangs = baseLangs.filter((l) => !!harnessFor(this.pdoc.config.template, l));
+            }
             this.pdoc.config.langs = ['objective', 'submit_answer'].includes(this.pdoc.config.type) ? ['_'] : intersection(baseLangs, ...t);
         }
         await this.ctx.parallel('problem/get', this.pdoc, this);
@@ -1008,6 +1047,41 @@ async function applyAllowLangs(pdoc: ProblemDoc, owner: number, raw: string) {
  * config.yaml, keeping whatever else the file holds. Empty = leave the key
  * alone (the teacher edited the Markdown by hand or kept the old key).
  */
+/**
+ * PTA fork — FUNCTION TASKS, manual authoring. The create/edit form posts
+ * the judge program and the stub as `functionConfig` (JSON:
+ * {language, harness, stub}); they land in config.yaml as `template` /
+ * `stub` keyed by the language FAMILY — exactly what the AI Studio writes,
+ * so a hand-made F task and a generated one are indistinguishable to the
+ * judge path (model/record.ts) and to the problem page. Everything else in
+ * config.yaml (cases, limits) is kept. Empty = leave the keys alone.
+ */
+const isFunctionPid = (pid: any) => /^f/i.test(String(pid || ''));
+
+async function applyFunctionConfig(pdoc: ProblemDoc, owner: number, raw: string) {
+    if (!raw || !raw.trim()) return;
+    let j: any;
+    try {
+        j = JSON.parse(raw);
+    } catch {
+        throw new ValidationError('functionConfig');
+    }
+    const language = String(j?.language || '').trim();
+    const family = language.split('.')[0];
+    const harness = String(j?.harness ?? '');
+    const stub = String(j?.stub ?? '');
+    if (!family || !setting.langs[language]) throw new ValidationError('functionConfig', null, 'Pick the judge program\'s language.');
+    if (!harness.trim()) throw new ValidationError('functionConfig', null, 'The judge program cannot be empty.');
+    if (harness.length > 60000 || stub.length > 8000) throw new ValidationError('functionConfig', null, 'The judge program or stub is too long.');
+    const cfg = await readRawProblemConfig(pdoc);
+    // One family per save; other families the teacher wrote by hand in
+    // config.yaml survive untouched.
+    cfg.template = { ...(cfg.template && typeof cfg.template === 'object' ? cfg.template : {}), [family]: harness };
+    if (stub.trim()) cfg.stub = { ...(cfg.stub && typeof cfg.stub === 'object' ? cfg.stub : {}), [family]: stub };
+    if (!cfg.type) cfg.type = 'default';
+    await problem.addTestdata(pdoc.domainId, pdoc.docId, 'config.yaml', Buffer.from(yamlDump(cfg)), owner);
+}
+
 async function applyObjectiveConfig(pdoc: ProblemDoc, owner: number, raw: string) {
     if (!raw || !raw.trim()) return;
     let parsed: any;
@@ -1128,6 +1202,10 @@ export class ProblemEditHandler extends ProblemManageHandler {
             this.UiContext.objectiveAnswers = rawCfg.answers;
             if (rawCfg.matching && typeof rawCfg.matching === 'object') this.UiContext.objectiveMatching = rawCfg.matching;
         }
+        // The function-task editor prefills the judge program / stub from here.
+        if (rawCfg.template && typeof rawCfg.template === 'object') {
+            this.UiContext.functionConfig = { template: rawCfg.template, stub: (rawCfg.stub && typeof rawCfg.stub === 'object') ? rawCfg.stub : {} };
+        }
         this.response.body.knowledgePanel = await buildKnowledgePickPanel(this, this.args.domainId);
         this.response.template = 'problem_edit.html';
     }
@@ -1141,9 +1219,10 @@ export class ProblemEditHandler extends ProblemManageHandler {
     @post('difficulty', Types.PositiveInt, (i) => +i <= 10, true)
     @post('allowLangs', Types.String, true)
     @post('objectiveConfig', Types.Content, true)
+    @post('functionConfig', Types.Content, true)
     async post(
         domainId: string, pid: string | number, title: string, content: string,
-        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0, allowLangs = '', objectiveConfig = '',
+        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0, allowLangs = '', objectiveConfig = '', functionConfig = '',
     ) {
         if (typeof newPid !== 'string') newPid = `P${newPid}`;
         if (newPid !== this.pdoc.pid && await problem.get(domainId, newPid)) throw new ProblemAlreadyExistError(newPid);
@@ -1157,6 +1236,7 @@ export class ProblemEditHandler extends ProblemManageHandler {
         const pdoc = await problem.edit(domainId, this.pdoc.docId, $update);
         await applyAllowLangs(this.pdoc, this.user._id, allowLangs);
         if (isObjectivePid(newPid || this.pdoc.pid)) await applyObjectiveConfig(await problem.get(domainId, this.pdoc.docId), this.user._id, objectiveConfig);
+        if (isFunctionPid(newPid || this.pdoc.pid)) await applyFunctionConfig(await problem.get(domainId, this.pdoc.docId), this.user._id, functionConfig);
         this.response.redirect = this.url('problem_detail', { pid: newPid || pdoc.docId });
     }
 }
@@ -1634,9 +1714,10 @@ export class ProblemCreateHandler extends Handler {
     @post('tag', Types.Content, true, null, parseCategory)
     @post('allowLangs', Types.String, true)
     @post('objectiveConfig', Types.Content, true)
+    @post('functionConfig', Types.Content, true)
     async post(
         domainId: string, title: string, content: string, pid: string | number = '',
-        hidden = false, difficulty = 0, tag: string[] = [], allowLangs = '', objectiveConfig = '',
+        hidden = false, difficulty = 0, tag: string[] = [], allowLangs = '', objectiveConfig = '', functionConfig = '',
     ) {
         if (typeof pid !== 'string') pid = `P${pid}`;
         if (pid && await problem.get(domainId, pid)) throw new ProblemAlreadyExistError(pid);
@@ -1648,6 +1729,8 @@ export class ProblemCreateHandler extends Handler {
         if (cleanLangs.length) await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ langs: cleanLangs })), this.user._id);
         // The objective question builder's answer key → config.yaml.
         if (isObjectivePid(pid)) await applyObjectiveConfig(await problem.get(domainId, docId), this.user._id, objectiveConfig);
+        // The function-task editor's judge program + stub → config.yaml.
+        if (isFunctionPid(pid)) await applyFunctionConfig(await problem.get(domainId, docId), this.user._id, functionConfig);
         const files = new Set(Array.from(content.matchAll(/file:\/\/([\w-]+\.[a-zA-Z0-9]+)/g)).map((i) => i[1]));
         const tasks = [];
         for (const file of files) {

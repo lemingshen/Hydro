@@ -118,7 +118,16 @@ export interface AuthorChatTurn {
     content: string;
     at: Date;
 }
-export type AuthorKind = 'programming' | 'objective' | 'subjective';
+/**
+ * `function` = PTA 函数题: the student writes ONE FUNCTION and the server
+ * splices it into the teacher's judge program (model/record.ts). In the
+ * Studio it is a programming task with two extra artifacts — the HARNESS
+ * (the complete judge program) and the STUB (the empty function the
+ * scratchpad opens with) — and one extra verification: the harness must
+ * FAIL with the stub, or it does not actually depend on the student.
+ */
+export type AuthorKind = 'programming' | 'function' | 'objective' | 'subjective';
+export const isCodeAuthorKind = (k: AuthorKind | string) => k === 'programming' || k === 'function';
 
 export interface AuthorDraftDoc {
     _id: ObjectId;
@@ -188,6 +197,15 @@ export interface AuthorDraftDoc {
         alt?: { language: string, code: string };
         /** Starter code for STUDENTS: I/O boilerplate + TODO markers, folded into the statement. */
         starter?: { language: string, code: string };
+        /**
+         * Function tasks only. `harness` is the COMPLETE judge program with
+         * the splice marker; `stub` is the empty function students start
+         * from. Both go into config.yaml as `template` / `stub`, keyed by
+         * the language FAMILY, and the problem page renders the harness
+         * from there — so what students read is what runs.
+         */
+        harness?: { language: string, code: string };
+        stub?: { language: string, code: string };
         tests?: AuthorCase[];
         /** Teacher-facing briefing, auto-generated after verification passes. */
         report?: { summary: string, knowledgePoints: string[], caseDesign: string, pitfalls: string[] };
@@ -284,7 +302,9 @@ export function authorEnabled() {
  * opens the code scratchpad and the problem list files it under the wrong
  * tab.
  */
-const KIND_PREFIX: Record<AuthorKind, string> = { programming: 'P', objective: 'O', subjective: 'S' };
+const KIND_PREFIX: Record<AuthorKind, string> = {
+    programming: 'P', function: 'F', objective: 'O', subjective: 'S',
+};
 
 async function ensureKindPid(domainId: string, docId: number, kind: AuthorKind): Promise<string> {
     const prefix = KIND_PREFIX[kind] || 'P';
@@ -677,7 +697,7 @@ function briefBlock(d: AuthorDraftDoc): string {
         // The teacher's pre-selected knowledge points: the task exists to
         // exercise THESE. Listed with their catalog definitions so the model
         // designs for the skill, not for the label.
-        kind === 'programming' && d.brief.knowledge?.length
+        isCodeAuthorKind(kind) && d.brief.knowledge?.length
             ? `TARGET KNOWLEDGE POINTS (the task MUST exercise every one of these — see the rules of each stage):\n${d.brief.knowledge.map((k, i) => `${i + 1}. ${k.name}${k.description ? ` — ${k.description}` : ''}`).join('\n')}`
             : '',
     ];
@@ -757,6 +777,88 @@ Rules:
 - Every case's OUTPUT must stay small (the reference solution prints an aggregate answer, not the input back).
 - "purpose": one short line on what this case checks. "name": short slug like "min-n" or "max-random".
 - If the brief lists TARGET KNOWLEDGE POINTS, make sure the cases probe each of them (the edge case, the pitfall or the scale that makes each point matter) and say so in "purpose".`;
+
+/* ---------------- function tasks (PTA 函数题) ---------------- */
+
+const F_DESIGN = `Design a FUNCTION exercise (PTA 函数题) from the brief: the student implements the function(s); the judge program supplies everything else. Return the statement AND the judge program AND the stub in ONE object — the statement embeds the judge program, so the three must agree exactly.
+Schema: {"title": string, "body": string, "language": string, "harness": string, "stub": string}
+"language" must be exactly the requested judge language id.
+
+"body" (markdown) must follow EXACTLY this layout, these headings, this order:
+## Problem Description
+<what the function(s) must do — self-contained; pre-conditions such as "do not destroy the input"; representation details; the return contract, precisely>
+
+## Format of functions
+<ONE fenced block in the language holding the exact prototype(s) the student implements>
+<then prose: "where <param> is …" for every non-obvious parameter, and "<Type> is defined as the following:" followed by a SECOND fenced block with every typedef / struct the signatures depend on>
+<then "Note: …" for return conventions, e.g. what to return on failure, and any constant "defined by the judge program">
+
+## Sample program of judge:
+<ONE fenced block in the language holding the COMPLETE "harness" string, byte for byte>
+
+## Sample Input
+<the sample stdin as a fenced block named input1 (\`\`\`input1 … \`\`\`); a second sample as \`\`\`input2>
+
+## Sample Output
+<the exact stdout for each sample, as \`\`\`output1 (and \`\`\`output2), computed BY HAND — it is checked against the reference solution>
+
+## Constraints
+<explicit bounds for every variable and the guarantees the input satisfies>
+
+Rules for "harness" (the judge program):
+- A COMPLETE, compilable program: every include / import, every type definition from the statement, constants the statement says are "defined by the judge program" (e.g. #define ERROR 1e8), forward declarations of the student's function(s), and a main (or entry point) that reads stdin exactly as the samples show, calls the student's function(s), and prints exactly what Sample Output shows.
+- Every helper (GetOp, Read, Print, …) FULLY implemented — never "details omitted": this program is what actually runs.
+- Put the line  /* Your function will be put here */  (the language's comment syntax around the same words) exactly ONCE where the student's code is inserted: for C/C++ at the END, after main, with forward declarations above main (PTA's layout); for languages that resolve names late (Python), BEFORE the code that calls the function.
+- The harness must NOT define the student's function(s) and must not work without them.
+- Deterministic; nothing to stderr.
+
+Rules for "stub": ONLY the student's function(s) with the exact signature(s) from the statement and empty (or trivially returning) bodies — no main, no includes, no other code. It is what the editor opens with.
+
+Other rules: title short and descriptive, no numbering. If the brief lists TARGET KNOWLEDGE POINTS, design the function around them and never name them in the statement.`;
+
+/** The user-mandated section order of a function-task statement. */
+const F_SECTIONS = ['Problem Description', 'Format of functions', 'Sample program of judge', 'Sample Input', 'Sample Output', 'Constraints'];
+
+/** Section heading match that tolerates the trailing colon of "Sample program of judge:". */
+const fSectionRe = (name: string) => new RegExp(`^#{1,3}\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:?\\s*$`, 'im');
+
+/**
+ * Replace (or insert) the "## Sample program of judge:" block so the
+ * statement always shows the judge program that actually runs — the one
+ * source of truth is `artifacts.harness`, and this keeps the copy students
+ * read in step with it after a regenerate or a teacher edit.
+ */
+function withJudgeProgram(body: string, lang: string, code: string): string {
+    const b = String(body || '').replace(/\s+$/, '');
+    const fenceLang = (lang || '').split('.')[0].replace(/^cc$/, 'cpp');
+    const block = `## Sample program of judge:\n\`\`\`${fenceLang}\n${String(code || '').replace(/\s+$/, '')}\n\`\`\``;
+    const head = fSectionRe('Sample program of judge').exec(b);
+    if (head) {
+        const start = head.index;
+        const after = b.slice(start + head[0].length);
+        const next = /^#{1,3}\s+\S/m.exec(after);
+        const end = next ? start + head[0].length + next.index : b.length;
+        return `${b.slice(0, start)}${block}\n\n${b.slice(end)}`.replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+    }
+    const si = fSectionRe('Sample Input').exec(b);
+    if (si) return `${b.slice(0, si.index)}${block}\n\n${b.slice(si.index)}`;
+    return `${b}\n\n${block}`;
+}
+
+const F_SOLUTION = `Write the REFERENCE SOLUTION for the function exercise below: ONLY the function (and any private helper functions it needs), with the exact signature from the statement.
+Schema: {"language": string, "code": string}
+Rules:
+- "language" must be exactly the requested judge language id.
+- Return ONLY the function(s): no main, no input/output code, no #include lines that the judge program already provides. It will be inserted into the judge program shown below at the marker and compiled as one unit.
+- Prefer clarity; must comfortably meet typical limits at the stated constraints; deterministic.`;
+
+const F_ALT = `Write a SECOND, INDEPENDENT implementation of the function for the exercise below, in the SAME language. Used only to cross-check the reference; never shown to students.
+Schema: {"language": string, "code": string}
+Rules:
+- Derive it from the STATEMENT alone. Independence comes from re-reading the contract carefully — the simplest obviously-correct implementation wins; a plain brute force is welcome.
+- ONLY the function(s), exact signature, no main, no I/O. It is inserted into the judge program below at the marker.
+- Deterministic; nothing to stderr.`;
+
 
 const P_REPORT = `Write a short TEACHER BRIEFING for the finished programming task below. The teacher will read it to decide how to use the task in class.
 Schema: {"summary": string, "knowledgePoints": [string], "caseDesign": string, "pitfalls": [string]}
@@ -1481,18 +1583,61 @@ function phaseOf(d: AuthorDraftDoc): 'brief' | 'review' | 'approved' {
     return 'review';
 }
 
+/** The judge program as prompt context for every function-task artifact after the harness. */
+function harnessContext(d: AuthorDraftDoc): string {
+    if (!d.artifacts.harness) return '';
+    return `=== JUDGE PROGRAM (${d.artifacts.harness.language}) — the student's function is inserted at the marker ===\n${d.artifacts.harness.code.slice(0, 12000)}\n=== END JUDGE PROGRAM ===`;
+}
+
 async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any> {
     const kind = kindOf(d);
     if (kind === 'objective') return generateObjectiveArtifact(d, target);
     if (kind === 'subjective') return generateSubjectiveArtifact(d, target);
     const brief = briefBlock(d);
+    const isFn = kind === 'function';
     if (target === 'questions') target = 'statement'; // review phase alias
+    if (isFn && (target === 'statement' || target === 'harness')) {
+        /*
+         * FUNCTION TASKS: statement, judge program and stub come from ONE
+         * model call, because the statement EMBEDS the judge program (the
+         * "## Sample program of judge:" section of the PTA layout) — three
+         * separate calls could never be guaranteed to agree on signatures,
+         * types and constants. Regenerating the judge program alone
+         * ('harness') runs the same design and keeps the statement's other
+         * sections, replacing only the embedded program.
+         */
+        const wantLang = d.brief.language;
+        const ask = async (extra = '') => aiJSON(SYS_COMMON, [
+            `${F_DESIGN}\nRequested judge language id: ${wantLang} (${judgeLangs()[wantLang] || wantLang}) — ${langPromptHint(wantLang)}`,
+            extra, brief, target === 'harness' ? statementContext(d) : '',
+        ].filter((x) => x).join('\n\n'));
+        let j = await ask();
+        if (!j?.body || !j?.harness) throw new BadRequestError('The AI did not return a usable function exercise.');
+        let issues = fStatementIssues(j.body);
+        if (issues.length) {
+            const j2 = await ask(`Revise: the previous draft violated the layout — ${issues.join('; ')}. Keep the task, the story and the numbers; fix only the structure.`);
+            const issues2 = j2?.body ? fStatementIssues(j2.body) : issues;
+            if (j2?.body && j2?.harness && issues2.length < issues.length) { j = j2; issues = issues2; }
+            if (issues.length) logger.warn('[ai-studio] function statement of %s/%s kept layout issues: %s', d.domainId, d._id.toHexString(), issues.join('; '));
+        }
+        const language = judgeLangs()[j.language] ? j.language : wantLang;
+        const harness = String(j.harness).slice(0, 60000);
+        const stub = String(j.stub || '').slice(0, 8000);
+        // The embedded copy is normalised from the harness string itself, so
+        // the two can never drift even if the model pasted them differently.
+        const body = withJudgeProgram(String(j.body), language, harness).slice(0, 60000);
+        if (target === 'harness') {
+            const kept = d.artifacts.statement ? withJudgeProgram(d.artifacts.statement.body, language, harness) : body;
+            return { harness: { language, code: harness }, stub: { language, code: stub }, statement: { title: d.artifacts.statement?.title || String(j.title || ''), body: kept } };
+        }
+        return { statement: { title: String(j.title || '').slice(0, 120), body }, harness: { language, code: harness }, stub: { language, code: stub } };
+    }
     if (target === 'statement') {
         let j = await aiTitleBody(`${P_SPEC}\n\n${brief}`);
         // The five-section contract is what teachers review and students
         // read; one cheap repair round fixes most first-pass slips (a
         // missing Samples section, an unnamed sample fence).
-        let issues = statementIssues(j.body);
+        let issues = statementIssues(j.body, kind);
         if (issues.length) {
             const j2 = await aiTitleBody([
                 'Revise the problem statement below so that it satisfies EVERY rule — keep the task, the story and the numbers; only fix the structure. Problems found:',
@@ -1500,7 +1645,7 @@ async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any>
                 `Current title: ${j.title}`, `Current body:\n${j.body}`,
                 P_SPEC.split('\n').slice(2).join('\n'), brief,
             ].join('\n\n'));
-            const issues2 = statementIssues(j2.body);
+            const issues2 = statementIssues(j2.body, kind);
             if (issues2.length < issues.length) {
                 j = { title: j2.title || j.title, body: j2.body };
                 issues = issues2;
@@ -1511,17 +1656,21 @@ async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any>
     }
     if (target === 'solution' || target === 'alt') {
         if (!d.artifacts.statement) throw new BadRequestError('Generate the statement first.');
-        const p = target === 'solution' ? P_SOLUTION : P_ALT;
+        if (isFn && !d.artifacts.harness) throw new BadRequestError('Generate the judge program first.');
+        const p = isFn ? (target === 'solution' ? F_SOLUTION : F_ALT) : (target === 'solution' ? P_SOLUTION : P_ALT);
         // Cross-check language follows the teacher's C/C++ pairing policy
         // (see crosscheckLang): the auditor stays readable to the course
         // staff, and the C <-> C++ split still decorrelates I/O idioms.
-        const wantLang = target === 'alt' ? crosscheckLang(d.brief.language) : d.brief.language;
+        // A FUNCTION task's cross-check stays in the harness's language:
+        // there is exactly one judge program, and it is written for one
+        // language family.
+        const wantLang = (target === 'alt' && !isFn) ? crosscheckLang(d.brief.language) : (isFn ? d.artifacts.harness!.language : d.brief.language);
         // Optional second model for the cross-check: separate API calls are
         // already fully independent sessions, but they share one model's
         // blind spots — a DIFFERENT model rarely makes the identical
         // mistake on the identical case.
         const altModel = target === 'alt' ? aiTutor.sysStr('ai_author.crosscheck_model') : '';
-        const j = await aiJSON(SYS_COMMON, `${p}\nRequested judge language id: ${wantLang} (${judgeLangs()[wantLang] || wantLang}) — ${langPromptHint(wantLang)}\n\n${brief}\n\n${statementContext(d)}`, altModel || undefined);
+        const j = await aiJSON(SYS_COMMON, `${p}\nRequested judge language id: ${wantLang} (${judgeLangs()[wantLang] || wantLang}) — ${langPromptHint(wantLang)}\n\n${brief}\n\n${statementContext(d)}${isFn ? `\n\n${harnessContext(d)}` : ''}`, altModel || undefined);
         if (!j?.code) throw new BadRequestError('The AI did not return usable code.');
         const language = judgeLangs()[j.language] ? j.language : wantLang;
         return { [target]: { language, code: String(j.code).slice(0, 60000) } };
@@ -2045,10 +2194,24 @@ const STATEMENT_SECTIONS = ['Problem Description', 'Input Format', 'Output Forma
 const SECTION_RE = (name: string) => new RegExp(`^#{1,3}\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'im');
 
 /** What a drafted statement is missing against the contract (empty = fine). */
-function statementIssues(body: string): string[] {
+/** The function-task layout: six mandated sections, samples as input1/output1 fences under Sample Input / Sample Output. */
+function fStatementIssues(body: string): string[] {
     const issues: string[] = [];
     const b = String(body || '');
-    for (const name of STATEMENT_SECTIONS) if (!SECTION_RE(name).test(b)) issues.push(`missing section "# ${name}"`);
+    for (const name of F_SECTIONS) if (!fSectionRe(name).test(b)) issues.push(`missing section "## ${name}"`);
+    const samples = parseStatementSamples(b);
+    if (!samples.length) issues.push('Sample Input / Sample Output must hold ```input1 and ```output1 fenced blocks');
+    for (const smp of samples) if (!smp.output.trim()) issues.push(`sample ${smp.n} has an empty output block`);
+    if (!/```[a-z+]*\n[\s\S]*?(?:int\s+main|def\s+main|public\s+static\s+void\s+main)[\s\S]*?```/i.test(b)) issues.push('the Sample program of judge block must contain the complete judge program');
+    return issues;
+}
+
+function statementIssues(body: string, kind: AuthorKind = 'programming'): string[] {
+    if (kind === 'function') return fStatementIssues(body);
+    const issues: string[] = [];
+    const b = String(body || '');
+    const sections = STATEMENT_SECTIONS;
+    for (const name of sections) if (!SECTION_RE(name).test(b)) issues.push(`missing section "# ${name}"`);
     const samples = parseStatementSamples(b);
     if (!samples.length && SECTION_RE('Samples').test(b)) issues.push('the Samples section has no ```input1 / ```output1 fence pair');
     for (const smp of samples) if (!smp.output.trim()) issues.push(`sample ${smp.n} has an empty output block`);
@@ -2091,6 +2254,25 @@ function samplesSection(cases: AuthorCase[], outputs: string[]): string {
 function withSamples(body: string, samples: string, keepProse = true): string {
     const b = String(body || '').replace(/\s+$/, '');
     if (!samples) return b;
+    /*
+     * FUNCTION-TASK LAYOUT: samples live under two headings, "## Sample
+     * Input" and "## Sample Output" (PTA's layout), still as input1/output1
+     * fences so the renderer pairs them into sample boxes. The verified
+     * pairs replace everything from the first heading to the end of the
+     * second.
+     */
+    const si = fSectionRe('Sample Input').exec(b);
+    if (si) {
+        const inputs = [...samples.matchAll(/```input\d+[\s\S]*?```/g)].map((m) => m[0]).join('\n\n');
+        const outputs = [...samples.matchAll(/```output\d+[\s\S]*?```/g)].map((m) => m[0]).join('\n\n');
+        const start = si.index;
+        const so = fSectionRe('Sample Output').exec(b);
+        const tailFrom = so && so.index > start ? so.index + so[0].length : start + si[0].length;
+        const next = /^#{1,3}\s+\S/m.exec(b.slice(tailFrom));
+        const end = next ? tailFrom + next.index : b.length;
+        const block = `## Sample Input\n\n${inputs}\n\n## Sample Output\n\n${outputs}`;
+        return `${b.slice(0, start)}${block}\n\n${b.slice(end)}`.replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+    }
     const head = SECTION_RE('Samples').exec(b);
     if (head) {
         const start = head.index;
@@ -2335,9 +2517,9 @@ async function runContinue(domainId: string, id: ObjectId) {
         const kind = kindOf(d);
         const targets = kind === 'objective' ? ['answers']
             : kind === 'subjective' ? []
-                : ['solution', ...d.brief.crosscheck ? ['alt'] : [], 'tests'];
+                : [...(kind === 'function' && !d.artifacts.harness) ? ['harness'] : [], 'solution', ...d.brief.crosscheck ? ['alt'] : [], 'tests'];
         const LABEL: Record<string, string> = {
-            answers: 'the answer key', solution: 'the reference solution', alt: 'the cross-check solution', tests: 'the test cases',
+            answers: 'the answer key', harness: 'the judge program', solution: 'the reference solution', alt: 'the cross-check solution', tests: 'the test cases',
         };
         for (const t of targets) {
             if (cancelled.has(key)) throw Object.assign(new StoppedError('Stopped by the teacher'), { stage: 'generate' });
@@ -2614,6 +2796,26 @@ async function runObjectivePipeline(domainId: string, id: ObjectId) {
     }
 }
 
+/**
+ * The `template` / `stub` keys a FUNCTION draft contributes to every
+ * config.yaml the pipeline writes, keyed by the harness's language FAMILY
+ * (`cc.cc14` → `cc`) so every variant of that family is judgeable. Empty
+ * for other kinds, so the spreads below are no-ops there.
+ *
+ * Written into the bootstrap config too, not just the final one: the
+ * reference run and the AC gate both go through record.judge, which reads
+ * the harness from pdoc.config — without it they would compile the bare
+ * function and fail before the task ever reached a student.
+ */
+function functionConfigExtras(d: AuthorDraftDoc): Record<string, any> {
+    if (kindOf(d) !== 'function' || !d.artifacts.harness) return {};
+    const family = String(d.artifacts.harness.language || d.brief.language || '').split('.')[0];
+    if (!family) return {};
+    const out: Record<string, any> = { template: { [family]: d.artifacts.harness.code } };
+    if (d.artifacts.stub?.code) out.stub = { [family]: d.artifacts.stub.code };
+    return out;
+}
+
 async function runPipeline(domainId: string, id: ObjectId) {
     const key = id.toHexString();
     if (running.has(key)) return;
@@ -2632,6 +2834,9 @@ async function runPipeline(domainId: string, id: ObjectId) {
         };
         if (!d.artifacts.statement || !d.artifacts.solution || !d.artifacts.tests?.length) {
             throw Object.assign(new Error('Draft is incomplete: statement, reference solution and tests are all required.'), { stage: 'precheck' });
+        }
+        if (kindOf(d) === 'function' && !d.artifacts.harness?.code) {
+            throw Object.assign(new Error('Draft is incomplete: a function task also needs its judge program.'), { stage: 'precheck' });
         }
         await patchDraft(id, { pipeline: { status: 'running', stage: 'precheck', message: 'Preparing the scratch problem', startedAt: new Date() } });
 
@@ -2656,7 +2861,7 @@ async function runPipeline(domainId: string, id: ObjectId) {
         // REJECTS testdata whose per-case times sum past 60s, so the cap
         // scales with the case count. Calibration tightens at the end.
         const bootTime = fmtTimeMs(perCaseTimeCapMs(d.artifacts.tests.length));
-        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ time: bootTime, memory: '512m' })), d.owner);
+        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ time: bootTime, memory: '512m', ...functionConfigExtras(d) })), d.owner);
 
         // Stage 1: materialize the inputs (generator cases run in the
         // sandbox), then run the reference solution over them -> outputs.
@@ -2693,6 +2898,27 @@ async function runPipeline(domainId: string, id: ObjectId) {
                 const testsFault = !isTle && (e.generator || !!failedCase?.gen);
                 await stage('build', `AI is repairing the ${testsFault ? 'test cases' : 'reference solution'} (model call — can take a while)`);
                 d = await repairArtifact(d, testsFault ? 'tests' : 'solution', e);
+            }
+        }
+
+        /*
+         * Stage 1½ (function tasks): the harness must DEPEND on the student.
+         * If the judge program passes with the empty stub, it either
+         * defines the function itself or never calls it — and every
+         * submission would be accepted regardless of what was written.
+         * A stub that fails to compile, crashes, or prints something other
+         * than the reference on at least one case is what we want.
+         */
+        if (kindOf(d) === 'function' && d.artifacts.stub?.code) {
+            await stage('build', 'Checking that the judge program really depends on the student\'s function');
+            let stubOuts: string[] | null = null;
+            try {
+                stubOuts = await runOverInputs(domainId, docId, d.owner, d.artifacts.stub.language, d.artifacts.stub.code, inputs, 'empty stub');
+            } catch (e) {
+                stubOuts = null; // compile error / crash: exactly what a stub should do
+            }
+            if (stubOuts && stubOuts.every((o, i) => o === refOuts[i])) {
+                throw Object.assign(new Error('The judge program produces the correct output even with an EMPTY student function — it does not depend on the student\'s work. Regenerate the judge program so that it calls the function and does not define it.'), { stage: 'build' });
             }
         }
 
@@ -2820,7 +3046,7 @@ async function runPipeline(domainId: string, id: ObjectId) {
         }
         // Still generous here — the AC gate should measure true runtimes,
         // not enforce limits; stage 5 calibrates and tightens.
-        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ time: fmtTimeMs(perCaseTimeCapMs(inputs.length)), memory: '512m' })), d.owner);
+        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ time: fmtTimeMs(perCaseTimeCapMs(inputs.length)), memory: '512m', ...functionConfigExtras(d) })), d.owner);
 
         // Stage 4: the real judge gate — the reference solution must AC.
         await stage('judge', 'Submitting the reference solution for real judging');
@@ -2868,7 +3094,7 @@ async function runPipeline(domainId: string, id: ObjectId) {
         // Deliberately no `langs`: a Studio task is submittable in every
         // judge language. (Omitting the key is what makes it unrestricted —
         // an empty list would intersect to ZERO in Hydro's resolution.)
-        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ time, memory })), d.owner);
+        await problem.addTestdata(domainId, docId, 'config.yaml', Buffer.from(yamlDump({ time, memory, ...functionConfigExtras(d) })), d.owner);
 
         // Stage 6: the COMPUTED samples replace the drafted ones in the
         // statement. A drafted output that disagrees with the reference
@@ -3027,6 +3253,21 @@ function draftSummary(d: AuthorDraftDoc) {
     };
 }
 
+/**
+ * PTA fork — live status of a set of drafts, for the class report's
+ * "tasks created from this report" list. The same row the Studio list
+ * shows (draftSummary), so the two never disagree about what "Verifying…"
+ * or "Published" means; a draft the teacher has since discarded simply
+ * comes back missing and is shown as such.
+ */
+export async function draftSummariesIn(domainId: string, ids: ObjectId[]): Promise<Map<string, ReturnType<typeof draftSummary>>> {
+    const out = new Map<string, ReturnType<typeof draftSummary>>();
+    if (!ids.length) return out;
+    const docs = await coll.find({ domainId, _id: { $in: ids } }).toArray();
+    for (const d of docs) out.set(d._id.toHexString(), draftSummary(d));
+    return out;
+}
+
 class AiStudioBaseHandler extends Handler {
     async prepare() {
         if (!authorEnabled()) throw new ForbiddenError('The AI Studio is not enabled (or no AI provider is configured).');
@@ -3067,58 +3308,135 @@ class AiStudioHandler extends AiStudioBaseHandler {
     @param('qcount', Types.String, true)
     @param('knowledge', Types.String, true)
     async postCreate({ domainId }, topic: string, language = '', difficulty = 'intro', notes = '', crosscheck = true, kind = 'programming', allowLangs?: string, qtypes = '', qcount = '', knowledge = '') {
-        topic = topic.trim().slice(0, 2000);
-        if (!topic) throw new BadRequestError('Topic is required.');
-        if (!judgeLangs()[language]) language = defaultLang();
-        if (!['programming', 'objective', 'subjective'].includes(kind)) kind = 'programming';
-        const isObj = kind === 'objective';
-        const isProg = kind === 'programming';
         // A Studio programming task accepts EVERY judge language — the
         // solution language only says what the AI writes the reference
         // solution in. `allowLangs` is still accepted so a stale client's
         // form does not fail validation, but it is deliberately ignored.
         void allowLangs;
-        const qt = isObj
-            ? [...new Set(String(qtypes).split(',').map((x) => x.trim()).filter((x) => (QTYPES as readonly string[]).includes(x)))]
-            : [];
-        const qn = isObj ? sanitizeQCount(qcount) : 0;
-        // Target knowledge points (programming only): the task is designed
-        // to exercise these; resolved against the catalog now, snapshotted
-        // with descriptions for the prompts.
-        const targets = isProg ? await snapshotTargetKnowledge(domainId, knowledge) : [];
-        if (!DIFF_HINT[difficulty]) difficulty = 'intro';
-        const now = new Date();
-        const doc: AuthorDraftDoc = {
-            _id: new ObjectId(),
-            domainId,
-            owner: this.user._id,
-            createdAt: now,
-            updateAt: now,
-            brief: {
-                topic, notes: String(notes || '').slice(0, 20000), language, difficulty, crosscheck: isProg && !!crosscheck,
-                ...(isProg ? {} : { kind: kind as AuthorKind }),
-                ...(qt.length ? { qtypes: qt } : {}),
-                ...(qn ? { qcount: qn } : {}),
-                ...(targets.length ? { knowledge: targets } : {}),
-            },
-            artifacts: {},
-            approved: false,
-            chat: [],
-            pipeline: { status: 'idle', stage: 'draft', message: '' },
-            log: [{
-                at: now,
-                actor: 'teacher',
-                action: 'create',
-                detail: isObj
-                    ? `objective${qt.length ? ` [${qt.join(',')}]` : ''}`
-                    : kind === 'subjective'
-                        ? 'subjective'
-                        : `programming${targets.length ? ` targets: ${targets.map((t) => t.name).join(', ')}` : ''}`,
-            }],
-        };
-        await coll.insertOne(doc);
+        const doc = await createDraftFromBrief(domainId, this.user._id, {
+            topic, language, difficulty, notes, crosscheck, kind, qtypes, qcount, knowledge,
+        });
         this.response.body = { id: doc._id, url: this.url('ai_studio_detail', { id: doc._id }) };
     }
+}
+
+/** What a brief needs to become a draft — the create form's fields, also what the class report sends. */
+export interface DraftBrief {
+    topic: string;
+    language?: string;
+    difficulty?: string;
+    notes?: string;
+    crosscheck?: boolean;
+    kind?: string;
+    qtypes?: string;
+    qcount?: string;
+    /** Comma-separated target knowledge points, resolved against the catalog. */
+    knowledge?: string;
+    /** Free-text provenance for the draft log (e.g. "class report of Homework 3"). */
+    origin?: string;
+}
+
+/**
+ * Create a draft from a brief — the one path both the Studio's create form
+ * and the class report's remedial cards go through, so a report-born draft
+ * is indistinguishable from a hand-made one (same validation, same brief
+ * shape, same log entry, same pipeline).
+ */
+export async function createDraftFromBrief(domainId: string, owner: number, b: DraftBrief): Promise<AuthorDraftDoc> {
+    const topic = String(b.topic || '').trim().slice(0, 2000);
+    if (!topic) throw new BadRequestError('Topic is required.');
+    let language = String(b.language || '');
+    if (!judgeLangs()[language]) language = defaultLang();
+    let kind = String(b.kind || 'programming');
+    if (!['programming', 'function', 'objective', 'subjective'].includes(kind)) kind = 'programming';
+    const isObj = kind === 'objective';
+    // Both code kinds share the programming brief: a solution language,
+    // an optional cross-check, and target knowledge points.
+    const isProg = isCodeAuthorKind(kind);
+    const qt = isObj
+        ? [...new Set(String(b.qtypes || '').split(',').map((x) => x.trim()).filter((x) => (QTYPES as readonly string[]).includes(x)))]
+        : [];
+    const qn = isObj ? sanitizeQCount(String(b.qcount || '')) : 0;
+    // Target knowledge points (code kinds only): the task is designed to
+    // exercise these; resolved against the catalog now, snapshotted with
+    // descriptions for the prompts.
+    const targets = isProg ? await snapshotTargetKnowledge(domainId, String(b.knowledge || '')) : [];
+    let difficulty = String(b.difficulty || 'intro');
+    if (!DIFF_HINT[difficulty]) difficulty = 'intro';
+    const now = new Date();
+    const doc: AuthorDraftDoc = {
+        _id: new ObjectId(),
+        domainId,
+        owner,
+        createdAt: now,
+        updateAt: now,
+        brief: {
+            topic, notes: String(b.notes || '').slice(0, 20000), language, difficulty, crosscheck: isProg && b.crosscheck !== false,
+            /*
+             * `kind` is omitted ONLY for programming (the legacy default
+             * kindOf() falls back to). It must not key off `isProg`:
+             * that flag also covers function tasks, and a function draft
+             * saved without its kind is silently pipelined, labelled and
+             * listed as a programming task.
+             */
+            ...(kind === 'programming' ? {} : { kind: kind as AuthorKind }),
+            ...(qt.length ? { qtypes: qt } : {}),
+            ...(qn ? { qcount: qn } : {}),
+            ...(targets.length ? { knowledge: targets } : {}),
+        },
+        artifacts: {},
+        approved: false,
+        chat: [],
+        pipeline: { status: 'idle', stage: 'draft', message: '' },
+        log: [{
+            at: now,
+            actor: 'teacher',
+            action: 'create',
+            detail: `${isObj
+                ? `objective${qt.length ? ` [${qt.join(',')}]` : ''}`
+                : kind === 'subjective'
+                    ? 'subjective'
+                    : `${kind}${targets.length ? ` targets: ${targets.map((t) => t.name).join(', ')}` : ''}`}${b.origin ? ` — ${String(b.origin).slice(0, 200)}` : ''}`,
+        }],
+    };
+    await coll.insertOne(doc);
+    return doc;
+}
+
+/**
+ * PTA fork — the class report's "Create N tasks" button.
+ *
+ * Creates the ticked drafts and starts EVERY statement AT ONCE. The report
+ * page opens one browser tab per draft, so the teacher watches five
+ * statements being written side by side, then decides per draft — press
+ * Continue to draft solutions and tests and verify, or Discard. Nothing
+ * beyond the statement runs without that decision: the Studio's approval
+ * gate is exactly the decision point this flow is built around.
+ *
+ * Each draft is marked `running` BEFORE the response goes back, so a tab
+ * that opens instantly finds a running pipeline and polls, instead of an
+ * idle draft with a Generate button and nothing happening. Parallel is safe
+ * here: runGenerateStatement guards per draft id, and five statement calls
+ * is the whole cost — the expensive verification stays behind Continue.
+ */
+export async function createRemedialDrafts(
+    domainId: string, owner: number, briefs: DraftBrief[],
+): Promise<{ id: ObjectId, title: string, kind: string }[]> {
+    const created: AuthorDraftDoc[] = [];
+    for (const b of briefs.slice(0, 8)) {
+        // eslint-disable-next-line no-await-in-loop
+        const d = await createDraftFromBrief(domainId, owner, b);
+        // eslint-disable-next-line no-await-in-loop
+        await patchDraft(d._id, {
+            pipeline: { status: 'running', stage: 'generate', message: 'Starting...', startedAt: new Date() },
+        }, { actor: 'teacher', action: 'generate:statement', detail: 'from class report' });
+        created.push(d);
+    }
+    for (const d of created) {
+        runGenerateStatement(domainId, d._id)
+            .catch((e: any) => logger.warn('[ai-studio] remedial statement %s: %s', d._id.toHexString(), e.message));
+    }
+    return created.map((d) => ({ id: d._id, title: d.brief.topic.slice(0, 80), kind: kindOf(d) }));
 }
 
 class AiStudioDetailHandler extends AiStudioBaseHandler {
@@ -3300,6 +3618,29 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
         let patch: any = null;
         if (target === 'statement' && j?.title && typeof j.body === 'string') patch = { title: String(j.title).slice(0, 120), body: String(j.body).slice(0, 30000) };
         if ((target === 'solution' || target === 'alt') && typeof j?.code === 'string') patch = { language: judgeLangs()[j.language] ? j.language : this.ddoc.brief.language, code: String(j.code).slice(0, 60000) };
+        if (target === 'harness') {
+            /*
+             * FUNCTION TASKS: the judge program and the stub are one edit —
+             * they share a language and a signature, and a harness saved
+             * without its stub would open the editor on the previous
+             * signature. Editing either invalidates verification: the AC
+             * gate and the stub-dependency check certified the OLD program.
+             */
+            if (kindOf(this.ddoc) !== 'function') throw new BadRequestError('Only function tasks have a judge program.');
+            if (typeof j?.harness !== 'string' || !j.harness.trim()) throw new BadRequestError('The judge program cannot be empty.');
+            const language = judgeLangs()[j.language] ? j.language : (this.ddoc.artifacts.harness?.language || this.ddoc.brief.language);
+            const harnessCode = String(j.harness).slice(0, 60000);
+            await patchDraft(this.ddoc._id, {
+                'artifacts.harness': { language, code: harnessCode },
+                'artifacts.stub': { language, code: String(j.stub || '').slice(0, 8000) },
+                // The statement embeds the judge program; keep the copy the
+                // students read identical to the one that runs.
+                ...(this.ddoc.artifacts.statement ? { 'artifacts.statement': { ...this.ddoc.artifacts.statement, body: withJudgeProgram(this.ddoc.artifacts.statement.body, language, harnessCode) } } : {}),
+                'pipeline.status': this.ddoc.pipeline.status === 'passed' ? 'idle' : this.ddoc.pipeline.status,
+            }, { actor: 'teacher', action: 'edit:harness' });
+            this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)) };
+            return;
+        }
         if (target === 'tests') {
             const cases = (Array.isArray(j?.cases) ? j.cases : Array.isArray(j) ? j : []).map(validCase).filter((x) => x).slice(0, 12);
             if (cases.length >= 3) patch = cases;
@@ -3361,7 +3702,7 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
             if (typeof j?.language === 'string' && judgeLangs()[j.language]) extra['brief.language'] = j.language;
             // Target knowledge points (programming): the draft page sends
             // the picker's current list; absent = leave untouched.
-            if (kindOf(this.ddoc) === 'programming' && (Array.isArray(j?.knowledge) || typeof j?.knowledge === 'string')) {
+            if (isCodeAuthorKind(kindOf(this.ddoc)) && (Array.isArray(j?.knowledge) || typeof j?.knowledge === 'string')) {
                 extra['brief.knowledge'] = await snapshotTargetKnowledge(this.ddoc.domainId, j.knowledge);
             }
             await patchDraft(this.ddoc._id, {
@@ -3759,6 +4100,40 @@ export async function ensureBonusPublished(domainId: string, id: ObjectId): Prom
         }, { actor: 'system', action: 'publish', detail: `${pubPid} — bonus task added to the problem set` });
     }
     return true;
+}
+
+/**
+ * 📚 Publish every bonus task that has passed its pipeline but is still
+ * hidden, so it reaches the problem set for everyone to practise.
+ *
+ * ensureBonusPublished already does this, but only when somebody READS the
+ * bonus entry (the session page's lazy repair). A bonus whose pipeline
+ * finished after the student closed the tab therefore stayed hidden until
+ * the next visit — possibly never. This is the same work driven by the
+ * periodic sweep instead of by a page view, so a bonus task reaches the
+ * problem set on its own.
+ *
+ * Idempotent and cheap: the query only matches passed bonus drafts, and
+ * ensureBonusPublished writes nothing once the task is already visible.
+ */
+export async function publishReadyBonusTasks(limit = 200): Promise<number> {
+    const drafts = await coll.find({
+        // `bonus` is the {ssid, uid} link back to the session, not a flag —
+        // its presence is what marks a draft as a bonus task.
+        bonus: { $exists: true, $ne: null },
+        'pipeline.status': 'passed',
+        docId: { $exists: true, $ne: null },
+    } as any).project({ _id: 1, domainId: 1 }).limit(limit).toArray();
+    let n = 0;
+    for (const d of drafts as any[]) {
+        try {
+            // eslint-disable-next-line no-await-in-loop
+            if (await ensureBonusPublished(d.domainId, d._id)) n += 1;
+        } catch (e: any) {
+            logger.warn('[ai-studio] bonus publish sweep failed for %s: %s', String(d._id), e.message);
+        }
+    }
+    return n;
 }
 
 /** Retry a failed bonus build (statement kept). */

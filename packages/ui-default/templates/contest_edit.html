@@ -169,6 +169,24 @@
           <input type="hidden" name="pids" value="{{ pids }}">
           <input type="hidden" name="paper" value="">
         </div>
+        {#-
+          PTA fork: FUNCTION tasks (pid F…) — one function each, spliced into
+          the teacher's judge program and judged like programming. Scored per
+          task like programming, but picked in their own section so the
+          editor matches the rail and the paper. contest_edit.page.ts folds
+          them into the `paper` JSON as `fn`; handler/contest.ts parsePaper
+          validates the kind.
+        -#}
+        <div style="padding-top: 0" class="section__header">
+          <h2 class="section__title">{{ _('Function Tasks') }}</h2>
+        </div>
+        <div class="section__body tep" id="tep-function">
+          <div class="pta-note pta-note--amber tep__note">{{ _('Students write only the function; your judge program does the rest. Judged and scored like programming tasks. Give each task the points it is worth.') }}</div>
+          <label>{{ _('Tasks') }} <small class="tep__hint">{{ _('Search by title or id; hover a row to preview the statement.') }}</small>
+            <input class="textbox tep__pids" name="tep_pids_fn" data-pids-for="fn" placeholder="{{ _('Pick function tasks...') }}">
+          </label>
+          <div class="tep__scores" id="tep-fn-scores"></div>
+        </div>
         <div style="padding-top: 0" class="section__header">
           <h2 class="section__title">{{ _('Test Settings') }}</h2>
         </div>

@@ -76,14 +76,19 @@
         <td class="col--name col--problem-name" data-star-action="{{ url('problem_detail', pid=pdoc.docId) }}" {% if handler.user.hasPriv(PRIV.PRIV_USER_PROFILE) %} data-star="{{ psdoc.star }}"{% endif %}>
           {{ problem.render_problem_title(pdoc) }}
           {#-
-            PTA fork: this task belongs to a homework / test / self-learning
-            session, so students do not see it in the problem set at all
-            (handler/problem.ts hiddenActivityPids). Teachers get the badge
-            instead — hover for the activities that hold it.
+            PTA fork: this task belongs to a homework / test / session. The
+            lock is a START gate (lib/activity_pids.ts), so the badge has two
+            readings and must not claim the wrong one:
+              🔒 locked  — at least one holding activity has NOT begun, so
+                           students genuinely cannot see the task
+              · in       — every holding activity has begun; the task is
+                           back in the problem set for everyone, and this is
+                           only telling the teacher where it is also used
           -#}
           {%- set _act = inActivity[pdoc.docId] if inActivity else none -%}
           {%- if _act -%}
-          <span class="pta-inact" title="{{ _('Hidden from students: this task belongs to') }} {{ _act|join(', ', 'title') }}">🔒 {{ _('In') }}
+          {%- set _locked = false -%}{%- for a in _act -%}{% if a.pending %}{% set _locked = true %}{% endif %}{%- endfor -%}
+          <span class="pta-inact{% if not _locked %} pta-inact--open{% endif %}" title="{% if _locked %}{{ _('Hidden from students until it starts: this task belongs to') }}{% else %}{{ _('Visible in the problem set. Also used in') }}{% endif %} {{ _act|join(', ', 'title') }}">{% if _locked %}🔒{% else %}·{% endif %} {{ _('In') }}
             {%- for a in _act -%}{% if loop.index0 %},{% endif %} {% if a.kind == 'homework' %}{{ _('Homework') }}{% elif a.kind == 'test' %}{{ _('Test') }}{% else %}{{ _('Self-Learning') }}{% endif %}{%- if loop.index0 < 1 %} “{{ a.title|truncate(28, true, '…') }}”{% endif %}{%- endfor -%}
             {%- if _act.length > 2 %} +{{ _act.length - 2 }}{% endif -%}
           </span>

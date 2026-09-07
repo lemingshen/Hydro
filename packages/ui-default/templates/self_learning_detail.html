@@ -216,9 +216,11 @@
   .slp-kind--p { color: #1c7ed6; background: #e8f2fd; border-color: #cbe2f8; }
   .slp-kind--o { color: #0ca678; background: #e6f7f1; border-color: #bfe9db; }
   .slp-kind--a { color: #e8590c; background: #fdf0e6; border-color: #f6d7bd; }
+  .slp-kind--f { color: #e67700; background: #fff4e0; border-color: #ffd28a; }
   .theme--dark .slp-kind--p { color: #4dabf7; background: #16283a; border-color: #24435f; }
   .theme--dark .slp-kind--o { color: #3dd6a5; background: #12241f; border-color: #1d5c49; }
   .theme--dark .slp-kind--a { color: #ffa94d; background: #2e2118; border-color: #5c4326; }
+  .theme--dark .slp-kind--f { color: #ffc078; background: #2b2214; border-color: #7a5316; }
   .slp-go { flex: 0 0 auto; margin-left: auto; font-size: 12.5px; font-weight: 500; color: #fff; text-decoration: none; background: linear-gradient(120deg, #4dabf7, #1c7ed6); border-radius: 999px; padding: 5px 16px; box-shadow: 0 5px 12px -5px rgba(28, 126, 214, .6); transition: filter .13s ease, transform .13s var(--pta-ease); }
   .slp-go:hover { color: #fff; filter: brightness(1.08); transform: translateY(-1px); }
   .slp-row--gone { opacity: .6; }
@@ -565,6 +567,9 @@
               <span class="slp-kind slp-kind--o">{{ _('Quiz') }}</span>
             {% elif pdoc.config and pdoc.config.type == 'submit_answer' %}
               <span class="slp-kind slp-kind--a">{{ _('Submit Answer') }}</span>
+            {% elif pdoc.pid and (pdoc.pid|lower|first) == 'f' %}
+              {#- PTA fork: function tasks are `default`-typed to the judge, so the pid letter is what tells them apart. -#}
+              <span class="slp-kind slp-kind--f">{{ _('Function') }}</span>
             {% else %}
               <span class="slp-kind slp-kind--p">{{ _('Programming') }}</span>
             {% endif %}

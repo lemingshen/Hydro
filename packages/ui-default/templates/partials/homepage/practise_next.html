@@ -6,27 +6,11 @@
   lands and asks "what should I do today" — the problem set, where this
   panel lived before, is already a list of things to do.
 
-  ⚠ WHY EVERYTHING IS INLINE IN THIS FILE, and why the slot is still called
-  `hitokoto`: the markup lived briefly in a NEW partial that this template
-  pulled in with {% include %}. It rendered correctly in every local test
-  and still broke the live homepage — the edit to THIS file arrived, the
-  new file did not, and the include threw
-  "Cannot get template partials/homepage/practise_next.html" across the
-  whole page. Templates are registered by scanning the templates directory
-  at boot (backendlib/template.ts Service.init), so a file that never
-  reaches the deployment is simply absent from the registry, and an
-  {% include %} of it is fatal rather than degraded.
-
-  It is the same lesson handler/problem_trajectory.ts records for handlers:
-  in this deployment, edits to existing files land and brand-new files
-  cannot be relied on. So this card depends on no file but itself, and the
-  homepage layout setting keeps pointing at `hitokoto` — a slot key every
-  existing database already has.
-
   THREE AUDIENCES, three answers:
-   • root  — keeps the bulk user-import card this slot has carried since
-             the fork moved it here (pages/bulk_add_users.page.js binds
-             #bulk-add-users-btn, so the id must not change).
+   • root  — keeps the bulk user-import card that this slot has carried
+             since the fork moved it here. Losing it was the one real risk
+             in repurposing the slot, so it is preserved verbatim, id and
+             all (pages/bulk_add_users.page.js binds #bulk-add-users-btn).
    • a signed-in learner — the panel, filled in by
              pages/knowledge_map.page.js from the cached map.
    • a guest — nothing. The map is derived from the viewer's own history,

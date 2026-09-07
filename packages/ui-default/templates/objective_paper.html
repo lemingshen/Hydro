@@ -94,6 +94,14 @@
             <span class="paper-overview__meta">{{ programmingCount }} {{ _('task(s)') }} · <b>{{ programmingPoints }}</b> {{ _('pts') }}</span>
           </span>
           {%- endif -%}
+          {%- if functionCount -%}
+          {#- PTA fork: function tasks (pid F…) — one function each, solved in the scratchpad; listed apart from programming as in the rail. -#}
+          <span class="paper-overview__cell paper-overview__cell--prog">
+            <span class="paper-overview__icon">🧩</span>
+            <span class="paper-overview__name">{{ _('Function') }}</span>
+            <span class="paper-overview__meta">{{ functionCount }} {{ _('task(s)') }} · <b>{{ functionPoints }}</b> {{ _('pts') }}</span>
+          </span>
+          {%- endif -%}
           {%- if subjectiveCount -%}
           {#- PTA fork: subjective tasks (homework editor's fifth section) — handed in on their pages, graded by the teacher. -#}
           <span class="paper-overview__cell paper-overview__cell--prog" title="{{ _('Handed in on the task page and graded by the teacher by hand.') }}">

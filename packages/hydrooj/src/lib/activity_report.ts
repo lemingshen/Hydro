@@ -813,6 +813,45 @@ export function activityReportContext(corpus: any, findings: any): string {
     return out.join('\n');
 }
 
+/**
+ * PTA fork — the json:remedial trailer (one Studio brief per concept),
+ * extracted and stripped from the prose like json:concepts. Tolerant by
+ * design: a missing or unparsable block yields [] and the report stands —
+ * the prompts are an enhancement to the report, never a condition of it.
+ * Student tokens and task labels are validated against the corpus so a
+ * hallucinated "S99" or "P42" cannot reach the teacher's cards.
+ */
+export function extractRemedialBlock(md: string, validLabels?: Set<string>, validTokens?: Set<string>): { report: string, remedial: any[] } {
+    const m = md.match(/```json:remedial[ \t]*\n([\s\S]*?)```/);
+    if (!m) return { report: md.trim(), remedial: [] };
+    const report = (md.slice(0, m.index) + md.slice((m.index as number) + m[0].length)).trim();
+    let remedial: any[] = [];
+    try {
+        const parsed = JSON.parse(m[1]);
+        // Remedial practice is always a code task; a quiz answer from an
+        // older prompt (or a stray value) becomes a programming task.
+        const KINDS = ['programming', 'function'];
+        const DIFFS = ['intro', 'medium', 'challenge'];
+        if (Array.isArray(parsed?.remedial)) {
+            remedial = parsed.remedial
+                .filter((r: any) => r && typeof r.concept === 'string' && typeof r.brief === 'string' && r.brief.trim())
+                .slice(0, 8)
+                .map((r: any) => ({
+                    concept: String(r.concept).slice(0, 60),
+                    kind: KINDS.includes(r.kind) ? r.kind : 'programming',
+                    difficulty: DIFFS.includes(r.difficulty) ? r.difficulty : 'intro',
+                    title: String(r.title || r.concept).slice(0, 80),
+                    brief: String(r.brief).slice(0, 2000),
+                    avoid: (Array.isArray(r.avoid) ? r.avoid : []).map(String).filter((l: string) => !validLabels || validLabels.has(l)).slice(0, 12),
+                    students: (Array.isArray(r.students) ? r.students : []).map(String).filter((t: string) => !validTokens || validTokens.has(t)).slice(0, 200),
+                }));
+        }
+    } catch (e) {
+        logger.warn('[activity-report] remedial block unparsable: %s', e.message);
+    }
+    return { report, remedial };
+}
+
 /** The mandatory json:concepts trailer, extracted and stripped from the prose. */
 export function extractConceptBlock(md: string, validLabels?: Set<string>): { report: string, concepts: any[] } {
     const m = md.match(/```json:concepts[ \t]*\n([\s\S]*?)```/);
@@ -981,14 +1020,22 @@ export async function runActivityReportJob(domainId: string, tdoc: any, kind: 'h
         const reduceCtx = activityReportContext(corpus, findings);
         const raw = await aiTutor.callWithRetry(() => aiTutor.runActivityReport(reduceCtx), { label: 'activity reduce' });
         await progress({ stage: 'finalize', done: batches.length, total: batches.length, ...covPatch });
-        const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(raw, labels);
         const sidMap = [...corpus.sOf.entries()].map(([uid, sTok]) => ({ s: sTok, uid, uname: corpus.udict[uid]?.uname || `user#${uid}` }));
+        const { report: withoutRemedial, remedial: remedialAnon } = extractRemedialBlock(raw, labels, new Set(sidMap.map((e) => e.s)));
+        const { report: reportAnon, concepts: conceptsAnon } = extractConceptBlock(withoutRemedial, labels);
         const byTok = new Map(sidMap.map((e) => [e.s, e.uname]));
+        const uidByTok = new Map(sidMap.map((e) => [e.s, e.uid]));
         const substitute = (text: string) => text.replace(/\bS(\d+)\b/g, (m) => byTok.get(m) || m);
         const reportNamed = substitute(reportAnon);
         const concepts = conceptsAnon.map((c: any) => ({ ...c, students: (c.students || []).map((tok: string) => byTok.get(tok) || tok) }));
+        const remedial = remedialAnon.map((r: any) => ({
+            ...r,
+            brief: substitute(r.brief),
+            students: (r.students || []).map((tok: string) => byTok.get(tok) || tok),
+            uids: (r.students || []).map((tok: string) => uidByTok.get(tok)).filter((u: any) => typeof u === 'number'),
+        }));
         await setClassReport({
-            domainId, tid, reportAnon, reportNamed, sidMap, concepts, statsSnapshot: corpus.light, participants: corpus.uids.length, generatedBy: by,
+            domainId, tid, reportAnon, reportNamed, sidMap, concepts, remedial, statsSnapshot: corpus.light, participants: corpus.uids.length, generatedBy: by,
         });
         await setClassReportJob(domainId, tid, {
             status: 'done', stage: 'done', done: batches.length, total: batches.length, startedAt, finishedAt: new Date(), by, ...covPatch,

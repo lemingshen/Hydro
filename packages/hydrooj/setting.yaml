@@ -10,11 +10,17 @@ homepage:
       ranking: 10
       discussion: 20
     - width: 3
+      # PTA fork: this slot now renders the 🎯 Practise next card. The KEY
+      # stays `hitokoto` on purpose — the homepage layout is a stored system
+      # setting, so every existing database already has this key, and a
+      # renamed slot would point at a template those deployments would have
+      # to receive as a new file. See partials/homepage/hitokoto.html.
       hitokoto: true
       starred_problems: 50
       recent_problems: 10
       discussion_nodes: true
-      suggestion: true
+      # PTA fork: `suggestion` (the upstream "Recommended" links card) is
+      # retired — see partials/homepage/suggestion.html.
 langs:
   type: yaml
   desc: Code language settings

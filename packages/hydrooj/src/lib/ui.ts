@@ -51,6 +51,16 @@ inject('Nav', 'problem_main', { prefix: 'problem' }, PERM.PERM_VIEW_PROBLEM);
 inject('Nav', 'contest_main', { prefix: 'contest' }, PERM.PERM_VIEW_CONTEST);
 inject('Nav', 'homework_main', { prefix: 'homework' }, PERM.PERM_VIEW_HOMEWORK);
 inject('Nav', 'self_learning', { prefix: 'self_learning' });
+/*
+ * 🗺 The learner's own knowledge map.
+ *
+ * Gated on BOTH bits the page itself needs: PRIV_USER_PROFILE because the
+ * map is derived from the viewer's own history (a guest has nothing to
+ * show), and PERM_VIEW_PROBLEM because KnowledgeMapHandler.prepare requires
+ * it. Gating on the priv alone put a link in the nav that answered 403 in
+ * any domain where students are not granted PERM_VIEW_PROBLEM.
+ */
+inject('Nav', 'knowledge_map', { prefix: 'knowledge_map' }, PERM.PERM_VIEW_PROBLEM, PRIV.PRIV_USER_PROFILE);
 inject('Nav', 'discussion_main', { prefix: 'discussion', more: true }, PERM.PERM_VIEW_DISCUSSION);
 inject('Nav', 'record_main', {
     prefix: 'record',

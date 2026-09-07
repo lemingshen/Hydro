@@ -25,8 +25,12 @@ import { api, i18n, request } from 'vj/utils';
 
 const KIND_LABEL: Record<string, string> = {
   programming: 'Programming',
+  function: 'Function',
   objective: 'Objective',
   subjective: 'Subjective',
+  // Not a kind: the server's programming ∪ function filter, used as a
+  // lockKind by pickers that accept anything solved with code.
+  code: 'Programming / Function',
 };
 
 /**
@@ -40,6 +44,7 @@ function kindOf(pdoc: any): string {
   const pid = String(pdoc?.pid || '');
   if (/^s/i.test(pid)) return 'subjective';
   if (/^o/i.test(pid)) return 'objective';
+  if (/^f/i.test(pid)) return 'function';
   return 'programming';
 }
 
@@ -242,7 +247,7 @@ function FilterBar({ value, onChange, lockKind }: { value: Filters, onChange: (f
           >
             {i18n(KIND_LABEL[lockKind] || lockKind)} · {i18n('only')}
           </button>
-        ) : ['', 'programming', 'objective', 'subjective'].map((k) => (
+        ) : ['', 'programming', 'function', 'objective', 'subjective'].map((k) => (
           <button
             key={k || 'all'}
             type="button"

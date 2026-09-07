@@ -3,7 +3,7 @@
 <style>
   .sle-tip { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--pta-line); border-radius: 12px; background: linear-gradient(135deg, var(--pta-blue-soft), var(--pta-violet-soft)); padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: var(--pta-ink-soft); animation: ptaFadeUp .28s var(--pta-ease) backwards; }
   .sle-tip__icon { font-size: 20px; line-height: 1.2; }
-  .sle-form input[name="pids"] { font-family: var(--font-family); }
+  .sle-form input[name="pids"], .sle-form input[name="sl_pids_prog"], .sle-form input[name="sl_pids_fn"] { font-family: var(--font-family); }
   .sle-legacy { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--pta-warn-line); border-left-width: 4px; border-left-color: var(--pta-warn); background: var(--pta-warn-soft); color: var(--pta-ink); font-size: 12.5px; line-height: 1.6; animation: ptaFadeUp .26s var(--pta-ease) backwards; }
   .sle-legacy ul { margin: 4px 0 0 18px; }
   .sle-legacy code { font-family: var(--code-font-family); }
@@ -94,21 +94,22 @@
       </div>
       <div class="section__body">
         {#-
-          Sessions are programming-only. The picker below is locked to
-          programming tasks (it cannot add anything else), and the handler
-          refuses the form while a non-programming task is still listed —
+          Sessions hold CODE tasks only — programming (P) and function (F).
+          The picker below is locked to those two kinds (it cannot add
+          anything else), and the handler refuses the form while a quiz or
+          subjective task is still listed —
           a session saved before the rule may carry some, so name them.
         -#}
         {#-
           AI task advisor: the teacher describes the training goal; the
-          advisor proposes interlocking programming tasks with reasons.
+          advisor proposes interlocking code tasks with reasons.
           Rendered by self_learning_edit.page.js; the handler tells us
           whether an AI provider is configured.
         -#}
         <div id="sl-advisor" data-available="{{ 'yes' if advisorAvailable else '' }}"></div>
         {% if legacyTasks and legacyTasks.length %}
         <div class="sle-legacy">
-          ⚠️ {{ _('Self-learning sessions can only contain programming tasks. This session still lists the tasks below; remove them from the problem list before saving:') }}
+          ⚠️ {{ _('Self-learning sessions can only contain programming and function tasks. This session still lists the tasks below; remove them from the problem list before saving:') }}
           <ul>
           {%- for t in legacyTasks -%}
             <li><code>{{ t.pid }}</code> {{ t.title }} <span class="text-gray">({{ _('Objective') if t.kind == 'objective' else _('Subjective') }})</span></li>
@@ -126,13 +127,27 @@
               autofocus:true,
               row:true
           }) }}
+          {#-
+            PTA fork: two sections — PROGRAMMING and FUNCTION tasks — that
+            merge into the ordered `pids` the handler reads (programming
+            first, then function). Students meet the tasks in that order;
+            the AI advisor sorts its proposals into the two sections.
+          -#}
           {{ form.form_text({
               columns:null,
-              label:'Problems',
-              name:'pids',
-              value:pids,
-              help_text:_('Search and pick programming problems from the problem set; entries are separated with ",". Only programming tasks can be added to a self-learning session — quiz and subjective tasks are not offered here. Students work through the tasks in this order, so put the simplest first; the AI advisor above can propose and apply a progression.')
+              label:'Programming Problems',
+              name:'sl_pids_prog',
+              value:progPids,
+              help_text:_('Search and pick programming problems from the problem set; entries are separated with ",". Students work through the tasks in this order, so put the simplest first; the AI advisor above can propose and apply a progression.')
           }) }}
+          {{ form.form_text({
+              columns:null,
+              label:'Function Problems',
+              name:'sl_pids_fn',
+              value:fnPids,
+              help_text:_('Function tasks (pid F…): students write only the function and your judge program does the rest. They come after the programming tasks in the session order. Quiz and subjective tasks cannot be added to a self-learning session.')
+          }) }}
+          <input type="hidden" name="pids" value="{{ pids }}">
           {#-
             🌐 Session-wide submission languages. The same field and picker
             as the contest editor's "Submission language limit": a
@@ -146,7 +161,7 @@
               name:'langs',
               value:langs|default(''),
               placeholder:_('Every judge language — pick one or more to restrict'),
-              help_text:_('Once the session is created, every programming task in it — the listed tasks and each student’s bonus task — can only be submitted in the selected languages. Leave it empty to allow every judge language. A task that already restricts its own languages accepts only those that are in both lists.')
+              help_text:_('Once the session is created, every code task in it — the listed tasks and each student’s bonus task — can only be submitted in the selected languages. Leave it empty to allow every judge language. A task that already restricts its own languages (a function task, for instance, accepts only the languages its judge program is written for) accepts only those that are in both lists.')
           }) }}
           <div class="row">
             {{ form.form_text({ columns:2, label:'Begin Date', name:'beginAtDate', placeholder:'YYYY-mm-dd', value:dateBeginText, date:true, row:false }) }}
@@ -206,7 +221,7 @@
       <div class="section__body">
         <div class="sle-tip">
           <span class="sle-tip__icon">💡</span>
-          <span>{{ _('Students will solve the selected programming problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them at their code — without giving away the answer.') }}</span>
+          <span>{{ _('Students will solve the selected programming and function problems inside this session. Every failed submission automatically opens an AI Socratic tutor that guides them at their code — without giving away the answer.') }}</span>
         </div>
       </div>
     </div>

@@ -100,6 +100,7 @@ export const AIS_POLISH = [
   '.ais__kindchip--p { background: var(--ais-prog); }',
   '.ais__kindchip--o { background: var(--ais-obj); }',
   '.ais__kindchip--s { background: var(--ais-subj); }',
+  '.ais__kindchip--f { background: linear-gradient(120deg, #fcc419, #f08c00); }',
 
   /* ---- question cards inherit the objective accent ---- */
   '.aisq__card { border-left: 2px solid var(--pta-line); transition: border-color .12s ease; }',
@@ -224,8 +225,13 @@ export const AIS_STYLE = [
   '.ais__kindchip--p { background: linear-gradient(120deg, #339af0, #1c7ed6); }',
   '.ais__kindchip--o { background: linear-gradient(120deg, #20c997, #0ca678); }',
   '.ais__kindchip--s { background: linear-gradient(120deg, #9775fa, #7048e8); }',
+  '.ais__kindchip--f { background: linear-gradient(120deg, #fcc419, #f08c00); }',
   '.ais__kinds--3 { grid-template-columns: repeat(3, 1fr); }',
   '@media (max-width: 900px) { .ais__kinds--3 { grid-template-columns: 1fr; } }',
+  '.ais__kinds--4 { grid-template-columns: repeat(2, 1fr); }',
+  '.ais__batch { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; padding: 10px 14px; border: 1.5px solid #f08c00; border-radius: 12px; background: var(--pta-warn-soft, #fff4e0); font-size: 13px; color: var(--pta-ink); }',
+  '.ais__batch-all { margin-left: auto; white-space: nowrap; }',
+  '@media (max-width: 640px) { .ais__kinds--4 { grid-template-columns: 1fr; } }',
   /* ---- statement-review chat ---- */
   '.aisc { border: 1px solid var(--pta-violet-line); border-radius: var(--pta-radius-lg); overflow: hidden; margin-top: 12px; background: var(--pta-card); }',
   '.aisc__head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--pta-violet-soft); font-size: 12.5px; font-weight: bold; color: var(--pta-violet-text); }',
@@ -444,6 +450,7 @@ function badge(d) {
 const PAGE_SIZE = 10;
 const KIND_CHIP = {
   programming: ['p', 'P', 'Programming task'],
+  function: ['f', 'F', 'Function task'],
   objective: ['o', 'O', 'Objective task'],
   subjective: ['s', 'S', 'Subjective task'],
 };
@@ -458,6 +465,15 @@ const statusKey = (d) => (d.published ? (d.publishedHidden ? 'published_hidden' 
 /** Sort/filter/page state — remembered per domain across visits. */
 const LIST_STATE_KEY = () => `hydro:ai-studio-list:${UiContext.domainId || ''}`;
 const DEFAULT_LIST_STATE = { sort: 'updateAt', dir: 'desc', page: 1, q: '', kind: '', difficulty: '', status: '', knowledge: [] };
+/*
+ * PTA fork — BATCH OVERVIEW. The class report's "Create N tasks" lands the
+ * teacher here with ?ids=<draft ids>: the list narrows to just those drafts
+ * and refreshes itself while any of them is still generating, so one tab
+ * shows all N statements being written and each row's Open button starts
+ * that draft in a tab of its own. Kept OUT of the persisted list state on
+ * purpose: it is a one-off view, not a filter to remember.
+ */
+let batchIds = null;
 let listState = { ...DEFAULT_LIST_STATE };
 try {
   const saved = JSON.parse(localStorage.getItem(LIST_STATE_KEY()) || 'null');
@@ -480,6 +496,7 @@ function applyListState(drafts, state = listState) {
   const q = st.q.trim().toLowerCase();
   const kp = st.knowledge.map((x) => x.toLowerCase());
   let list = drafts.filter((d) => {
+    if (batchIds && !batchIds.has(String(d._id))) return false;
     if (st.kind && d.kind !== st.kind) return false;
     if (st.difficulty && d.difficulty !== st.difficulty) return false;
     if (st.status && statusKey(d) !== st.status) return false;
@@ -549,11 +566,15 @@ function renderDrafts($sec, drafts) {
     else if (nums[nums.length - 1] !== '…') nums.push('…');
   }
   $sec.html(`
+        ${batchIds ? `<div class="ais__batch">
+          <span>🧩 <b>${esc(i18n('{0} drafts from the class report').replace('{0}', list.length))}</b> — ${esc(i18n('their statements are being written now; this list refreshes by itself. Open each draft to review it, then press Continue to generate tests and verify, or Discard.'))}</span>
+          <a href="${esc(window.location.pathname)}" class="ais__batch-all">${esc(i18n('Show all drafts'))}</a>
+        </div>` : ''}
         <div class="ais__label ais__lf-head" style="margin-top:22px;">🗂 ${esc(i18n('My drafts'))} <span class="ais__lf-count">${list.length === all.length ? all.length : `${list.length} / ${all.length}`}</span></div>
         <div class="ais__lf">
           <div class="ais__lf-row">
             ${group('Search', `<span class="ais__lf-qwrap">🔍<input type="text" class="ais__lf-q" value="${esc(st.q)}" placeholder="${esc(i18n('Title, topic or pid'))}"></span>`)}
-            ${group('Type', seg('kind', st.kind, [['programming', 'Programming'], ['objective', 'Objective'], ['subjective', 'Subjective']], 'All'))}
+            ${group('Type', seg('kind', st.kind, [['programming', 'Programming'], ['function', 'Function'], ['objective', 'Objective'], ['subjective', 'Subjective']], 'All'))}
             ${group('Difficulty', seg('difficulty', st.difficulty, [['intro', 'intro'], ['medium', 'medium'], ['challenge', 'challenge']], 'All'))}
           </div>
           <div class="ais__lf-row">
@@ -647,10 +668,13 @@ function renderList($root, data) {
         <div class="ais__label">🧠 ${esc(i18n('New draft'))}</div>
         <div class="ais__label" style="text-transform:none;letter-spacing:0;font-weight:normal;">${esc(i18n('Describe the task you want and attach the relevant slides below. The AI drafts the statement first — you review it, refine it by chat, and only then does it continue.'))}</div>
         <div class="ais__label">${esc(i18n('What kind of task?'))}</div>
-        <div class="ais__kinds ais__kinds--3">
+        <div class="ais__kinds ais__kinds--4">
           <label class="ais__kind"><input type="radio" name="ais-kind" value="programming" checked>
             <span class="ais__kind-body"><span class="ais__kind-name">💻 ${esc(i18n('Programming task'))}</span>
             <span class="ais__kind-desc">${esc(i18n('Statement + reference solution + tests — the judge verifies everything in the sandbox before publishing.'))}</span></span></label>
+          <label class="ais__kind"><input type="radio" name="ais-kind" value="function">
+            <span class="ais__kind-body"><span class="ais__kind-name">🧩 ${esc(i18n('Function task'))}</span>
+            <span class="ais__kind-desc">${esc(i18n('Students write ONE function; the AI writes the judge program around it. Verified like a programming task, plus a check that the judge program really depends on the student’s function.'))}</span></span></label>
           <label class="ais__kind"><input type="radio" name="ais-kind" value="objective">
             <span class="ais__kind-body"><span class="ais__kind-name">📝 ${esc(i18n('Objective task'))}</span>
             <span class="ais__kind-desc">${esc(i18n('Auto-graded quiz — true/false, choice, fill-in-the-blank — you approve the questions, then the AI writes the answer key.'))}</span></span></label>
@@ -723,7 +747,7 @@ function renderList($root, data) {
     // Programming needs the full judge configuration; an objective quiz is
     // still ABOUT a language (so it keeps the picker) but has nothing to
     // cross-check or restrict; a subjective task has no judge at all.
-    $root.find('.ais__prog-only').toggle(kind === 'programming');
+    $root.find('.ais__prog-only').toggle(kind === 'programming' || kind === 'function');
     $root.find('.ais__obj-only').prop('hidden', kind !== 'objective');
     // The picker stays visible for every kind. It used to be hidden for
     // subjective drafts while still submitting its value, so a project brief
@@ -784,7 +808,7 @@ function renderList($root, data) {
         difficulty: $root.find('.ais__diff').val(),
         crosscheck: $root.find('.ais__cross').val() === '1',
         notes: String($root.find('.ais__notes').val() || ''),
-        ...(kind === 'programming'
+        ...((kind === 'programming' || kind === 'function')
           ? { knowledge: kpPicker.names().join(',') }
           : kind === 'objective'
             ? { qtypes: qtypes.join(','), qcount: String($root.find('.ais__qcount').val() || '0') }
@@ -815,9 +839,27 @@ function renderList($root, data) {
 export default new NamedPage(['ai_studio'], () => {
   ensureAisStyle();
   const $root = $('#ais-root');
+  const ids = (new URLSearchParams(window.location.search).get('ids') || '').split(',').map((x) => x.trim()).filter((x) => x);
+  if (ids.length) batchIds = new Set(ids);
   // Distinct URL for the XHR so the document URL never caches JSON (see
   // the Vary/no-store headers in AiStudioBaseHandler#prepare).
-  request.get(`${window.location.pathname}?_fmt=json`)
-    .then((data) => renderList($root, data))
+  const load = () => request.get(`${window.location.pathname}?_fmt=json`);
+  load()
+    .then((data) => {
+      renderList($root, data);
+      if (!batchIds) return;
+      // Batch overview: refresh while any of the batch is still generating,
+      // so the statuses turn from "Verifying…" to "Draft" on their own.
+      const tick = async () => {
+        try {
+          const fresh = await load();
+          const mine = (fresh.drafts || []).filter((d) => batchIds.has(String(d._id)));
+          // Re-render only when nothing on screen is being typed into.
+          if (!document.activeElement || !$root.find(document.activeElement).length) renderList($root, fresh);
+          if (mine.some((d) => d.status === 'running')) setTimeout(tick, 4000);
+        } catch (e) { setTimeout(tick, 8000); }
+      };
+      setTimeout(tick, 4000);
+    })
     .catch((e) => $root.html(`<div class="ais"><div class="ais__body"><div class="ais__empty">⚠ ${esc(e.message)}</div></div></div>`));
 });

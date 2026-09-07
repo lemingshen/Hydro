@@ -559,10 +559,13 @@ button:focus-visible {
 .ptabs__tab--p.ptabs__tab--on { background: linear-gradient(120deg, #339af0, #1c7ed6); box-shadow: 0 6px 16px -6px rgba(28, 126, 214, 0.6); }
 .ptabs__tab--o.ptabs__tab--on { background: linear-gradient(120deg, #20c997, #0ca678); box-shadow: 0 6px 16px -6px rgba(12, 166, 120, 0.6); }
 .ptabs__tab--s.ptabs__tab--on { background: linear-gradient(120deg, #9775fa, #7048e8); box-shadow: 0 6px 16px -6px rgba(112, 72, 232, 0.6); }
+/* F = function task: amber, so the four tabs stay distinguishable at a glance. */
+.ptabs__tab--f.ptabs__tab--on { background: linear-gradient(120deg, #fcc419, #f08c00); box-shadow: 0 6px 16px -6px rgba(240, 140, 0, 0.6); }
 
 .ptabs__tab--p:not(.ptabs__tab--on):hover { color: #1c7ed6; }
 .ptabs__tab--o:not(.ptabs__tab--on):hover { color: #0ca678; }
 .ptabs__tab--s:not(.ptabs__tab--on):hover { color: #7048e8; }
+.ptabs__tab--f:not(.ptabs__tab--on):hover { color: #e67700; }
 
 .theme--dark .ptabs__tab--p:not(.ptabs__tab--on):hover { color: #4dabf7; }
 .theme--dark .ptabs__tab--o:not(.ptabs__tab--on):hover { color: #3dd6a5; }
@@ -1835,6 +1838,40 @@ h1.section__title {
 
 h2.section__title { font-size: 1.1rem; font-weight: 700; }
 
+/*
+ * PTA fork — FUNCTION TASKS: the judge program shown under the statement
+ * (templates/problem_detail.html). Read-only, collapsed per language; the
+ * hint line says what the student is and is not responsible for.
+ */
+.pta-harness { margin-top: 22px; padding-top: 14px; border-top: 1px dashed var(--pta-line); }
+.pta-harness__hint { font-size: 13px; color: var(--pta-ink-soft); margin: 4px 0 10px; }
+.pta-harness__lang { margin: 6px 0; border: 1px solid var(--pta-line); border-radius: 10px; background: var(--pta-card-2); }
+.pta-harness__lang > summary { cursor: pointer; padding: 8px 12px; font-weight: 600; font-size: 13px; color: var(--pta-ink); }
+.pta-harness__code { margin: 0; padding: 10px 14px; border-top: 1px solid var(--pta-line); font-size: 12.5px; line-height: 1.5; overflow-x: auto; background: transparent; }
+
+/*
+ * PTA fork: the task ID in front of the scratchpad problem title
+ * (templates/problem_detail.html). Sits between the theme's accent bar and
+ * the title itself, so it is deliberately quieter than the title — an
+ * identifier to quote, not a second heading. Tabular figures keep P8 and
+ * P10 the same width, so titles do not shift as a student moves down the
+ * rail.
+ */
+.pta-taskid {
+  display: inline-block;
+  margin-right: 9px;
+  padding: 1px 9px;
+  border-radius: 7px;
+  background: var(--pta-card-3);
+  border: 1px solid var(--pta-line);
+  color: var(--pta-ink-soft);
+  font-size: 0.82em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  vertical-align: 0.06em;
+}
+
 .section > .section__header + .section__body:not(.no-padding) {
   margin-top: 12px;
   padding-top: 14px;
@@ -2129,6 +2166,18 @@ label.checkbox, label.radiobox { color: var(--pta-ink); font-weight: 400; }
   white-space: nowrap;
 }
 
+/*
+ * The task's activities have all started, so it is back in the problem set
+ * for everyone. Same badge, but neutral rather than warning coloured: it is
+ * informational ("also used here"), not a "students cannot see this".
+ */
+.pta-inact--open {
+  background: var(--pta-card-3);
+  border-color: var(--pta-line);
+  color: var(--pta-ink-faint);
+  font-weight: 500;
+}
+
 .pta-diff {
   display: inline-flex;
   align-items: center;
@@ -2179,6 +2228,8 @@ label.checkbox, label.radiobox { color: var(--pta-ink); font-weight: 400; }
 .pta-note--ok { background: var(--pta-ok-soft); border-color: var(--pta-ok-line); color: var(--pta-ok-text); }
 .pta-note--warn { background: var(--pta-warn-soft); border-color: var(--pta-warn-line); color: var(--pta-warn-text); }
 .pta-note--violet { background: var(--pta-violet-soft); border-color: var(--pta-violet-line); color: var(--pta-violet-text); }
+/* Function-task sections in the test / homework editors: the warn palette is the theme's amber, matching the F tab and chips. */
+.pta-note--amber { background: var(--pta-warn-soft); border-color: var(--pta-warn-line); color: var(--pta-warn-text); }
 
 /* ------------------------------- chip variants ------------------------------ */
 

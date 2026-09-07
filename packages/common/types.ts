@@ -63,6 +63,18 @@ export interface ProblemConfigFile {
     validator?: CompilableSource;
     time_limit_rate?: Record<string, number>;
     memory_limit_rate?: Record<string, number>;
+    /**
+     * PTA fork — FUNCTION TASKS. Per language family (`c`, `cc`, `py`, …):
+     * the judge program the student's fragment is spliced into. A comment
+     * line reading "Your function will be put here" (PTA's convention) marks
+     * the splice point; with no marker the fragment is appended, which is
+     * what PTA's own sample program does.
+     * The judge never sees this key — the server wraps before dispatch
+     * (hydrooj model/record.ts wrapFunctionCode).
+     */
+    template?: Record<string, string>;
+    /** The empty function the scratchpad opens with, per language family. */
+    stub?: Record<string, string>;
 }
 
 export interface FileInfo {

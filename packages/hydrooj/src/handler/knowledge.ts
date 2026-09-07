@@ -17,12 +17,24 @@
  */
 import { ObjectId } from 'mongodb';
 import { Context } from '../context';
-import { BadRequestError, NotFoundError } from '../error';
-import { PERM } from '../model/builtin';
+import { BadRequestError, ForbiddenError, NotFoundError } from '../error';
+import { Logger } from '../logger';
+import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as aiTutor from '../lib/ai_tutor';
+import { assistantEnabled, postureOf, runTurn } from '../lib/assistant';
+import { cancelScheduledMastery, computeMastery, scheduleMastery } from '../lib/knowledge_map';
+import { seesEveryProblem } from './problem';
+import domain from '../model/domain';
 import KnowledgeModel, { KNOWLEDGE_MAX_DEPTH, KnowledgeTreeNode, PATH_SEP } from '../model/knowledge';
+import {
+    getMap, getMapsIn, getProfile, getThread, mapFresh, mapStale, markDirty, resetThread, saveMap, saveProfile,
+} from '../model/knowledgemap';
 import problem from '../model/problem';
+import system from '../model/system';
+import user from '../model/user';
 import { Handler, param, Types } from '../service/server';
+
+const logger = new Logger('knowledge');
 
 /** Site convention: the pid prefix marks the task kind. */
 function kindOfPid(pid: any): 'programming' | 'objective' | 'subjective' {
@@ -485,6 +497,321 @@ class KnowledgePointsHandler extends Handler {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/*  🗺 Personal knowledge map                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How long a stored map is served without recomputing. Short enough that a
+ * student who just solved something sees it move, long enough that opening
+ * the page twice does not pay for the derivation twice.
+ */
+const MAP_TTL_MS = 20 * 60 * 1000;
+
+/** Students the class rebuild will derive in ONE request — see postRebuild. */
+const CLASS_REBUILD_BATCH = 25;
+/** Upper bound on a class roster we will even list. */
+const CLASS_ROSTER_MAX = 400;
+
+/**
+ * 🗺 ONE STUDENT'S MAP — their own by default.
+ *
+ * Course staff may pass ?uid= to read a student's map (the class view links
+ * here). Students can only ever reach their own: the map is derived from
+ * their submissions and tutor dialogue, which this fork deliberately keeps
+ * private (PERM_VIEW_RECORD is not in the default role — see
+ * packages/common/permission.ts).
+ */
+class KnowledgeMapHandler extends Handler {
+    async prepare() {
+        this.checkPerm(PERM.PERM_VIEW_PROBLEM);
+        this.response.addHeader('Vary', 'Accept');
+        this.response.addHeader('Cache-Control', 'no-store, must-revalidate');
+    }
+
+    /**
+     * Course staff — the fork's ONE definition, shared with the problem set
+     * (handler/problem.ts seesEveryProblem).
+     *
+     * This used to be a local list of three permissions, which disagreed
+     * with that predicate in domains configured differently from the
+     * default: a domain root, or a teacher holding PERM_EDIT_PROBLEM but
+     * not PERM_CREATE_PROBLEM, saw every activity task in the problem set
+     * yet was refused a student's map. One predicate, one answer, in every
+     * domain.
+     */
+    get isStaff() {
+        return seesEveryProblem(this);
+    }
+
+    @param('uid', Types.Int, true)
+    @param('refresh', Types.Boolean, true)
+    @param('brief', Types.Boolean, true)
+    async get({ domainId }, uid = 0, refresh = false, brief = false) {
+        /*
+         * 🎯 BRIEF MODE — the problem set's "Practise next" panel.
+         *
+         * Reads the CACHED map only and never derives one. The problem list
+         * is the most-visited page on the site; a miss here must cost one
+         * indexed lookup, not a full derivation (which may call the model).
+         * With no map yet the panel simply invites the student to build one.
+         */
+        if (brief) {
+            const doc = await getMap(domainId, this.user._id);
+            let next = (doc?.next || []).slice(0, 4);
+            /*
+             * The panel serves the CACHED map and never derives one, so
+             * after a submission it can still be carrying a task the student
+             * has just solved. Rather than rebuild on the site's hottest
+             * page, drop anything already solved using current problem
+             * status — one indexed lookup over at most ~16 pids, which is
+             * cheap enough here and keeps the panel from ever recommending
+             * something the student has finished.
+             */
+            const pids = [...new Set(next.flatMap((n) => (n.tasks || []).map((t) => t.docId)))];
+            if (pids.length) {
+                const psdocs = await problem.getMultiStatus(domainId, { uid: this.user._id, docId: { $in: pids } })
+                    .project({ docId: 1, status: 1 }).toArray();
+                const solved = new Set(psdocs
+                    .filter((p: any) => p.status === STATUS.STATUS_ACCEPTED)
+                    .map((p: any) => p.docId));
+                if (solved.size) {
+                    next = next
+                        .map((n) => ({ ...n, tasks: (n.tasks || []).filter((t) => !solved.has(t.docId)) }))
+                        // A point whose every suggested task is solved is no
+                        // longer actionable advice, so it goes too.
+                        .filter((n) => n.tasks.length);
+                }
+            }
+            this.response.body = {
+                built: !!doc,
+                stale: mapStale(doc, MAP_TTL_MS),
+                computedAt: doc?.computedAt,
+                next,
+            };
+            return;
+        }
+        const target = uid && uid !== this.user._id ? uid : this.user._id;
+        if (target !== this.user._id && !this.isStaff) throw new ForbiddenError('You may only view your own knowledge map.');
+        let doc = await getMap(domainId, target);
+        /*
+         * Rebuild when stale, when asked, or when the stored map is PARTIAL
+         * — a cheap background build after a submission (lib/knowledge_map
+         * scheduleMastery) skips attribution and stamps a fresh timestamp,
+         * so freshness alone would let those maps sit un-attributed forever.
+         * Rebuilding is the expensive path, so it stays rate-limited.
+         */
+        if (refresh || mapStale(doc, MAP_TTL_MS)) {
+            await this.limitRate('knowledge_map', 60, 6, '{{user}}');
+            const fresh = await computeMastery(domainId, target);
+            await saveMap(fresh);
+            doc = { ...fresh, _id: doc?._id } as any;
+        }
+        const udoc = await user.getById(domainId, target);
+        this.response.template = 'knowledge_map.html';
+        this.response.body = {
+            uid: target,
+            self: target === this.user._id,
+            isStaff: this.isStaff,
+            uname: udoc?.uname || `user#${target}`,
+            map: doc,
+        };
+    }
+}
+
+/**
+ * 🗺 CLASS VIEW — the same states, for a whole roster.
+ *
+ * Reads CACHED maps only. Deriving a map may call the model, and a 200-seat
+ * course would otherwise fire thousands of provider requests from one page
+ * load; students whose map has never been built simply show as "not built"
+ * and the teacher rebuilds them in batches with the button.
+ *
+ * Roster: the participants of ?tid= (a contest, homework or self-learning
+ * session) when given, otherwise the domain's members.
+ */
+class KnowledgeMapClassHandler extends Handler {
+    async prepare() {
+        // Same staff test as the per-student view and the problem set, so a
+        // teacher who can open one student's map can open the class board.
+        if (!seesEveryProblem(this)) throw new ForbiddenError('Course staff only.');
+        this.response.addHeader('Vary', 'Accept');
+        this.response.addHeader('Cache-Control', 'no-store, must-revalidate');
+    }
+
+    async roster(domainId: string): Promise<number[]> {
+        const dudocs = await domain.getMultiUserInDomain(domainId, { uid: { $gt: 1 } })
+            .project({ uid: 1 }).limit(CLASS_ROSTER_MAX).toArray();
+        return [...new Set(dudocs.map((d: any) => d.uid).filter((u: any) => typeof u === 'number'))];
+    }
+
+    async get({ domainId }) {
+        const uids = await this.roster(domainId);
+        const [maps, udict] = await Promise.all([
+            getMapsIn(domainId, uids),
+            user.getListForRender(domainId, uids),
+        ]);
+        /*
+         * Class aggregate: for each point, how many students are in each
+         * state. This is the teacher's actual question — "what does the
+         * CLASS not get" — and it is a straight tally of already-derived
+         * per-student states, so it costs one pass over the cached maps.
+         */
+        const agg = new Map<string, { name: string, path: string[], shaky: number, resolving: number, mastered: number, exposed: number, covered: number }>();
+        for (const m of maps.values()) {
+            for (const p of m.points) {
+                if (p.state === 'untouched') continue;
+                if (!agg.has(p.name)) agg.set(p.name, { name: p.name, path: p.path, shaky: 0, resolving: 0, mastered: 0, exposed: 0, covered: 0 });
+                const e = agg.get(p.name)!;
+                e.covered += 1;
+                (e as any)[p.state] += 1;
+            }
+        }
+        const points = [...agg.values()]
+            .map((e) => ({ ...e, weakRate: e.covered ? Math.round((e.shaky / e.covered) * 100) : 0 }))
+            .sort((a, b) => b.shaky - a.shaky || b.weakRate - a.weakRate)
+            .slice(0, 60);
+        this.response.template = 'knowledge_map_class.html';
+        this.response.body = {
+            students: uids.map((uid) => {
+                const m = maps.get(uid);
+                return {
+                    uid,
+                    uname: udict[uid]?.uname || `user#${uid}`,
+                    built: !!m,
+                    computedAt: m?.computedAt,
+                    stats: m?.stats || null,
+                    top: (m?.next || []).slice(0, 3).map((n) => n.name),
+                };
+            }),
+            points,
+            built: maps.size,
+            total: uids.length,
+        };
+    }
+
+    /**
+     * Build the maps that do not exist yet, CLASS_REBUILD_BATCH at a time.
+     *
+     * Deliberately synchronous and bounded rather than a background job:
+     * the teacher gets an exact "built N, M remaining" answer and presses
+     * again, which needs no job document, no progress polling and no stale
+     * -job recovery. Sequential on purpose — parallel derivation would
+     * multiply provider load by the batch size.
+     */
+    async postRebuild({ domainId }) {
+        await this.limitRate('knowledge_map_class', 60, 3, '{{user}}');
+        const uids = await this.roster(domainId);
+        const have = await getMapsIn(domainId, uids);
+        const todo = uids.filter((u) => !mapFresh(have.get(u) || null, MAP_TTL_MS)).slice(0, CLASS_REBUILD_BATCH);
+        let built = 0;
+        for (const uid of todo) {
+            try {
+                /*
+                 * `noLlm` is what keeps this button honest. Attribution is
+                 * capped per student, not per request, so a batch of 25
+                 * could fire hundreds of provider calls in one sequential
+                 * HTTP request — expensive, and slow enough to time out
+                 * before the teacher saw anything.
+                 *
+                 * The class board reads STATES, and states come from the
+                 * record aggregation and the tutor evidence, none of which
+                 * needs the model. The maps are stamped `partial`, so the
+                 * moment the teacher clicks into a student — or the student
+                 * opens their own map — the full build with attribution
+                 * happens there, for one person, where it is worth paying.
+                 */
+                // eslint-disable-next-line no-await-in-loop
+                const fresh = await computeMastery(domainId, uid, { noLlm: true });
+                // eslint-disable-next-line no-await-in-loop
+                await saveMap(fresh);
+                built += 1;
+            } catch (e: any) {
+                logger.warn('class map build failed for uid=%d: %s', uid, e.message);
+            }
+        }
+        const remaining = uids.filter((u) => !have.has(u)).length - built;
+        this.response.body = { built, remaining: Math.max(0, remaining), total: uids.length };
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  🤖 The student assistant                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * JSON endpoint behind the chat panel that lives on every page
+ * (pages/assistant.page.js). No template: the panel is script-rendered.
+ *
+ *   GET  ?name=&pid=&tid=     → posture for that page + thread + profile
+ *   POST operation=message    → one turn (page context travels with it)
+ *   POST operation=prefs      → declared preferences / delete a learned fact
+ *   POST operation=reset      → clear the conversation
+ *
+ * No generic post() here on purpose: the framework runs `post` before
+ * `post<Operation>`, and a generic one would fire on every operation.
+ */
+class AssistantHandler extends Handler {
+    async prepare() {
+        this.response.addHeader('Vary', 'Accept');
+        this.response.addHeader('Cache-Control', 'no-store, must-revalidate');
+    }
+
+    private pageOf(name = '', pid = 0, tid = '') {
+        return { name: String(name || '').slice(0, 60), pid: pid || undefined, tid: tid && /^[0-9a-f]{24}$/i.test(tid) ? tid : undefined };
+    }
+
+    @param('name', Types.String, true)
+    @param('pid', Types.Int, true)
+    @param('tid', Types.String, true)
+    async get({ domainId }, name = '', pid = 0, tid = '') {
+        const page = this.pageOf(name, pid, tid);
+        const posture = await postureOf(domainId, this.user._id, page);
+        const [thread, profile] = await Promise.all([getThread(domainId, this.user._id), getProfile(domainId, this.user._id)]);
+        const day = new Date().toISOString().slice(0, 10);
+        this.response.body = {
+            enabled: assistantEnabled(),
+            ...posture,
+            messages: (thread?.messages || []).slice(-40),
+            profile: { declared: profile.declared || {}, goals: profile.goals || [], learned: profile.learned || [] },
+            turnsToday: thread?.turns?.[day] || 0,
+            turnsCap: +system.get('assistant.daily_turns') || 60,
+        };
+    }
+
+    @param('text', Types.Content)
+    @param('name', Types.String, true)
+    @param('pid', Types.Int, true)
+    @param('tid', Types.String, true)
+    async postMessage({ domainId }, text: string, name = '', pid = 0, tid = '') {
+        if (!text.trim()) throw new BadRequestError('Say something first.');
+        await this.limitRate('assistant', 60, 12, '{{user}}');
+        const res = await runTurn(domainId, this.user._id, this.pageOf(name, pid, tid), text.trim());
+        this.response.body = res;
+    }
+
+    @param('style', Types.String, true)
+    @param('length', Types.String, true)
+    @param('tone', Types.String, true)
+    @param('forget', Types.Int, true)
+    async postPrefs({ domainId }, style = '', length = '', tone = '', forget = -1) {
+        const prof = await getProfile(domainId, this.user._id);
+        const d: any = { ...(prof.declared || {}) };
+        if (['examples', 'theory', ''].includes(style)) { if (style) d.style = style; else delete d.style; }
+        if (['short', 'thorough', ''].includes(length)) { if (length) d.length = length; else delete d.length; }
+        if (['encouraging', 'direct', ''].includes(tone)) { if (tone) d.tone = tone; else delete d.tone; }
+        const patch: any = { declared: d };
+        if (forget >= 0) patch.learned = (prof.learned || []).filter((_, i) => i !== forget);
+        await saveProfile(domainId, this.user._id, patch);
+        this.response.body = { ok: true, profile: { ...patch, goals: prof.goals || [], learned: patch.learned || prof.learned || [] } };
+    }
+
+    async postReset({ domainId }) {
+        await resetThread(domainId, this.user._id);
+        this.response.body = { ok: true };
+    }
+}
+
 const TPL_SHELL = `{% extends "layout/basic.html" %}
 {% block content %}
 <div class="row">
@@ -495,10 +822,82 @@ const TPL_SHELL = `{% extends "layout/basic.html" %}
 {% endblock %}
 `;
 
+/** The map pages render entirely from their JSON twin, like the catalog above. */
+const TPL_MAP = `{% extends "layout/basic.html" %}
+{% block content %}
+<div class="row">
+  <div class="medium-12 columns" id="km-root" data-mode="student">
+    <div class="section"><div class="section__body">{{ _('Loading...') }}</div></div>
+  </div>
+</div>
+{% endblock %}
+`;
+
+const TPL_MAP_CLASS = `{% extends "layout/basic.html" %}
+{% block content %}
+<div class="row">
+  <div class="medium-12 columns" id="km-root" data-mode="class">
+    <div class="section"><div class="section__body">{{ _('Loading...') }}</div></div>
+  </div>
+</div>
+{% endblock %}
+`;
+
 export async function apply(ctx: Context) {
     (ctx as any).inject(['template'], (c: any) => {
         c.template.registry['knowledge_points.html'] = TPL_SHELL;
+        c.template.registry['knowledge_map.html'] = TPL_MAP;
+        c.template.registry['knowledge_map_class.html'] = TPL_MAP_CLASS;
     });
+    /*
+     * ⏱ Every judged programming submission refreshes that student's map in
+     * the background — accepted or not, since a failure is evidence too (it
+     * is most of what `shaky` is built from).
+     *
+     * Hooked on `record/judge` rather than on submission: the map's outcome
+     * evidence is solved / first-try / still-unsolved, none of which exists
+     * until the judge has finished. postJudge already returns early for
+     * pretest and generate records, so this only ever sees real attempts.
+     * The event is dispatched in-process by the worker that handled the
+     * judge callback, so it fires once — no instance guard, which would in
+     * fact be wrong here since the callback can land on any worker.
+     *
+     * The call is debounced and never awaited: nothing about judging should
+     * wait on, or fail because of, a knowledge map.
+     */
+    ctx.on('record/judge', async (rdoc: any, _updated: any, pdoc: any) => {
+        try {
+            if (!rdoc?.domainId || !rdoc.uid || rdoc.uid <= 1) return;
+            // Code tasks only, by the pid prefix the whole fork keys off
+            // (P programming / F function / O objective / S subjective).
+            // Other kinds still reach the map — they are picked up by the
+            // next rebuild.
+            const pid = String(pdoc?.pid || '');
+            if (pid && !/^[pf]/i.test(pid)) return;
+            /*
+             * Two steps, and the ORDER of importance is the reverse of the
+             * order of cost. Marking the map dirty is what makes the next
+             * page load correct — without it a student who solves a
+             * recommended task and opens the map two seconds later is still
+             * inside the 20-minute freshness window and gets served the old
+             * map with that task still in "Practise next". The debounced
+             * rebuild then does the real work for the student who does NOT
+             * come to look.
+             */
+            markDirty(rdoc.domainId, rdoc.uid)
+                .catch((e: any) => logger.warn('[knowledge-map] markDirty failed: %s', e.message));
+            scheduleMastery(rdoc.domainId, rdoc.uid);
+        } catch (e: any) {
+            logger.warn('[knowledge-map] could not schedule rebuild: %s', e.message);
+        }
+    });
+    ctx.on('dispose', () => cancelScheduledMastery());
     // Route-level gate is the JSON reader's; prepare() raises it for the page.
     ctx.Route('knowledge_points', '/knowledge-points', KnowledgePointsHandler, PERM.PERM_VIEW_PROBLEM);
+    // Fixed segment BEFORE the bare route so neither can swallow the other
+    // (the /ai-studio/:id lesson in this file's header).
+    ctx.Route('knowledge_map_class', '/knowledge-map/class', KnowledgeMapClassHandler, PERM.PERM_VIEW_PROBLEM);
+    ctx.Route('knowledge_map', '/knowledge-map', KnowledgeMapHandler, PRIV.PRIV_USER_PROFILE);
+    // 🤖 The assistant is personal: signed-in users only.
+    ctx.Route('assistant', '/assistant', AssistantHandler, PRIV.PRIV_USER_PROFILE);
 }

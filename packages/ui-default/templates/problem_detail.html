@@ -1,13 +1,30 @@
 {% extends "layout/basic.html" %}
 {% block content %}
+{#-
+  PTA fork — FUNCTION TASKS (pid F…). The scratchpad opens on the task's
+  STUB for the student's current language family instead of the user's
+  personal code template, and the harness + every stub are exposed so the
+  editor can swap stubs on a language change and the statement can show
+  the judge program that the fragment is spliced into.
+-#}
+{%- set _isFunctionTask = (pdoc.pid and (pdoc.pid|lower|first) == 'f') -%}
+{%- set _fnStub = handler.user.codeTemplate -%}
+{%- set _fnCfg = pdoc.config if (pdoc.config and pdoc.config.template) else none -%}
+{%- if _isFunctionTask and _fnCfg and _fnCfg.stub -%}
+  {%- set _fam = (handler.user.codeLang or '').split('.')[0] -%}
+  {%- set _fnStub = _fnCfg.stub[handler.user.codeLang] or _fnCfg.stub[_fam] or (_fnCfg.stub|dictsort|first)[1] -%}
+{%- endif -%}
 <script>
 {{ set(UiContext, {
   problemId: pdoc.pid|default(pdoc.docId),
   problemNumId: pdoc.docId,
   codeLang: handler.user.codeLang,
-  codeTemplate: handler.user.codeTemplate,
+  codeTemplate: _fnStub,
   pdoc: pdoc
 }) }}
+{% if _isFunctionTask and _fnCfg %}
+  {{ set(UiContext, 'functionTask', { stub: _fnCfg.stub or {}, template: _fnCfg.template }) }}
+{% endif %}
 {% if tdoc %}
   {{ set(UiContext, 'tdoc', tdoc) }}
   {{ set(UiContext, 'tsdoc', tsdoc) }}
@@ -109,7 +126,7 @@
           {% endif %}
           {% if pdoc.tag.length %}
             <span name="show_tags" class="problem__tag-item interactive nojs--hide icon icon-tag">{{ _('Knowledge points') + '>' }}</span>
-            {%- set _kind = 'objective' if (pdoc.pid and (pdoc.pid|lower|first) == 'o') else ('subjective' if (pdoc.pid and (pdoc.pid|lower|first) == 's') else 'programming') -%}
+            {%- set _kind = 'objective' if (pdoc.pid and (pdoc.pid|lower|first) == 'o') else ('subjective' if (pdoc.pid and (pdoc.pid|lower|first) == 's') else ('function' if (pdoc.pid and (pdoc.pid|lower|first) == 'f') else 'programming')) -%}
             {%- for tag in pdoc.tag -%}
               <a class="problem__tag-item tags hasjs--hide interactive" href="{{ url('problem_main', query={kind:_kind, tags:tag}) }}">{{ tag }}</a>
             {%- endfor -%}
@@ -120,7 +137,22 @@
     <div class="section">
       <div class="problem-content-container"><div class="problem-content" data-marker-enabled>
         <div class="section__header non-scratchpad--hide">
-          <h1 class="section__title">{{ pdoc.title }}</h1>
+          {#-
+            PTA fork: show the TASK ID before the title in the scratchpad.
+            This header only renders in scratchpad mode (misc/structure.styl
+            .non-scratchpad--hide), which is where a student loses the pid —
+            the problem list shows "P8 Circular Right Rotation…", but once
+            the IDE takes over the whole screen the title stood alone, so
+            there was nothing to quote when asking about a task.
+
+            Gated on the PROGRAMMING kind by the pid prefix, the same rule
+            the tag links and the problem-set tabs use (P programming /
+            O objective / S subjective). Objective and subjective tasks never
+            enter the scratchpad today, so this only ever adds the chip where
+            it was asked for, and stays correct if that changes.
+          -#}
+          {%- set _kind = 'objective' if (pdoc.pid and (pdoc.pid|lower|first) == 'o') else ('subjective' if (pdoc.pid and (pdoc.pid|lower|first) == 's') else ('function' if (pdoc.pid and (pdoc.pid|lower|first) == 'f') else 'programming')) -%}
+          <h1 class="section__title">{% if _kind == 'programming' or _kind == 'function' %}<span class="pta-taskid">{{ pdoc.pid|default(pdoc.docId) }}</span>{% endif %}{{ pdoc.title }}</h1>
         </div>
         {% if pdoc.content|contentLang|length > 1 %}
         <div class="section__tab-container">
@@ -136,6 +168,28 @@
         </div>
         {% endif %}
         {% include "partials/problem_description.html" %}
+        {#-
+          The judge program from config.template, as a FALLBACK. AI Studio
+          function tasks (and PTA-style hand-written ones) already carry it
+          in the statement under "## Sample program of judge:", and showing
+          it twice on one page helps nobody — so this block only renders
+          when the statement has no such section. That leaves it for tasks
+          whose author wrote only the config: they still get the program
+          students need to see, straight from what actually runs.
+        -#}
+        {%- set _stmtHasJudge = ('program of judge' in (pdoc.content|string|lower)) -%}
+        {%- if _isFunctionTask and _fnCfg and not _stmtHasJudge -%}
+        <div class="pta-harness typo">
+          <h2>{{ _('Judge program') }}</h2>
+          <p class="pta-harness__hint">{{ _('You only write the function. It is inserted where the marker is, then the whole program below is compiled and run against the tests.') }}</p>
+          {%- for lang, src in _fnCfg.template|dictsort -%}
+          <details class="pta-harness__lang"{% if loop.first %} open{% endif %}>
+            <summary>{{ model.setting.langs[lang].display if (model.setting.langs and model.setting.langs[lang]) else lang }}</summary>
+            <pre class="pta-harness__code"><code>{{ src }}</code></pre>
+          </details>
+          {%- endfor -%}
+        </div>
+        {%- endif -%}
       </div></div>
     </div>
   </div>

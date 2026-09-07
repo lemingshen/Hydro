@@ -19,7 +19,7 @@ import { PERM, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import domain from '../model/domain';
 import problem from '../model/problem';
-import record from '../model/record';
+import record, { functionHarnessOf, rebaseCompilerText, wrapFunctionCode } from '../model/record';
 import * as setting from '../model/setting';
 import storage from '../model/storage';
 import system from '../model/system';
@@ -41,6 +41,33 @@ function parseCaseResult(body: TestCase): Required<TestCase> {
         score: body.score || 0,
         message: body.message || '',
     };
+}
+
+
+/**
+ * PTA fork — FUNCTION TASKS. For languages without a `#line` directive the
+ * compiler reports positions in the spliced program, so a message that
+ * says "line 14" points at line 14 of harness-plus-fragment. Re-base it to
+ * the fragment before it is stored, so every reader (the result modal, the
+ * record page, the tutor) sees the student's own numbering. C/C++ arrive
+ * already correct and are left alone (lineOffset 0).
+ *
+ * Only runs when a compiler message is actually present — a rare event —
+ * so the two lookups cost nothing on the common path.
+ */
+async function rebaseFunctionCompilerText(domainId: string, rid: ObjectId, body: Partial<JudgeResultBody>) {
+    if (!body.compilerText) return;
+    try {
+        const rdoc = await record.get(domainId, rid);
+        if (!rdoc) return;
+        const pdoc = await problem.get(rdoc.domainId, rdoc.pid, ['pid', 'config'] as any);
+        const harness = pdoc ? functionHarnessOf(pdoc as any, rdoc.lang) : null;
+        if (!harness) return;
+        const { lineOffset } = wrapFunctionCode(harness, rdoc.code || '', rdoc.lang);
+        if (lineOffset > 0) body.compilerText = rebaseCompilerText(body.compilerText, lineOffset);
+    } catch (e: any) {
+        logger.warn('function-task compiler text rebase skipped: %s', e.message);
+    }
 }
 
 function processPayload(body: Partial<JudgeResultBody>) {
@@ -105,6 +132,7 @@ export class JudgeResultCallbackContext {
     }
 
     static async next(domainId: string, rid: ObjectId, body: Partial<JudgeResultBody>) {
+        await rebaseFunctionCompilerText(domainId, rid, body);
         const {
             $set, $push, $unset, $inc,
         } = processPayload(body);
@@ -179,6 +207,7 @@ export class JudgeResultCallbackContext {
     }
 
     static async end(domainId: string, rid: ObjectId, body: Partial<JudgeResultBody>) {
+        await rebaseFunctionCompilerText(domainId, rid, body);
         const { $set, $push } = processPayload(body);
         const $unset: any = { progress: '' };
         $set.judgeAt = new Date();

@@ -150,6 +150,10 @@ export interface ProblemConfig {
     subType?: string;
     target?: string;
     hackable?: boolean;
+    /** PTA fork — function-task harness per language family (see common/types.ts). */
+    template?: Record<string, string>;
+    /** PTA fork — function-task stub per language family. */
+    stub?: Record<string, string>;
 }
 
 export type Content = string | Record<string, string>;

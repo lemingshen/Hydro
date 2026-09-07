@@ -1,15 +1,33 @@
 {% extends "layout/basic.html" %}
 {% block content %}
 {% if problemKind == 'programming' %}
+{#-
+  PTA fork — FUNCTION TASKS (pid F…), same wiring as problem_detail.html.
+  This page has its own UiContext block, so without this the scratchpad
+  opened on the student's personal code template instead of the task's
+  STUB, and the language-switch stub swap had nothing to swap from.
+  `problemKind` here is the JUDGE kind (config type), which is `programming`
+  for a function task too — the pid letter is what tells them apart.
+-#}
+{%- set _isFunctionTask = (pdoc.pid and (pdoc.pid|lower|first) == 'f') -%}
+{%- set _fnStub = handler.user.codeTemplate -%}
+{%- set _fnCfg = pdoc.config if (pdoc.config and pdoc.config.template) else none -%}
+{%- if _isFunctionTask and _fnCfg and _fnCfg.stub -%}
+  {%- set _fam = (handler.user.codeLang or '').split('.')[0] -%}
+  {%- set _fnStub = _fnCfg.stub[handler.user.codeLang] or _fnCfg.stub[_fam] or (_fnCfg.stub|dictsort|first)[1] -%}
+{%- endif -%}
 <script>
 {{ set(UiContext, {
   problemId: pdoc.pid|default(pdoc.docId),
   problemNumId: pdoc.docId,
   codeLang: handler.user.codeLang,
-  codeTemplate: handler.user.codeTemplate,
+  codeTemplate: _fnStub,
   pdoc: pdoc,
   canViewRecord: false
 }) }}
+{% if _isFunctionTask and _fnCfg %}
+  {{ set(UiContext, 'functionTask', { stub: _fnCfg.stub or {}, template: _fnCfg.template }) }}
+{% endif %}
 {{ set(UiContext, 'postSubmitUrl', url('self_learning_solve', ssid=sdoc.docId, pid=pdoc.docId)) }}
 {{ set(UiContext, 'getSubmissionsUrl', url('record_main', query={fullStatus:'true', pid:pdoc.docId})) }}
 {{ set(UiContext, 'getRecordDetailUrl', url('record_detail', rid='{rid}')) }}
@@ -53,6 +71,20 @@
           </div>
         </div>
         {% include "partials/problem_description.html" %}
+        {#- Judge program fallback (see problem_detail.html): only when the statement lacks its own "Sample program of judge" section. -#}
+        {%- set _stmtHasJudge = ('program of judge' in (pdoc.content|string|lower)) -%}
+        {%- if _isFunctionTask and _fnCfg and not _stmtHasJudge -%}
+        <div class="pta-harness typo">
+          <h2>{{ _('Judge program') }}</h2>
+          <p class="pta-harness__hint">{{ _('You only write the function. It is inserted where the marker is, then the whole program below is compiled and run against the tests.') }}</p>
+          {%- for lang, src in _fnCfg.template|dictsort -%}
+          <details class="pta-harness__lang"{% if loop.first %} open{% endif %}>
+            <summary>{{ model.setting.langs[lang].display if (model.setting.langs and model.setting.langs[lang]) else lang }}</summary>
+            <pre class="pta-harness__code"><code>{{ src }}</code></pre>
+          </details>
+          {%- endfor -%}
+        </div>
+        {%- endif -%}
       </div></div>
     </div>
   </div>

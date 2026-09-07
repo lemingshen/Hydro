@@ -42,6 +42,12 @@ registerSystemSettingsIdempotent(
     Setting('setting_ai_tutor', 'ai_tutor.temperature', 0.6, 'float', 'ai_tutor.temperature', 'Sampling temperature'),
     Setting('setting_ai_tutor', 'ai_tutor.timeout', 60, 'number', 'ai_tutor.timeout', 'Provider request timeout (seconds)'),
     Setting('setting_ai_tutor', 'ai_tutor.max_messages', 80, 'number', 'ai_tutor.max_messages', 'Max stored messages per tutoring thread'),
+    // 🤖 The student assistant (lib/assistant.ts) shares the provider, key
+    // and model above; these only switch it on and bound its cost. It is
+    // ALWAYS off inside self-learning sessions and during a running test —
+    // that is code, not a setting.
+    Setting('setting_ai_tutor', 'assistant.enabled', true, 'boolean', 'assistant.enabled', 'Enable the student AI assistant (the chat button on every page)'),
+    Setting('setting_ai_tutor', 'assistant.daily_turns', 60, 'number', 'assistant.daily_turns', 'Max assistant messages per student per day'),
 );
 
 interface ProviderPreset {
@@ -296,8 +302,46 @@ export function resolveStatement(pdoc: ProblemDoc, preferLang?: string): string 
     return String(content);
 }
 
+/**
+ * PTA fork — FUNCTION TASKS. What a model MUST know before it judges a
+ * submission to an F task: the student wrote only a function, and the
+ * program around it is the teacher's. Without this, every prompt in this
+ * file faults the code for "having no main()", "never reading input" and
+ * "printing nothing" — three things the student was told not to write.
+ *
+ * Appended AFTER the statement is truncated (see statementForPrompt), so a
+ * long statement can never push it out of the prompt; the harness excerpt
+ * itself is capped so it cannot crowd out the statement either. Returns ''
+ * for every other kind, so nothing changes for P/O/S tasks.
+ */
+export function functionTaskNote(pdoc: Pick<ProblemDoc, 'pid' | 'config'>): string {
+    if (!/^f/i.test(String(pdoc?.pid || ''))) return '';
+    const cfg: any = pdoc?.config;
+    if (!cfg || typeof cfg !== 'object' || !cfg.template) return '';
+    const families = Object.keys(cfg.template);
+    if (!families.length) return '';
+    const first = families[0];
+    const excerpt = truncate(String(cfg.template[first] || ''), 2200);
+    return [
+        '',
+        '=== FUNCTION TASK — READ BEFORE JUDGING THE CODE ===',
+        'The student submits ONLY the function(s) with the required signature. The judge program below supplies everything else: includes, type definitions, input parsing, the call, and the output. Their code is inserted at the marker and the whole is compiled as one program.',
+        'Therefore: do NOT fault the submission for having no main(), for not reading input, for not printing, or for missing includes the judge program already provides. Judge the function against its contract (signature, pre-conditions, return value, side effects), and reason about how the judge program calls it.',
+        `Judge program (${first}${families.length > 1 ? `; also available for ${families.slice(1).join(', ')}` : ''}):`,
+        '```',
+        excerpt,
+        '```',
+        '=== END FUNCTION TASK NOTE ===',
+    ].join('\n');
+}
+
+/** The statement as a prompt ingredient: truncated, then the function-task note if any. */
+export function statementForPrompt(pdoc: ProblemDoc, preferLang: string | undefined, max: number): string {
+    return truncate(resolveStatement(pdoc, preferLang), max) + functionTaskNote(pdoc);
+}
+
 export function extractStatement(pdoc: ProblemDoc, preferLang?: string): string {
-    return truncate(resolveStatement(pdoc, preferLang), 6000);
+    return statementForPrompt(pdoc, preferLang, 6000);
 }
 
 const JUDGING = [STATUS.STATUS_WAITING, STATUS.STATUS_JUDGING, STATUS.STATUS_COMPILING, STATUS.STATUS_FETCHED];
@@ -597,6 +641,143 @@ export function buildContextBlock(c: TutorTurnContext): string {
 }
 
 /** Convert stored thread messages into provider messages, windowed. */
+/* ------------------------------------------------------------------ */
+/*  🤖 Tool-calling call — the assistant's provider path                */
+/* ------------------------------------------------------------------ */
+
+export interface ToolSpec {
+    name: string;
+    description: string;
+    /** JSON schema of the arguments (object type). */
+    parameters: Record<string, any>;
+}
+
+export interface ToolCall { id: string; name: string; args: Record<string, any> }
+
+/** One message in a tool-calling conversation, provider-neutral. */
+export type AgentMessage =
+    | { role: 'user', content: string }
+    | { role: 'assistant', content: string, toolCalls?: ToolCall[] }
+    | { role: 'tool', callId: string, name: string, content: string };
+
+/**
+ * Like callProvider, but with NATIVE tool calling on the providers this
+ * site runs (DeepSeek and OpenAI speak the OpenAI `tools` protocol;
+ * Anthropic speaks `tool_use` / `tool_result` blocks). Returns the
+ * assistant's text and any tool calls it wants made; the caller runs the
+ * tools and calls again with `tool` messages appended. Kept beside
+ * callProvider so both share settings, endpoint resolution, headers, the
+ * timeout and the Anthropic max_tokens ladder.
+ */
+export async function callProviderWithTools(
+    systemPrompt: string, messages: AgentMessage[], tools: ToolSpec[],
+    opts: { temperature?: number, timeoutMs?: number, model?: string } = {},
+): Promise<{ text: string, toolCalls: ToolCall[] }> {
+    if (!tutorEnabled()) throw new Error('The AI tutor is disabled by the administrator.');
+    const apiKey = sysStr('ai_tutor.api_key').trim();
+    const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
+    if (!apiKey && !KEYLESS_PROVIDERS.includes(provider)) throw new Error('The AI assistant is not configured yet (missing API key).');
+    const preset = PROVIDERS[provider] || PROVIDERS.claude;
+    const model = (String(opts?.model || '').trim() || sysStr('ai_tutor.model') || preset.defaultModel).trim();
+    const url = resolveEndpoint(preset.style, sysStr('ai_tutor.base_url'), preset.url);
+    const temperature = opts.temperature
+        ?? (Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.4);
+    const timeout = opts.timeoutMs ?? ((+system.get('ai_tutor.timeout') || 60) * 1000);
+
+    const doFetch = async (body: any): Promise<any> => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        try {
+            const resp = await fetch(url, {
+                method: 'POST',
+                signal: controller.signal,
+                headers: preset.style === 'anthropic'
+                    ? { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+                    : { 'content-type': 'application/json', ...apiKey ? { authorization: `Bearer ${apiKey}` } : {} },
+                body: JSON.stringify(body),
+            });
+            const text = await resp.text();
+            let json: any = {};
+            try { json = JSON.parse(text); } catch { /* handled below */ }
+            if (!resp.ok) {
+                const detail = json?.error?.message || json?.message || text.slice(0, 300);
+                const err: any = new Error(`AI provider error (${resp.status}): ${detail}`);
+                err.status = resp.status; err.detail = detail;
+                throw err;
+            }
+            return json;
+        } catch (e: any) {
+            if (e.name === 'AbortError') throw new Error('The AI provider timed out. Please try again.');
+            throw e;
+        } finally {
+            clearTimeout(timer);
+        }
+    };
+
+    if (preset.style === 'anthropic') {
+        const msgs: any[] = [];
+        for (const m of messages) {
+            if (m.role === 'user') msgs.push({ role: 'user', content: m.content });
+            else if (m.role === 'assistant') {
+                const blocks: any[] = [];
+                if (m.content) blocks.push({ type: 'text', text: m.content });
+                for (const c of m.toolCalls || []) blocks.push({ type: 'tool_use', id: c.id, name: c.name, input: c.args });
+                if (blocks.length) msgs.push({ role: 'assistant', content: blocks });
+            } else {
+                // Consecutive tool results must share one user turn.
+                const last = msgs[msgs.length - 1];
+                const block = { type: 'tool_result', tool_use_id: m.callId, content: m.content };
+                if (last && last.role === 'user' && Array.isArray(last.content) && last.content[0]?.type === 'tool_result') last.content.push(block);
+                else msgs.push({ role: 'user', content: [block] });
+            }
+        }
+        const body = {
+            model, temperature, system: systemPrompt, messages: msgs,
+            tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+        };
+        const LADDER = [64000, 32000, 16000, 8192, 4096];
+        let json: any = null;
+        for (let i = 0; i < LADDER.length; i++) {
+            try {
+                // eslint-disable-next-line no-await-in-loop
+                json = await doFetch({ ...body, max_tokens: LADDER[i] });
+                break;
+            } catch (e: any) {
+                if (!(e.status === 400 && /max_tokens/i.test(String(e.detail || ''))) || i === LADDER.length - 1) throw e;
+            }
+        }
+        const blocks: any[] = json?.content || [];
+        return {
+            text: blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim(),
+            toolCalls: blocks.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, name: b.name, args: b.input || {} })),
+        };
+    }
+
+    // OpenAI-compatible (DeepSeek, OpenAI).
+    const msgs: any[] = [{ role: 'system', content: systemPrompt }];
+    for (const m of messages) {
+        if (m.role === 'user') msgs.push({ role: 'user', content: m.content });
+        else if (m.role === 'assistant') {
+            msgs.push({
+                role: 'assistant',
+                content: m.content || null,
+                ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } })) } : {}),
+            });
+        } else msgs.push({ role: 'tool', tool_call_id: m.callId, content: m.content });
+    }
+    const json = await doFetch({
+        model, temperature, messages: msgs,
+        tools: tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+    });
+    const choice = json?.choices?.[0]?.message || {};
+    const calls: ToolCall[] = (choice.tool_calls || []).map((c: any) => {
+        let args: any = {};
+        try { args = JSON.parse(c.function?.arguments || '{}'); } catch { args = {}; }
+        return { id: c.id, name: c.function?.name, args };
+    });
+    return { text: String(choice.content || '').trim(), toolCalls: calls };
+}
+
 export function historyToChat(messages: TutorMessage[], keep = 30): ChatMessage[] {
     const tail = messages.slice(-keep);
     return tail.map((m) => {
@@ -845,7 +1026,7 @@ export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = [
         `Write the question in ${annotationLanguage(c.uiLang)}.`,
         `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
         '--- Problem statement (may be truncated) ---',
-        truncate(resolveStatement(c.pdoc, c.uiLang), 2500),
+        statementForPrompt(c.pdoc, c.uiLang, 2500),
         c.attempts?.length
             ? `--- Prior attempt verdicts (oldest first) ---\n${c.attempts.map((a, i) => `#${i + 1}: ${a.statusText} (score ${a.score})`).join('\n')}`
             : '',
@@ -1005,7 +1186,7 @@ export async function runSuggestionsReport(c: SuggestionsContext): Promise<strin
     const finalAccepted = c.attempts.map((a) => a.accepted).lastIndexOf(true);
     const lines: string[] = [
         '--- Problem statement (may be truncated) ---',
-        truncate(resolveStatement(c.pdoc, c.uiLang), 3000),
+        statementForPrompt(c.pdoc, c.uiLang, 3000),
         `--- Submission history (${c.attempts.length} attempt(s), oldest first; timestamps are ISO-8601) ---`,
     ];
     c.attempts.forEach((a, i) => {
@@ -1573,7 +1754,8 @@ OUTPUT CONTRACT — English only, pure Markdown, starting EXACTLY with "# AI Cla
 ## 8. Suggestions for the Next Teaching Plan
   5-8 concrete, plain-language, immediately usable suggestions for the teacher: what to re-teach (and how), which knowledge points to revisit, how to adjust task order or difficulty, which students to talk to, what to keep because it worked. Each suggestion: one bold lead-in phrase, then one or two sentences.
 
-MACHINE-READABLE TRAILER (mandatory): end the document with EXACTLY ONE fenced code block whose info string is json:concepts, containing strict JSON: {"concepts":[{"name":"<knowledge point, exact catalog name>","problems":{"P7":<affected student count>},"students":["S3","S7"]}]} — 3 to 8 concepts ranked by affected students, counts consistent with the findings and statistics, only the given task labels and S-tokens, nothing else inside or after the block.
+MACHINE-READABLE TRAILER (mandatory): end the document with EXACTLY ONE fenced code block whose info string is json:concepts, containing strict JSON: {"concepts":[{"name":"<knowledge point, exact catalog name>","problems":{"P7":<affected student count>},"students":["S3","S7"]}]} — 3 to 8 concepts ranked by affected students, counts consistent with the findings and statistics, only the given task labels and S-tokens, nothing else inside the block.
+SECOND MACHINE-READABLE TRAILER (mandatory): immediately AFTER the json:concepts block, end the document with EXACTLY ONE more fenced code block whose info string is json:remedial, containing strict JSON: {"remedial":[{"concept":"<the SAME name as the matching entry in json:concepts>","kind":"programming"|"function","difficulty":"intro"|"medium"|"challenge","title":"<3-7 word working title for a NEW practice task>","brief":"<80-180 words for the task author: what the new task must make students practise, the specific misconception or gap it should expose (name the wrong pattern you saw), and a concrete scenario that is DIFFERENT from every task in avoid — same knowledge point, different story>","avoid":["P7"],"students":["S3","S7"]}]} — one entry per concept in json:concepts, same order. Remedial practice is ALWAYS code — never a quiz: a gap in writing one routine correctly → function (one function, no input/output code — prefer this whenever the gap is local to a routine); a gap in structuring a whole program or its input/output → programming. Even a misconception about a rule becomes a small code task that FAILS when the wrong rule is applied. difficulty: intro when most affected students are weak-level, challenge only when they are strong-level and the point is subtle. Only the given task labels and S-tokens. Nothing else inside or after this block.
 
 RULES: cite evidence inline as (P7, S3). Use only the given task labels and S-tokens; never guess names. Never reveal hidden test data. Knowledge-point names EXACTLY as in the task list. If a stage of the analysis failed, the context says so — state it plainly in section 1. Total length 1200-2000 words.`;
 
@@ -1727,7 +1909,8 @@ OUTPUT CONTRACT — English only, pure Markdown, starting EXACTLY with "# AI Cla
 ## 9. Suggestions for Teaching Adjustment
   6-8 concrete, plain-language, immediately usable suggestions: what to re-teach and HOW (a worked example, a mini-exercise, a common-error walkthrough), which knowledge points to revisit, how to adjust task difficulty, order or weights, which students to talk to, what to keep because it worked. Each suggestion: one bold lead-in phrase, then one or two sentences.
 
-MACHINE-READABLE TRAILER (mandatory): end the document with EXACTLY ONE fenced code block whose info string is json:concepts, containing strict JSON: {"concepts":[{"name":"<knowledge point, exact catalog name (or a 2-6 word error concept when the tasks carry no points)>","problems":{"P7":<affected student count>},"students":["S3","S7"]}]} — 3 to 8 concepts ranked by affected students, counts consistent with the findings and statistics, only the given task labels and S-tokens, nothing else inside or after the block.
+MACHINE-READABLE TRAILER (mandatory): end the document with EXACTLY ONE fenced code block whose info string is json:concepts, containing strict JSON: {"concepts":[{"name":"<knowledge point, exact catalog name (or a 2-6 word error concept when the tasks carry no points)>","problems":{"P7":<affected student count>},"students":["S3","S7"]}]} — 3 to 8 concepts ranked by affected students, counts consistent with the findings and statistics, only the given task labels and S-tokens, nothing else inside the block.
+SECOND MACHINE-READABLE TRAILER (mandatory): immediately AFTER the json:concepts block, end the document with EXACTLY ONE more fenced code block whose info string is json:remedial, containing strict JSON: {"remedial":[{"concept":"<the SAME name as the matching entry in json:concepts>","kind":"programming"|"function","difficulty":"intro"|"medium"|"challenge","title":"<3-7 word working title for a NEW practice task>","brief":"<80-180 words for the task author: what the new task must make students practise, the specific misconception or gap it should expose (name the wrong pattern you saw), and a concrete scenario that is DIFFERENT from every task in avoid — same knowledge point, different story>","avoid":["P7"],"students":["S3","S7"]}]} — one entry per concept in json:concepts, same order. Remedial practice is ALWAYS code — never a quiz: a gap in writing one routine correctly → function (one function, no input/output code — prefer this whenever the gap is local to a routine); a gap in structuring a whole program or its input/output → programming. Even a misconception about a rule becomes a small code task that FAILS when the wrong rule is applied. difficulty: intro when most affected students are weak-level, challenge only when they are strong-level and the point is subtle. Only the given task labels and S-tokens. Nothing else inside or after this block.
 
 RULES: cite evidence inline as (P7, S3). Use only the given task labels and S-tokens; never guess names. Never reveal hidden test data. Knowledge-point names EXACTLY as in the task list. If part of the analysis failed, the context says so — state it plainly in section 1. Total length 1400-2200 words.`;
 

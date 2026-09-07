@@ -200,6 +200,7 @@ const REVIEW_STAGE = {
   objective: [['generate', 'Draft questions']],
   subjective: [['generate', 'Draft assignment']],
   programming: [['generate', 'Draft statement']],
+  function: [['generate', 'Draft statement']],
 };
 function stageListFor(d) {
   const kind = kindOf(d);
@@ -576,6 +577,8 @@ function questionCards(d) {
 /* ------------------------------------------------------------------ */
 const KIND_THEME = {
   programming: { cls: 'aisd--prog', icon: '💻', name: 'Programming task' },
+  // Shares the programming theme: same layout, one extra pane.
+  function: { cls: 'aisd--prog', icon: '🧩', name: 'Function task' },
   objective: { cls: 'aisd--obj', icon: '📝', name: 'Objective task' },
   subjective: { cls: 'aisd--subj', icon: '📄', name: 'Subjective task' },
 };
@@ -736,7 +739,7 @@ function ctxPaneHtml(d) {
     : '<div style="min-width:230px;"><div class="ais__label" style="margin-top:0;">' + esc(i18n('Languages for students')) + '</div><div class="ais__langs-all">🌐 ' + esc(i18n('Every judge language')) + '</div><div class="aisd__meta">' + esc(i18n('Students may submit in any language the judge supports.')) + '</div></div>'}
               <button class="ais__btn ais__btn--sm aisd__brief-save" style="align-self:flex-end;">💾 ${esc(i18n('Save requirement'))}</button>
             </div>
-            ${kind === 'programming' ? `
+            ${(kind === 'programming' || kind === 'function') ? `
             <div class="ais__label">🎯 ${esc(i18n('Target knowledge points (optional)'))}</div>
             <div class="aisd__meta" style="margin-bottom:6px;">${esc(i18n('Pick from the domain catalog (or type new ones). The AI designs the task so that a correct solution needs every one of them, probes them in the tests, and labels the task with them.'))}</div>
             <input type="text" class="aisd__knowledge" value="${esc((d.brief.knowledge || []).map((k) => k.name).join(','))}">
@@ -1019,11 +1022,20 @@ function renderProgramming(d) {
     ? i18n('Unlocks when you approve the statement with Continue — the AI then writes the solution, cross-check and tests.')
     : i18n('Unlocks after the statement exists and you approve it with Continue.');
   const whyVerify = i18n('Filled in automatically once verification passes (after Continue), or generate it by hand from this tab afterwards.');
+  const isFn = d.kind === 'function';
+  // The judge program is designed TOGETHER with the statement (one model
+  // call, so they agree), so its pane is open for review before approval —
+  // it is part of what the teacher approves. Locked only until it exists.
+  const hasHarness = isFn && !!(d.artifacts.harness && d.artifacts.harness.code);
+  const harnessTab = isFn ? ('<button class="aisd__tab" data-pane="harness">🧩 ' + esc(i18n('Judge program')) + '</button>') : '';
+  const harnessLocked = isFn ? lockedTab('harness', '🧩 ' + esc(i18n('Judge program')), i18n('Drafted together with the statement — appears once the statement exists.')) : '';
   const progTabs = showDownstream ? [
+    ...(harnessTab ? [harnessTab] : []),
     '<button class="aisd__tab" data-pane="sol">✅ ' + esc(i18n('Reference solution')) + '</button>',
     '<button class="aisd__tab" data-pane="alt">🔁 ' + esc(i18n('Cross-check solution')) + '</button>',
     '<button class="aisd__tab" data-pane="tests">🧾 ' + esc(i18n('Tests')) + ' (' + (d.artifacts.tests || []).length + ')</button>',
   ].join('\n          ') : [
+    ...(isFn ? [hasHarness ? harnessTab : harnessLocked] : []),
     lockedTab('sol', '✅ ' + esc(i18n('Reference solution')), whyApprove),
     lockedTab('alt', '🔁 ' + esc(i18n('Cross-check solution')), whyApprove),
     lockedTab('tests', '🧾 ' + esc(i18n('Tests')), whyApprove),
@@ -1082,9 +1094,22 @@ function renderProgramming(d) {
     : `<div class="ais__empty">${esc(i18n('No statement yet — press Generate statement above.'))}</div>`}
           </div>
 
+          ${isFn ? `<div class="aisd__pane" data-pane="harness" ${(showDownstream || hasHarness) ? '' : 'hidden'}>
+            <div class="aisd__meta" style="margin-bottom:8px;">${esc(i18n('The complete program the student’s function is spliced into at the marker line "/* Your function will be put here */". Saving or regenerating it also refreshes the "Sample program of judge" section of the statement, so students read exactly what runs; verification checks that it FAILS with the empty stub.'))}</div>
+            <div class="ais__label">${esc(i18n('Language'))}</div>${langSel('aisd__harness-lang', (d.artifacts.harness || {}).language || d.brief.language)}
+            <div class="ais__label">${esc(i18n('Judge program'))}</div>
+            <textarea class="aisd__harness-code" rows="16" spellcheck="false">${esc((d.artifacts.harness || {}).code || '')}</textarea>
+            <div class="ais__label">${esc(i18n('Stub the student starts from (the empty function)'))}</div>
+            <textarea class="aisd__stub-code" rows="6" spellcheck="false">${esc((d.artifacts.stub || {}).code || '')}</textarea>
+            <div class="aisd__bar" style="margin-top:10px;">
+              <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="harness" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate'))}</button>
+              <button class="ais__btn ais__btn--sm aisd__save" data-t="harness">💾 ${esc(i18n('Save'))}</button>
+            </div>
+          </div>` : ''}
+
           <div class="aisd__pane" data-pane="sol" ${showDownstream ? '' : 'hidden'}>
             <div class="ais__label">${esc(i18n('Language'))}</div>${langSel('aisd__sol-lang', sol.language)}
-            <div class="ais__label">${esc(i18n('Reference solution (must read stdin, write stdout only)'))}</div>
+            <div class="ais__label">${esc(isFn ? i18n('Reference solution (ONLY the function — it is inserted into the judge program)') : i18n('Reference solution (must read stdin, write stdout only)'))}</div>
             <textarea class="aisd__sol-code" rows="18" spellcheck="false">${esc(sol.code)}</textarea>
             <div class="aisd__bar" style="margin-top:10px;">
               <button class="ais__btn ais__btn--ghost ais__btn--sm aisd__regen" data-t="solution" ${busy ? 'disabled' : ''}>✨ ${esc(i18n('Regenerate'))}</button>
@@ -1245,6 +1270,8 @@ function render($root) {
   lastFp = artifactFp(d);
   lastSideFp = sideFp();
   const kind = kindOf(d);
+  // A function draft is a programming draft with one extra pane (the
+  // judge program), so it shares renderProgramming rather than a fourth layout.
   const html = buildMismatchHtml() + (kind === 'objective' ? renderObjective(d)
     : kind === 'subjective' ? renderSubjective(d)
       : renderProgramming(d));
@@ -1328,6 +1355,13 @@ function collectPayload($root, target) {
   }
   if (target === 'solution') {
     return { language: $root.find('.aisd__sol-lang').val(), code: String($root.find('.aisd__sol-code').val() || '') };
+  }
+  if (target === 'harness') {
+    return {
+      language: $root.find('.aisd__harness-lang').val(),
+      harness: String($root.find('.aisd__harness-code').val() || ''),
+      stub: String($root.find('.aisd__stub-code').val() || ''),
+    };
   }
   if (target === 'alt') {
     return { language: $root.find('.aisd__alt-lang').val(), code: String($root.find('.aisd__alt-code').val() || '') };
