@@ -8,6 +8,10 @@ ai_tutor.enabled: Enable AI Tutor
 ai_tutor.max_messages: Max Messages per Conversation
 ai_tutor.model: Model Name
 ai_tutor.provider: AI Provider
+ai_tutor.report_batch_chars: Class Report — Corpus Characters per MAP Call
+ai_tutor.report_concurrency: Class Report — Parallel MAP Calls
+ai_tutor.report_max_calls: Class Report — Max Provider Calls per Report
+ai_tutor.report_reduce_chars: Class Report — Max Characters for the REDUCE Call
 ai_tutor.temperature: Sampling Temperature
 ai_tutor.timeout: Request Timeout (seconds)
 Can be Extended For: Extension

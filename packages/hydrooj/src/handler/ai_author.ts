@@ -659,6 +659,9 @@ function ctxFileMeta(name: string): { kind: string, fence?: string } {
 
 const KIND_BRIEF_LINE: Record<AuthorKind, string> = {
     programming: 'programming exercise (auto-judged: the student submits code that is run against tests)',
+    // Was missing: a function draft's brief fell back to the programming line.
+    function: 'FUNCTION exercise (the student implements only the function(s); '
+        + 'the judge program you write supplies main/I/O and is spliced around it; auto-judged against tests)',
     objective: 'OBJECTIVE quiz (auto-graded questions, no coding)',
     subjective: 'SUBJECTIVE project-level assignment (human-graded: the student submits files plus a written report)',
 };
@@ -3269,7 +3272,9 @@ export async function draftSummariesIn(domainId: string, ids: ObjectId[]): Promi
 }
 
 class AiStudioBaseHandler extends Handler {
-    async prepare() {
+    // Subclasses declare @param-decorated prepare(args, id); the rest
+    // parameter keeps the override type-compatible without changing behaviour.
+    async prepare(..._args: any[]) {
         if (!authorEnabled()) throw new ForbiddenError('The AI Studio is not enabled (or no AI provider is configured).');
         this.checkPerm(PERM.PERM_CREATE_PROBLEM);
         /*

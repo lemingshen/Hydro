@@ -195,7 +195,7 @@ export function problemKindOf(pdoc: Pick<ProblemDoc, 'pid' | 'config'>): Problem
  * before the response is written, so the judge configuration never reaches
  * the picker.
  */
-const QUICK_PROJECTION = ['title', 'pid', 'domainId', 'docId', 'tag', 'difficulty', 'nSubmit', 'nAccept', 'config'];
+const QUICK_PROJECTION: (keyof ProblemDoc)[] = ['title', 'pid', 'domainId', 'docId', 'tag', 'difficulty', 'nSubmit', 'nAccept', 'config'];
 
 /** Statements are stored either as markdown or as JSON of { lang: markdown }. */
 function resolveStatement(content: any, preferLang?: string): string {
@@ -716,8 +716,9 @@ export class ProblemDetailHandler extends ContestDetailBaseHandler {
              * by family, rather than through `config.langs`, which is
              * intersected by exact id and would have dropped every variant.
              */
-            if (this.pdoc.config.template && problemKindOf(this.pdoc) === 'function') {
-                baseLangs = baseLangs.filter((l) => !!harnessFor(this.pdoc.config.template, l));
+            if (typeof this.pdoc.config === 'object' && this.pdoc.config.template && problemKindOf(this.pdoc) === 'function') {
+                const { template } = this.pdoc.config;
+                baseLangs = baseLangs.filter((l) => !!harnessFor(template, l));
             }
             this.pdoc.config.langs = ['objective', 'submit_answer'].includes(this.pdoc.config.type) ? ['_'] : intersection(baseLangs, ...t);
         }

@@ -1119,7 +1119,7 @@ export async function addClassReportDrafts(domainId: string, tid: string, entrie
     if (!entries.length) return;
     await collClassReport.updateOne(
         { _id: `${domainId}/${tid}` as any },
-        { $push: { remedialDrafts: { $each: entries } } },
+        { $push: { remedialDrafts: { $each: entries } } } as any,
     );
 }
 

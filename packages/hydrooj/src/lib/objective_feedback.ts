@@ -10,7 +10,8 @@ import { PERM } from '../model/builtin';
 import * as contest from '../model/contest';
 import KnowledgeModel from '../model/knowledge';
 import {
-    getObjectiveFeedback, listObjectiveFeedback, objectiveFeedbackJobStale, setObjectiveFeedbackJob, setObjectiveFeedbackReport,
+    getObjectiveFeedback, listObjectiveFeedback, objectiveFeedbackJobStale, purgeMalformedObjectiveFeedback,
+    setObjectiveFeedbackJob, setObjectiveFeedbackReport,
 } from '../model/objective_feedback';
 import problem from '../model/problem';
 import record from '../model/record';
@@ -261,6 +262,19 @@ export async function paperFeedbackFor(h: any, domainId: string, tdoc: any, deta
     return { url: h.url('homework_objective_feedback', { tid: tdoc.docId }), byPid, outcomeOf: taskOutcome };
 }
 
+/**
+ * The ONLY registration of this route. handler/objective_feedback.ts (an
+ * older, homework-wide copy of the feature) used to register the same name
+ * and path too, and won every time — a router serves the first matching
+ * layer, and this call only happens after homework.ts has awaited the
+ * scoreboard service — so the page polled a handler that ignored `pid`
+ * and never found its job or report ("The explanation could not be
+ * generated."). That file is now an empty stub; keep it that way.
+ */
 export function applyObjectiveFeedback(ctx) {
     ctx.Route('homework_objective_feedback', '/homework/:tid/objective-feedback', HomeworkObjectiveFeedbackHandler, PERM.PERM_VIEW_HOMEWORK);
+    // Sweep the documents the retired handler left behind (see the model).
+    purgeMalformedObjectiveFeedback()
+        .then((n) => { if (n) logger.info('[objective-feedback] removed %d malformed document(s) left by the retired handler', n); })
+        .catch((e) => logger.warn('[objective-feedback] cleanup skipped: %s', e.message));
 }

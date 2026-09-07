@@ -2,7 +2,10 @@
   <div class="row"><div class="columns clearfix">
     <div class="float-left">
       <a class="header--mobile__domain" href="/" target="_self">
-        <img src="{{ ctx.setting.get('ui-default.nav_logo_dark') }}">
+        {#- Same resolution as partials/nav.html: the ui.nav_logo override, otherwise the bundled logo served by index.ts. -#}
+        {%- set _navLogo = model.system.get('ui.nav_logo') -%}
+        {%- if not (_navLogo is string and _navLogo|trim) -%}{%- set _navLogo = UiContext.navLogo or '/logo.svg' -%}{%- endif -%}
+        <img src="{{ _navLogo }}" alt="{{ model.system.get('server.name') or 'Home' }}">
       </a>
     </div>
     <div class="float-right">

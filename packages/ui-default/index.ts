@@ -1,8 +1,9 @@
-import { readFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
-  ContestModel, Context, Handler, ObjectId, param, PERM, PRIV, ProblemModel, Schema,
-  SettingModel, SystemModel, Types, UserModel, yaml,
+  ContestModel, Context, Handler, NotFoundError, ObjectId, param, PERM, PRIV, ProblemModel, Schema,
+  SettingModel, SystemModel, Types, UiContextBase, UserModel, yaml,
 } from 'hydrooj';
 import convert from 'schemastery-jsonschema';
 import markdown from './backendlib/markdown';
@@ -13,6 +14,56 @@ class WikiHelpHandler extends Handler {
 
   async get() {
     this.response.template = 'wiki_help.html';
+  }
+}
+
+/*
+ * PTA fork — THE SITE LOGO, served straight from the source tree.
+ *
+ * The logo is packages/ui-default/components/navigation/logo.svg. Serving it
+ * through the static layer (as /components/navigation/logo.svg) needed three
+ * things to be true on the server: a webpack build after the file was added
+ * (only the build copies it into public/), a restart after that build (the
+ * static layer lists public/ once, at boot), and no stale value in the
+ * ui-default.nav_logo_dark setting. Any one of them missing showed a broken
+ * image or Hydro's own logo. This route depends on none of them: it reads
+ * the file from disk on every request (29 KB, HTTP-cached by ETag), so a new
+ * logo is live as soon as the file is replaced and Hydro restarted.
+ *
+ * URL: /logo.svg?v=<content hash> — the hash (UiContext.navLogo, computed at
+ * boot) changes with the file, so browsers, the service worker (which never
+ * caches "?v=" URLs) and CDNs cannot keep showing a previous logo.
+ */
+const NAV_LOGO_FILE = join(__dirname, 'components', 'navigation', 'logo.svg');
+const NAV_LOGO_URL = '/logo.svg';
+
+function navLogoHash(): string {
+  try {
+    return createHash('sha1').update(readFileSync(NAV_LOGO_FILE)).digest('hex').slice(0, 10);
+  } catch (e) {
+    return '';
+  }
+}
+
+declare module 'hydrooj' {
+  interface UiContextBase {
+    /** Where the nav / mobile header load the bundled logo from (partials/nav.html, header_mobile.html). */
+    navLogo?: string;
+  }
+}
+
+class NavLogoHandler extends Handler {
+  noCheckPermView = true;
+  notUsage = true;
+
+  async get() {
+    if (!existsSync(NAV_LOGO_FILE)) throw new NotFoundError('logo.svg');
+    const body = readFileSync(NAV_LOGO_FILE);
+    const etag = `"${createHash('sha1').update(body).digest('hex')}"`;
+    this.response.type = 'image/svg+xml';
+    this.response.addHeader('ETag', etag);
+    this.response.addHeader('Cache-Control', 'public, max-age=3600');
+    this.response.body = body;
   }
 }
 
@@ -187,11 +238,11 @@ export function apply(ctx: Context, config: ReturnType<typeof Config>) {
     c.setting.SystemSetting(Schema.object({
       'ui-default': Schema.object({
         footer_extra_html: Schema.string().role('textarea').default(''),
-        // PTA fork: the site's own logo lives at components/navigation/logo.svg
-        // and is copied to /components/navigation/logo.svg by
-        // build/config/webpack.ts (assets under components/ are only served
-        // if that list copies them). System Settings → Branding → ui.nav_logo
-        // overrides this per deployment without a rebuild.
+        // PTA fork: the nav and the mobile header no longer read this key —
+        // they show System Settings → Branding → ui.nav_logo when set, and
+        // otherwise the bundled logo served by NavLogoHandler (/logo.svg).
+        // Kept so stored configurations keep validating; the default points
+        // at the copy webpack makes of the same file.
         nav_logo_dark: Schema.string().default('/components/navigation/logo.svg'),
         domainNavigation: Schema.boolean().default(true).description('Show Domain Navigation'),
         about: Schema.string().role('markdown').default(defaultAbout),
@@ -201,6 +252,11 @@ export function apply(ctx: Context, config: ReturnType<typeof Config>) {
     ctx.Route('config_schema', '/manage/config/schema.json', SystemConfigSchemaHandler, PRIV.PRIV_EDIT_SYSTEM);
   });
   if (process.env.HYDRO_CLI) return;
+  // The bundled logo (see NavLogoHandler). The hash is fixed at boot: replace
+  // the file and restart to publish a new logo everywhere at once.
+  const logoHash = navLogoHash();
+  UiContextBase.navLogo = logoHash ? `${NAV_LOGO_URL}?v=${logoHash}` : NAV_LOGO_URL;
+  ctx.Route('nav_logo', NAV_LOGO_URL, NavLogoHandler);
   ctx.Route('wiki_help', '/wiki/help', WikiHelpHandler);
   ctx.Route('wiki_about', '/wiki/about', WikiAboutHandler);
   ctx.Route('set_theme', '/set_theme/:theme', SetThemeHandler);

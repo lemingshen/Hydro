@@ -8,6 +8,10 @@ ai_tutor.enabled: 啟用 AI 輔導員
 ai_tutor.max_messages: 每個對話最大訊息數
 ai_tutor.model: 模型名稱
 ai_tutor.provider: AI 供應商
+ai_tutor.report_batch_chars: 班級報告 — 每次 MAP 呼叫的語料字元數
+ai_tutor.report_concurrency: 班級報告 — MAP 並行呼叫數
+ai_tutor.report_max_calls: 班級報告 — 每份報告最多呼叫次數
+ai_tutor.report_reduce_chars: 班級報告 — REDUCE 呼叫的最大字元數
 ai_tutor.temperature: 取樣溫度
 ai_tutor.timeout: 請求逾時（秒）
 '"{data}" copied to clipboard!': '“{data}”已複製到剪貼簿！'

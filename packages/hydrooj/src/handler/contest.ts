@@ -569,8 +569,16 @@ export class ContestDetailHandler extends ContestDetailBaseHandler {
          * at the deadline — make sure the end-of-test evaluation has run
          * (fallback for the schedule task), then show the attendee's
          * detailed scores (contest_detail.html "Your results").
+         *
+         * CONTAINER-level end on purpose (contest.isDone(tdoc) without the
+         * tsdoc): objective verdicts are withheld until the test ends for
+         * EVERYONE (model/contest.ts applyProjection, the test rule's
+         * showRecord). With a per-student time limit (tdoc.duration) the
+         * personal window closes earlier, and gating on it here showed a
+         * student their objective scores while classmates were still
+         * answering the same questions.
          */
-        if (contest.isDone(this.tdoc, this.tsdoc)) {
+        if (contest.isDone(this.tdoc)) {
             if (!(this.tdoc as any).objectiveSynced) {
                 await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
                 this.tsdoc = await contest.getStatus(domainId, tid, this.user._id) || this.tsdoc;

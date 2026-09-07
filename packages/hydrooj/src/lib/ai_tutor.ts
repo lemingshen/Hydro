@@ -48,6 +48,13 @@ registerSystemSettingsIdempotent(
     // that is code, not a setting.
     Setting('setting_ai_tutor', 'assistant.enabled', true, 'boolean', 'assistant.enabled', 'Enable the student AI assistant (the chat button on every page)'),
     Setting('setting_ai_tutor', 'assistant.daily_turns', 60, 'number', 'assistant.daily_turns', 'Max assistant messages per student per day'),
+    // 📊 Class / session report jobs (handler/self_learning.ts). These keys
+    // were read there with the same defaults but never registered, so the
+    // Control Panel had no way to tune them; the defaults are unchanged.
+    Setting('setting_ai_tutor', 'ai_tutor.report_batch_chars', 48000, 'number', 'ai_tutor.report_batch_chars', 'Class report: characters of student corpus per MAP call (min 12000)'),
+    Setting('setting_ai_tutor', 'ai_tutor.report_reduce_chars', 110000, 'number', 'ai_tutor.report_reduce_chars', 'Class report: max characters handed to the final REDUCE call (min 30000)'),
+    Setting('setting_ai_tutor', 'ai_tutor.report_concurrency', 3, 'number', 'ai_tutor.report_concurrency', 'Class report: parallel MAP calls (1-8)'),
+    Setting('setting_ai_tutor', 'ai_tutor.report_max_calls', 40, 'number', 'ai_tutor.report_max_calls', 'Class report: max provider calls per report (min 8)'),
 );
 
 interface ProviderPreset {
@@ -1126,6 +1133,13 @@ export async function runAnnotationDialogue(c: TutorTurnContext, input: Annotati
     }
 }
 
+/**
+ * First tutor message on a FAILED submission (SelfLearningTutorHandler.postStart).
+ * This constant was referenced but never defined, so the chat-style opening
+ * turn ran with no directive at all; it now mirrors ACCEPTED_OPENING_DIRECTIVE
+ * for the failure case: one aimed comprehension question, nothing revealed.
+ */
+export const OPENING_DIRECTIVE = '[SYSTEM DIRECTIVE] This is your first message in this conversation and the latest submission was NOT accepted. Greet the student briefly and warmly, acknowledge the verdict in one sentence without naming the bug, then open the Socratic framework at stage S1/S3: after your private diagnosis, ask exactly ONE aimed question — have them restate the task in their own words or explain the approach their code takes. Stay at hint level L0, reveal nothing, and never chain a second question.';
 export const ACCEPTED_DIRECTIVE = '[SYSTEM DIRECTIVE] The student\'s latest submission was ACCEPTED. Structure your reply as: (1) genuine, brief congratulation referencing something real that improved; (2) a "💡 Spark:" mini-paragraph — at most TWO vivid, TRUE sentences connecting the exact concept they just used to one concrete real-world system, discovery, or story (make the course feel alive; no fluff, no invented facts); (3) at most ONE short, clearly optional question — the one-sentence root cause of the earlier failure — and make clear they are done and free to stop here. The Spark teaser is rhetorical: never demand an answer to it. Do not chain further questions unless they explicitly ask to continue; if they do, follow section 4-C under its hard cap.';
 export const ACCEPTED_OPENING_DIRECTIVE = '[SYSTEM DIRECTIVE] The latest submission is ACCEPTED and this is your first message in this conversation. Congratulate the student specifically (reference something real in their code) and keep it SHORT. Then add a "💡 Spark:" mini-paragraph — at most TWO vivid, TRUE sentences tying the exact concept they just used to one concrete real-world system, discovery, or story that makes the course feel alive (no invented facts; the teaser is rhetorical, no answer expected). Pose AT MOST ONE light, clearly optional question from section 4-C — or none at all — and tell them they can simply stop here. Never open with multiple questions; the victory lap is optional and runs under the section 4-C hard cap.';
 export const RESUBMIT_DIRECTIVE = '[SYSTEM DIRECTIVE] The student submitted a NEW attempt (see the latest [NEW SUBMISSION] block and updated context). Privately re-diagnose. If they made progress, acknowledge exactly what improved. Then continue tutoring with one aimed question from the appropriate stage.';

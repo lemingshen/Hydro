@@ -891,7 +891,10 @@ export async function apply(ctx: Context) {
             logger.warn('[knowledge-map] could not schedule rebuild: %s', e.message);
         }
     });
-    ctx.on('dispose', () => cancelScheduledMastery());
+    // cordis 4 never emits a 'dispose' event on the context; the plugin's
+    // effect disposer is what runs when this handler module is unloaded
+    // (dev hot-reload), so the scheduled rebuild timer cannot outlive it.
+    ctx.effect(() => () => cancelScheduledMastery());
     // Route-level gate is the JSON reader's; prepare() raises it for the page.
     ctx.Route('knowledge_points', '/knowledge-points', KnowledgePointsHandler, PERM.PERM_VIEW_PROBLEM);
     // Fixed segment BEFORE the bare route so neither can swallow the other

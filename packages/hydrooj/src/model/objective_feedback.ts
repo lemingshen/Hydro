@@ -69,6 +69,25 @@ export function objectiveFeedbackJobStale(job: ObjectiveFeedbackDoc['job'] | nul
     return !last || Date.now() - new Date(last).getTime() > silenceMs;
 }
 
+/**
+ * Remove the documents written by the retired homework-wide handler
+ * (handler/objective_feedback.ts, now an empty stub). It called this model
+ * with one argument too few, so `pid` received the job object or the
+ * report text and the documents landed under `.../[object Object]` and
+ * `.../<report text>` keys — unreachable by the per-question code, which
+ * always stores a numeric `pid`, and dead weight in listObjectiveFeedback.
+ * Idempotent; runs once per boot from applyObjectiveFeedback().
+ */
+export async function purgeMalformedObjectiveFeedback(): Promise<number> {
+    const res = await coll.deleteMany({ pid: { $not: { $type: 'number' } } } as any);
+    return res.deletedCount || 0;
+}
+
 export default {
-    getObjectiveFeedback, listObjectiveFeedback, setObjectiveFeedbackJob, setObjectiveFeedbackReport, objectiveFeedbackJobStale,
+    getObjectiveFeedback,
+    listObjectiveFeedback,
+    setObjectiveFeedbackJob,
+    setObjectiveFeedbackReport,
+    objectiveFeedbackJobStale,
+    purgeMalformedObjectiveFeedback,
 };

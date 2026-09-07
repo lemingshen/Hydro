@@ -11,12 +11,16 @@
     <ol class="nav__list nav__list--main clearfix">
       <li class="nav__list-item">
         {#-
-          PTA fork: the site logo is static/logo.svg (copied to the build root
-          by webpack, so served at /logo.svg behind the CDN prefix like the
-          favicons). System Settings → Branding → ui.nav_logo still wins when
-          set, so a domain can swap it without a rebuild.
+          PTA fork: the logo. System Settings → Branding → ui.nav_logo wins when
+          it holds a URL; otherwise the bundled logo, served by NavLogoHandler
+          in index.ts straight from components/navigation/logo.svg (no UI
+          build, no static file and no other setting involved). The `is
+          string` guard skips a broken stored value (a duplicated settings
+          form once saved arrays and "[object Object]" into text settings).
         -#}
-        <a href="/"><img class="nav__logo" src="{{ model.system.get('ui.nav_logo') or (UiContext.cdn_prefix + 'logo.svg') }}" alt="{{ model.system.get('server.name') or 'Home' }}"></a>
+        {%- set _navLogo = model.system.get('ui.nav_logo') -%}
+        {%- if not (_navLogo is string and _navLogo|trim) -%}{%- set _navLogo = UiContext.navLogo or '/logo.svg' -%}{%- endif -%}
+        <a href="/"><img class="nav__logo" src="{{ _navLogo }}" alt="{{ model.system.get('server.name') or 'Home' }}"></a>
       </li>
       {%- for item in overrideNav|default(ui.getNodes('Nav')) -%}{% if item.checker(handler) %}
         {{ nav_item(item) }}

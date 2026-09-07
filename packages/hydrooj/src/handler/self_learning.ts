@@ -237,7 +237,7 @@ export interface TaskBest {
  * the rubric HERE and press the button on any session to see the effect
  * immediately — the automatic evaluation will produce the same numbers.
  */
-export function scoreRecords(sdoc: SelfLearningDoc, rows: { pid: number, score: number, at: Date }[]): Map<number, TaskBest> {
+export function scoreRecords(sdoc: SelfLearningDoc, rows: { pid: number, score: number, at: Date, accepted?: boolean }[]): Map<number, TaskBest> {
     const hardEnd = sessionSchedule(sdoc).hardEndAt || null;
     const best = new Map<number, TaskBest>();
     for (const r of rows) {
@@ -3147,7 +3147,7 @@ export async function computeSessionResults(domainId: string, sdoc: SelfLearning
     // Group the raw records per student; scoreRecords — THE shared rubric,
     // also behind the student's own card — turns each group into per-task
     // bests, so this table can never disagree with what a student sees.
-    const rowsOf = new Map<number, { pid: number, score: number, at: Date }[]>();
+    const rowsOf = new Map<number, { pid: number, score: number, at: Date, accepted: boolean }[]>();
     for (const r of rows as any[]) {
         if (!recordCounts(r._id, cap)) continue;
         if (!rowsOf.has(r.uid)) rowsOf.set(r.uid, []);
@@ -7539,7 +7539,11 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
         // ends (contest.applyProjection masks the records); tell the paper
         // so it neither polls for results nor pre-colors chips from the
         // student's global problem status — either would leak.
-        const resultsWithheld = !canManage && !contest.isDone(tdoc, this.tsdoc);
+        // CONTAINER-level end (no tsdoc): a per-student time limit closes a
+        // student's own window earlier, and revealing verdicts then would
+        // show classmates who are still answering which options are right.
+        // Answering still locks on the personal window (`locked` below).
+        const resultsWithheld = !canManage && !contest.isDone(tdoc);
         // The countdown on the paper (pages/contest.page.ts) reads the same
         // fields the contest pages expose: the test's window and, for a
         // flexible-duration test, the student's own start / end.
@@ -7869,7 +7873,11 @@ export async function apply(ctx: Context) {
         const runVisibility = () => visibility().catch((e) => logger.warn('[visibility] sweep failed: %s', e.message));
         const firstVisibility = setTimeout(runVisibility, 90 * 1000);
         const everyVisibility = setInterval(runVisibility, 10 * 60 * 1000);
-        ctx.on('dispose', () => {
+        // cordis 4 never emits a 'dispose' event on the context, so the old
+        // ctx.on('dispose') cleanup was dead code and a hot-reloaded module
+        // left the previous timers running (duplicate sweeps in dev mode).
+        // The effect disposer runs when this plugin scope is torn down.
+        ctx.effect(() => () => {
             clearTimeout(first); clearInterval(every);
             clearTimeout(firstVisibility); clearInterval(everyVisibility);
         });
