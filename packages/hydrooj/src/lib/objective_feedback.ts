@@ -13,6 +13,7 @@ import {
     getObjectiveFeedback, listObjectiveFeedback, objectiveFeedbackJobStale, purgeMalformedObjectiveFeedback,
     setObjectiveFeedbackJob, setObjectiveFeedbackReport,
 } from '../model/objective_feedback';
+import { getQuick, studentFeedbackVisible } from '../model/quick_review';
 import problem from '../model/problem';
 import record from '../model/record';
 import { Handler, param, Types } from '../service/server';
@@ -203,11 +204,18 @@ export class HomeworkObjectiveFeedbackHandler extends Handler {
     @param('tid', Types.ObjectId)
     async prepare(domainId: string, tid: ObjectId) {
         this.tdoc = await contest.get(domainId, tid);
-        if (this.tdoc.rule !== 'homework') throw new NotFoundError(tid);
+        if (!this.tdoc) throw new NotFoundError(tid);
+        // Homework, or a TEST once its Quick Review policy shows students
+        // their feedback (lib/quick_review.ts studentFeedbackVisible: the
+        // container has ended for everyone and, under `on_teacher`, the
+        // teacher has released it). Any other rule: not found.
+        if (this.tdoc.rule !== 'homework') {
+            if (!studentFeedbackVisible(this.tdoc, await getQuick(domainId, String(tid)))) throw new NotFoundError(tid);
+        }
         // Only once the homework has ended (the late window included).
         if (!contest.isDone(this.tdoc)) throw new HomeworkNotLiveError(tid);
         const tsdoc = await contest.getStatus(domainId, tid, this.user._id);
-        if (!tsdoc?.attend) throw new ForbiddenError('Only students who took part in this homework can ask for an explanation.');
+        if (!tsdoc?.attend) throw new ForbiddenError('Only students who took part in this activity can ask for an explanation.');
     }
 
     @param('tid', Types.ObjectId)
@@ -259,7 +267,8 @@ export async function paperFeedbackFor(h: any, domainId: string, tdoc: any, deta
         if (d.status === STATUS.STATUS_ACCEPTED || (d.score || 0) >= 100) return 'correct';
         return (d.score || 0) > 0 ? 'partial' : 'wrong';
     };
-    return { url: h.url('homework_objective_feedback', { tid: tdoc.docId }), byPid, outcomeOf: taskOutcome };
+    const route = tdoc.rule === 'homework' ? 'homework_objective_feedback' : 'contest_objective_feedback';
+    return { url: h.url(route, { tid: tdoc.docId }), byPid, outcomeOf: taskOutcome };
 }
 
 /**
@@ -273,6 +282,9 @@ export async function paperFeedbackFor(h: any, domainId: string, tdoc: any, deta
  */
 export function applyObjectiveFeedback(ctx) {
     ctx.Route('homework_objective_feedback', '/homework/:tid/objective-feedback', HomeworkObjectiveFeedbackHandler, PERM.PERM_VIEW_HOMEWORK);
+    // ⚡ The same handler for TESTS (Quick Review): the paper passes this
+    // URL once the students' feedback is visible (see prepare()).
+    ctx.Route('contest_objective_feedback', '/contest/:tid/objective-feedback', HomeworkObjectiveFeedbackHandler, PERM.PERM_VIEW_CONTEST);
     // Sweep the documents the retired handler left behind (see the model).
     purgeMalformedObjectiveFeedback()
         .then((n) => { if (n) logger.info('[objective-feedback] removed %d malformed document(s) left by the retired handler', n); })

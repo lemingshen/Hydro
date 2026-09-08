@@ -14,6 +14,12 @@ import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
 import { activityPids, repairLegacyHiddenFlags } from '../lib/activity_pids';
 import { paperFeedbackFor } from '../lib/objective_feedback';
+import {
+    QUICK_JOB_STALE_MS, resultsHashOf, startQuickReview,
+} from '../lib/quick_review';
+import {
+    getQuick, getQuickForTeacher, quickJobStale, setQuestionPoints, setQuickReleased, studentFeedbackVisible,
+} from '../model/quick_review';
 import { seesEveryProblem } from './problem';
 import {
     ACTIVITY_JOB_STALE_MS, activityReportContext, buildActivityCorpus, extractRemedialBlock, renderActivityStudent, runActivityReportJob,
@@ -6195,9 +6201,36 @@ const FALSY_AVAILABILITY = ['', '0', 'false', 'no', 'n', 'unavailable', 'inactiv
  * (timestamps included, so debugging behavior can be analyzed). Requires at
  * least one accepted attempt — the button only appears on accepted modals.
  */
+/**
+ * A TEST that is still running, contains this problem and that the user is
+ * taking: AI Suggestions are locked for them until the test ends for
+ * everyone (the container end, never a personal window — the same rule as
+ * every other reveal). Owners, maintainers and contest editors are exempt.
+ * Returns the blocking test, or null. Decided from the records, so the
+ * lock holds whichever page the request comes from.
+ */
+async function liveTestLockingAi(h: Handler, domainId: string, pid: number): Promise<{ title: string, endAt: Date } | null> {
+    if (h.user.hasPerm(PERM.PERM_EDIT_CONTEST)) return null;
+    const now = new Date();
+    const live = await contest.getMulti(domainId, {
+        rule: { $ne: 'homework' }, pids: pid, beginAt: { $lte: now }, endAt: { $gt: now },
+    } as any).project({ docId: 1, owner: 1, maintainer: 1, title: 1, endAt: 1 }).toArray();
+    for (const tdoc of live) {
+        if (tdoc.owner === h.user._id || (tdoc.maintainer || []).includes(h.user._id)) continue;
+        const tsdoc = await contest.getStatus(domainId, tdoc.docId, h.user._id);
+        if (tsdoc?.attend) return { title: tdoc.title, endAt: tdoc.endAt };
+    }
+    return null;
+}
+
 class AiSuggestionsHandler extends Handler {
     @param('pid', Types.PositiveInt)
     async get({ domainId }, pid: number) {
+        const lock = await liveTestLockingAi(this, domainId, pid);
+        if (lock) {
+            this.response.body = { report: null, locked: true, lockedUntil: lock.endAt, lockedBy: lock.title };
+            return;
+        }
         // Saved-report lookup: lets the modal show the last generated report
         // instantly (and token-free) instead of regenerating every time.
         const doc = await getSuggestionReport(domainId, pid, this.user._id);
@@ -6209,6 +6242,8 @@ class AiSuggestionsHandler extends Handler {
     @param('pid', Types.PositiveInt)
     async post({ domainId }, pid: number) {
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
+        const lock = await liveTestLockingAi(this, domainId, pid);
+        if (lock) throw new ForbiddenError('AI Suggestions are available after the test ends.');
         await this.limitRate('ai_suggestions', 60, 3, '{{user}}');
         const history = await record.getMulti(domainId, {
             pid, uid: this.user._id, contest: { $ne: record.RECORD_PRETEST },
@@ -7179,8 +7214,18 @@ class AiClassReportHandler extends Handler {
     @param('tid', Types.ObjectId)
     @param('dry', Types.Boolean, true)
     @param('job', Types.Boolean, true)
-    async get({ domainId }, tid: ObjectId, dry = false, jobOnly = false) {
+    @param('quick', Types.Boolean, true)
+    @param('deck', Types.Boolean, true)
+    async get({ domainId }, tid: ObjectId, dry = false, jobOnly = false, quick = false, deck = false) {
+        if (deck) {
+            await this.respondDeck(domainId, tid);
+            return;
+        }
         const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        if (quick) {
+            await this.respondQuick(domainId, tdoc, kind, jobOnly);
+            return;
+        }
         const staleMs = kind === 'self-learning' ? SESSION_JOB_STALE_MS : ACTIVITY_JOB_STALE_MS;
         // 💓 Dead = no heartbeat for staleMs (every batch writes one), never
         // "started long ago": a 200-student run legitimately takes an hour.
@@ -7254,6 +7299,130 @@ class AiClassReportHandler extends Handler {
             stats: corpus.light,
             job: jobOf(doc),
         };
+    }
+
+    /*
+     * ⚡ QUICK REVIEW (lib/quick_review.ts): the exact statistics of a
+     * finished test + the one-call diagnosis, cached on the class-report
+     * document. `stale` tells the page the cache no longer matches the
+     * scoreboard (a re-grade, a score override); a stale or missing review
+     * of an ENDED activity is regenerated in the background right away when
+     * ai_tutor.quick_review_auto is on, so the teacher's click after the
+     * end normally finds it ready.
+     */
+    async respondQuick(domainId: string, tdoc: any, kind: string, jobOnly: boolean) {
+        if (kind === 'self-learning') throw new BadRequestError('Quick Review is for tests and homework.');
+        const tid = String(tdoc.docId);
+        const q = await getQuickForTeacher(domainId, tid);
+        let job: any = q?.job || null;
+        if (quickJobStale(job, QUICK_JOB_STALE_MS)) job = { ...job, status: 'failed', error: 'The review job stopped reporting progress (the server may have restarted). Generate it again.' };
+        if (jobOnly) {
+            this.response.body = { kind, job, generatedAt: q?.generatedAt || null };
+            return;
+        }
+        const ended = contest.isDone(tdoc);
+        const light = (await buildActivityCorpus(domainId, tdoc, kind as any, true)).light;
+        const currentHash = resultsHashOf(light);
+        const stale = !!q?.digest && q.digest.resultsHash !== currentHash;
+        const running = job?.status === 'running';
+        const failedRecently = job?.status === 'failed' && job.updatedAt && Date.now() - new Date(job.updatedAt).getTime() < 5 * 60 * 1000;
+        if (!running && !failedRecently && ended && light.participants && (!q?.digest || stale) && system.get('ai_tutor.quick_review_auto') !== false) {
+            startQuickReview(domainId, tdoc, kind as any, { by: this.user._id });
+            job = { status: 'running', stage: 'collect', startedAt: new Date(), updatedAt: new Date(), by: this.user._id };
+        }
+        const policy = String(system.get('ai_tutor.quick_review_student_feedback') || 'on_end');
+        this.response.body = {
+            kind,
+            title: tdoc.title,
+            ended,
+            stale,
+            job: job && job.status !== 'done' ? job : null,
+            quick: q?.digest ? {
+                generatedAt: q.generatedAt, by: q.by, digest: q.digest, diagnosis: q.diagnosis || null, diagnosisNote: q.diagnosisNote || '', diagnosisRaw: q.diagnosisRaw || '', released: !!q.released, prewarm: q.prewarm || null,
+            } : null,
+            policy,
+            studentFeedback: kind === 'contest' ? studentFeedbackVisible(tdoc, q) : false,
+            stats: light,
+            links: {
+                paper: this.url(kind === 'homework' ? 'homework_paper' : 'contest_paper', { tid: tdoc.docId }),
+                scoreboard: this.url(kind === 'homework' ? 'homework_scoreboard' : 'contest_scoreboard', { tid: tdoc.docId }),
+            },
+        };
+    }
+
+    /*
+     * ⚡ The class-review DECK for the students who took the test: the same
+     * slides the teacher projects (anonymous aggregates, the re-teach, the
+     * quick checks), once the feedback policy shows them their results.
+     * Staff get it regardless. Never the per-student map, never the panel.
+     */
+    async respondDeck(domainId: string, tid: ObjectId) {
+        const tdoc = await contest.get(domainId, tid);
+        if (!tdoc || tdoc.rule === 'homework') throw new NotFoundError(tid);
+        const staff = this.user.own(tdoc) || this.user.hasPerm(PERM.PERM_EDIT_CONTEST) || (tdoc.maintainer || []).includes(this.user._id);
+        const q = await getQuickForTeacher(domainId, String(tid));
+        if (!staff) {
+            const tsdoc = await contest.getStatus(domainId, tid, this.user._id);
+            if (!tsdoc?.attend) throw new ForbiddenError('Only students who took this test can open its review.');
+            if (!studentFeedbackVisible(tdoc, q)) throw new ForbiddenError('The class review opens after the test ends.');
+        }
+        this.response.body = {
+            kind: 'contest',
+            title: tdoc.title,
+            quick: q?.digest ? { generatedAt: q.generatedAt, digest: q.digest, diagnosis: q.diagnosis || null } : null,
+        };
+    }
+
+    /** Start (or re-attach to) the Quick Review job. */
+    @param('tid', Types.ObjectId)
+    async postQuick({ domainId }, tid: ObjectId) {
+        const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        if (kind === 'self-learning') throw new BadRequestError('Quick Review is for tests and homework.');
+        if (!contest.isDone(tdoc)) throw new ForbiddenError('The activity has not ended yet — the review is built from final results.');
+        const q = await getQuick(domainId, String(tid));
+        if (q?.job && q.job.status === 'running' && !quickJobStale(q.job, QUICK_JOB_STALE_MS)) {
+            this.response.body = { kind, started: false, job: q.job };
+            return;
+        }
+        await this.limitRate('ai_quick_review', 300, 6, '{{user}}');
+        startQuickReview(domainId, tdoc, kind as any, { by: this.user._id });
+        this.response.body = { kind, started: true };
+    }
+
+    /** `on_teacher` policy: show / hide the students' weak-points card and Explain. */
+    @param('tid', Types.ObjectId)
+    @param('released', Types.Boolean)
+    async postRelease({ domainId }, tid: ObjectId, released: boolean) {
+        const { tdoc } = await this.classTdoc(domainId, tid);
+        await setQuickReleased(domainId, String(tid), released);
+        this.response.body = { released, studentFeedback: studentFeedbackVisible(tdoc, { released }) };
+    }
+
+    /**
+     * "Fix knowledge point": the teacher's names for one question win over
+     * the inference; the review is rebuilt so the weak-point ranking, the
+     * students' cards and the map evidence follow.
+     */
+    @param('tid', Types.ObjectId)
+    @param('pid', Types.Int)
+    @param('key', Types.String)
+    @param('points', Types.Content)
+    async postFixPoint({ domainId }, tid: ObjectId, pid: number, key: string, points: string) {
+        const { tdoc, kind } = await this.classTdoc(domainId, tid);
+        if (!(tdoc.pids || []).includes(pid)) throw new NotFoundError(pid);
+        let names: string[] = [];
+        try {
+            const parsed = JSON.parse(points);
+            names = Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
+        } catch (e) {
+            names = String(points).split(/[,;\n]/);
+        }
+        names = [...new Set(names.map((n) => n.trim()).filter((n) => n))].slice(0, 6);
+        const resolved: string[] = [];
+        for (const n of names) resolved.push((await KnowledgeModel.resolve(domainId, n).catch(() => null)) || n);
+        await setQuestionPoints(domainId, pid, String(key).slice(0, 16), resolved, 'teacher', this.user._id);
+        if (contest.isDone(tdoc)) startQuickReview(domainId, tdoc, kind as any, { by: this.user._id, prewarm: false });
+        this.response.body = { points: resolved };
     }
 
     /**
@@ -7559,7 +7728,11 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
          * student did not get right carries an "Explain" button on the paper
          * (lib/objective_feedback.ts) and its rail chip turns red.
          */
-        const feedback = (isHomework && !resultsWithheld && !canManage && this.tsdoc?.attend)
+        // ⚡ ... and on a TEST once its Quick Review policy shows students
+        // their feedback (model/quick_review.ts studentFeedbackVisible).
+        const feedbackAllowed = isHomework
+            || studentFeedbackVisible(tdoc, await getQuick(domainId, String(tid)).catch(() => null));
+        const feedback = (feedbackAllowed && !resultsWithheld && !canManage && this.tsdoc?.attend)
             ? await paperFeedbackFor(this, domainId, tdoc, this.tsdoc?.detail || {}).catch(() => null)
             : null;
         await respondObjectivePaper(this, domainId, {

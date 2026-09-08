@@ -920,14 +920,24 @@ export function showSubmitModal(data, onClose) {
     html += `<div class="slm__sect"><div class="slm__secthead">${esc(i18n('Compilation Output'))}</div>`
       + `<pre class="slm__compile">${esc(data.compilerTexts)}</pre></div>`;
   }
-  const aiEligible = !!data.accepted && SCRATCHPAD_TYPES.includes(problemType());
+  // In a TEST that is still running, AI Suggestions wait for the end (the
+  // container end; the server enforces the same rule). Owners and domain
+  // roots keep them. Homework is never locked.
+  const uc = window.UiContext || {};
+  const me = (window.UserContext || {})._id;
+  const isOwner = me != null && !!uc.tdoc && uc.tdoc.owner === me;
+  const aiLockedByTest = !!(uc.tdoc && uc.tdoc.rule !== 'homework' && uc.tdocDone === false && !uc.isDomainRoot && !isOwner);
+  const aiEligible = !!data.accepted && SCRATCHPAD_TYPES.includes(problemType()) && !aiLockedByTest;
+  const aiLockNote = (!!data.accepted && SCRATCHPAD_TYPES.includes(problemType()) && aiLockedByTest)
+    ? `<span class="slm__ai-locked" title="${esc(i18n('AI Suggestions are available after the test ends.'))}">🔒 ${esc(i18n('AI Suggestions after the test ends'))}</span>`
+    : '';
   const $mask = $('<div class="slm-mask"></div>').appendTo(document.body);
   const $modal = $(`<div class="slm" role="dialog" aria-label="${esc(i18n('Submit Result'))}">`
     + `<div class="slm__head"><span class="slm__title">${esc(i18n('Submit Result'))}</span>`
     + `<button type="button" class="slm__close" title="${esc(i18n('Close'))}">×</button></div>`
     + `<div class="slm__body">${html}</div>`
     + '<div class="slm__foot">'
-    + (aiEligible ? `<button type="button" class="slm__ai-btn">🤖 ${esc(i18n('AI Suggestions'))}</button>` : '')
+    + (aiEligible ? `<button type="button" class="slm__ai-btn">🤖 ${esc(i18n('AI Suggestions'))}</button>` : aiLockNote)
     + '<span class="slm__spacer"></span>'
     + `<button type="button" class="rounded primary button slm__ok">${esc(i18n('OK'))}</button></div>`
     + '</div>').appendTo($mask);

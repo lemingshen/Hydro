@@ -33,7 +33,7 @@
               row:false
             }) }}
             {{ form.form_text({
-              columns:3,
+              columns:2,
               label:'Begin Time',
               name:'beginAtTime',
               placeholder:'HH:MM',
@@ -45,19 +45,34 @@
               columns:2,
               label:'Duration (hours)',
               name:'duration',
-              value:duration|default('3'),
+              value:(duration|default(3)|round(2)),
+              row:false
+            }) }}
+            {#- PTA: the end is editable (date + time, the same pickers as
+                the begin). contest_edit.page.ts keeps end and duration in
+                sync both ways; the server (ContestEditHandler.postUpdate)
+                takes the end fields as authoritative when present. -#}
+            {%- set endAt = beginAt.clone().add(duration|default(3), 'hours') -%}
+            {{ form.form_text({
+              columns:3,
+              label:'End Date',
+              name:'endAtDate',
+              placeholder:'YYYY-mm-dd',
+              value:endAt.format('YYYY-M-D'),
+              date:true,
               row:false
             }) }}
             {{ form.form_text({
-              columns:4,
+              columns:2,
               label:'End Time',
-              name:'endAt',
-              placeholder:'YYYY-mm-dd HH:MM',
-              value:beginAt.add(duration, 'hours').format('YYYY-M-D HH:mm'),
-              disabled:true,
+              name:'endAtTime',
+              placeholder:'HH:MM',
+              value:endAt.format('H:mm'),
+              time:true,
               row:false
             }) }}
           </div>
+          <div class="row"><div class="columns"><p class="help-text pta-endtime-hint" id="pta-endtime-hint" style="display:none;margin:-8px 0 12px"></p></div></div>
           {{ form.form_textarea({
             columns:null,
             label:'Description',

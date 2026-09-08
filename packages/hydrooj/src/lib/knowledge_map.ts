@@ -52,6 +52,7 @@ import {
 } from '../model/knowledgemap';
 import problem from '../model/problem';
 import RecordModel from '../model/record';
+import { quizEvidenceOf } from '../model/quick_review';
 import { collProgress, collTutor } from '../model/selflearning';
 import * as aiTutor from './ai_tutor';
 
@@ -80,6 +81,12 @@ export const WEIGHTS = {
     ownership: 2,
     solved: 1.5,
     reasoning: 1.5,
+    // ⚡ one quiz question is direct but small evidence: below a solved task,
+    // and a miss counts a little more than a hit (a blank or wrong answer on
+    // a question the point is *about* is informative; a right answer may be
+    // a guess on a 4-option question).
+    quiz_ok: 1,
+    quiz_fail: 1.25,
 } as const;
 
 /** Kinds that come from graded tutor dialogue rather than inference. */
@@ -392,6 +399,7 @@ function reasonOf(p: MasteryPoint): string {
     if (kinds.has('transfer_fail')) return 'This came back on a later task and tripped you up again.';
     if (kinds.has('surfaced')) return 'The tutor traced one of your errors to this idea.';
     if (kinds.has('attributed')) return 'Your unsolved attempts here point at this idea.';
+    if (kinds.has('quiz_fail')) return 'A quiz question about this went wrong.';
     if (kinds.has('reasoning')) return 'Your explanations while debugging this were still uncertain.';
     if (kinds.has('ownership')) return 'You solved it, but explaining your own solution was shaky.';
     if (p.state === 'resolving') return 'You got past this once — worth confirming it stuck.';
@@ -412,12 +420,14 @@ export async function computeMastery(
 ): Promise<Omit<KnowledgeMasteryDoc, '_id'>> {
     const startedAt = Date.now();
 
-    const [catalog, pdocs, outcomes, tutor] = await Promise.all([
+    const [catalog, pdocs, outcomes, tutor, quiz] = await Promise.all([
         KnowledgeModel.getMulti(domainId).limit(TASK_SCAN_LIMIT).toArray() as Promise<KnowledgePointDoc[]>,
         problem.getMulti(domainId, { tag: { $exists: true, $ne: [] } }, ['docId', 'pid', 'title', 'tag', 'difficulty', 'hidden'] as any)
             .limit(TASK_SCAN_LIMIT).toArray() as Promise<ProblemDoc[]>,
         outcomesOf(domainId, uid),
         tutorEvidenceOf(domainId, uid),
+        // ⚡ per-question outcomes of finished tests (lib/quick_review.ts)
+        quizEvidenceOf(domainId, uid).catch(() => []),
     ]);
 
     // Catalog index. Tags are matched case-insensitively through names AND
@@ -472,6 +482,19 @@ export async function computeMastery(
                     note: `${o.attempts} attempts, not solved yet.`,
                 });
             }
+        }
+    }
+
+    /* ---- 1b. ⚡ quiz questions of finished tests (question-level, direct) ---- */
+    for (const q of quiz) {
+        const d = decay(q.at);
+        for (const raw of q.points || []) {
+            const name = canonical(raw)?.name;
+            if (!name) continue;
+            addEvidence(bucketOf(name), {
+                kind: q.correct ? 'quiz_ok' : 'quiz_fail', polarity: q.correct ? 1 : -1, weight: (q.correct ? WEIGHTS.quiz_ok : WEIGHTS.quiz_fail) * d,
+                pid: q.pid, label: q.label, at: q.at, note: q.correct ? `Answered correctly in a test (${q.label}).` : `Missed in a test (${q.label}).`,
+            });
         }
     }
 

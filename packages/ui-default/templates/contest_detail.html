@@ -79,6 +79,55 @@
       </div>
     </div>
     {%- endif -%}
+    {%- if weakPoints -%}
+    {#- ⚡ Quick Review: the student's own weak points after the test has
+        ended for everyone (handler/contest.ts → lib/quick_review.ts
+        studentWeakPoints). Missed questions grouped by knowledge point, the
+        class misconception when this answer was the dominant wrong one,
+        the paper's Explain, and practice tasks per point. -#}
+    <div class="section pta-results qr-student">
+      <div class="section__header">
+        <h1 class="section__title">🧭 {{ _('Your weak points') }}</h1>
+        <div class="section__tools">
+          {%- if quickDeckUrl -%}<button type="button" class="qr-btn qr-btn--primary" id="qr-deck-open" data-url="{{ quickDeckUrl }}" style="margin-right:10px">📽 {{ _('Class review') }}</button>{%- endif -%}
+          <span class="pta-results__total"><b>{{ weakPoints.missedCount }}</b> / {{ weakPoints.questionCount }} {{ _('questions missed') }}</span>
+        </div>
+      </div>
+      <div class="section__body">
+        {%- if not weakPoints.points.length -%}
+        <p class="qr-student__ok">🎉 {{ _('Nothing to work on from this test — every question you answered was right.') }}</p>
+        {%- endif -%}
+        {%- for p in weakPoints.points -%}
+        <div class="pta-results__group qr-student__point">
+          <div class="pta-results__ghead">
+            <span class="pta-results__gicon">{% if p.mastered %}🟡{% else %}🔴{% endif %}</span>
+            <span class="pta-results__gname">{{ p.name }}{% if p.path and p.path != p.name %} <small class="qr-student__path">{{ p.path }}</small>{% endif %}</span>
+            <span class="pta-results__gscore">{{ p.missed }} / {{ p.total }} {{ _('missed') }} · <span class="pta-chip {% if p.mastered %}pta-chip--gold{% else %}pta-chip--bad{% endif %}">{{ _('Worth a check') if p.mastered else _('Not yet mastered') }}</span></span>
+          </div>
+          <ul class="qr-student__list">
+          {%- for q in p.questions -%}
+            <li>
+              <a href="{{ paperUrl }}#q-{{ q.pid }}"><b>{{ q.label }} · Q{{ q.key }}</b></a> — {{ q.prompt|truncate(140) }}
+              <div class="qr-student__meta">{{ _('Your answer') }}: <code>{{ q.given if q.given else _('blank') }}</code> · {{ _('Key') }}: <code>{{ q.answer|join(', ') }}</code> · {{ q.classAccuracy }}% {{ _('of the class got it right') }}</div>
+              {%- if q.misconception -%}<div class="qr-student__why">💡 {{ q.misconception }}</div>{%- endif -%}
+              <a class="qr-student__explain" href="{{ paperUrl }}#q-{{ q.pid }}">🤖 {{ _('Explain on the paper') }}</a>
+            </li>
+          {%- endfor -%}
+          {%- for t in p.tasks -%}
+            <li>{{ _('Programming task') }} <b>{{ t }}</b> — {{ _('not accepted') }}</li>
+          {%- endfor -%}
+          </ul>
+          {%- if p.practise.length -%}
+          <div class="qr-student__practise">{{ _('Practise next') }}:
+            {%- for x in p.practise %} <a class="pta-chip pta-chip--dim" href="{{ url('problem_detail', pid=x.pid) }}">{{ x.label }} · {{ x.title }}</a>{% endfor %}
+          </div>
+          {%- endif -%}
+        </div>
+        {%- endfor -%}
+        <p class="qr-student__foot"><a href="{{ url('knowledge_map') }}">🧭 {{ _('See your Knowledge Map') }}</a></p>
+      </div>
+    </div>
+    {%- endif -%}
     {% if files.length %}
       <div class="section">
         <div class="section__header">

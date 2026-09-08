@@ -881,6 +881,7 @@ button:focus-visible {
 .slm__pdf:disabled { opacity: 0.6; cursor: default; transform: none; }
 .slm__aits { font-size: 11px; color: rgba(255, 255, 255, 0.85); flex: 0 0 auto; }
 
+.slm__ai-locked { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 600; color: var(--pta-ink-soft); background: var(--pta-card-3); border: 1px dashed var(--pta-line); cursor: default; }
 .slm__ai-btn { background: linear-gradient(120deg, #4c6ef5, #845ef7); color: #fff; border: none; border-radius: 999px; padding: 8px 20px; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: 0 6px 16px -6px rgba(76, 110, 245, 0.6); transition: filter 0.12s ease, transform 0.12s var(--pta-ease), box-shadow 0.12s ease; }
 .slm__ai-btn:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 9px 20px -6px rgba(76, 110, 245, 0.65); }
 .slm__ai-btn:active { transform: translateY(0); }
@@ -3068,3 +3069,17 @@ html.page--contest_paper .main, html.page--homework_paper .main { padding-bottom
 .pta-results__table tr.is-fail .pta-results__idx { background: var(--pta-bad-soft); color: var(--pta-bad-text); }
 .pta-results__of { color: var(--pta-ink-faint); }
 .theme--dark .pta-results__table { border-color: var(--pta-line); }
+
+/* ⚡ Quick Review — the student's weak-points card (contest_detail.html) */
+.qr-student__path { font-weight: 500; color: var(--pta-ink-faint); margin-left: 6px; }
+.qr-student__list { list-style: none; margin: 8px 0 4px; padding: 0; }
+.qr-student__list li { padding: 8px 10px; border-bottom: 1px solid var(--pta-line-soft); font-size: 14px; }
+.qr-student__list li:last-child { border-bottom: 0; }
+.qr-student__meta { font-size: 12.5px; color: var(--pta-ink-soft); margin: 4px 0; }
+.qr-student__meta code { background: var(--pta-card-3); border-radius: 4px; padding: 1px 6px; }
+.qr-student__why { background: var(--pta-violet-soft); border: 1px solid var(--pta-violet-line); color: var(--pta-violet-text); border-radius: var(--pta-radius-sm); padding: 6px 10px; font-size: 13px; margin: 6px 0; }
+.qr-student__explain { font-size: 13px; font-weight: 700; }
+.qr-student__practise { font-size: 13px; margin: 6px 0 2px; color: var(--pta-ink-soft); }
+.qr-student__practise .pta-chip { margin: 2px 0; }
+.qr-student__ok { font-size: 15px; font-weight: 700; color: var(--pta-ok-text); margin: 4px 0 8px; }
+.qr-student__foot { margin: 12px 0 0; font-size: 13px; }

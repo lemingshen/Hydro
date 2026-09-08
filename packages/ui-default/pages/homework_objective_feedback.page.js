@@ -19,7 +19,10 @@ import { i18n, request } from 'vj/utils';
  */
 const esc = (t) => $('<i>').text(String(t ?? '')).html();
 
-export default new NamedPage('homework_paper', () => {
+// ⚡ Also on a TEST paper once its Quick Review policy shows students their
+// feedback: the server passes the same UiContext.paperFeedback (route
+// contest_objective_feedback) — nothing else differs.
+export default new NamedPage(['homework_paper', 'contest_paper'], () => {
   const cfg = (window.UiContext && UiContext.paperFeedback) || null;
   if (!cfg || !cfg.url) return;
   const urlOf = (pid) => `${cfg.url}?pid=${pid}`;

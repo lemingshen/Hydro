@@ -21,6 +21,8 @@ import { objectiveSubKindOf } from '../lib/objective_markdown';
 import { repairLegacyHiddenFlags } from '../lib/activity_pids';
 import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
+import { getQuickForStudent, studentFeedbackVisible } from '../model/quick_review';
+import { startQuickReview, studentWeakPoints } from '../lib/quick_review';
 import * as discussion from '../model/discussion';
 import * as document from '../model/document';
 import { getSubjective } from '../model/selflearning';
@@ -30,6 +32,7 @@ import problem from '../model/problem';
 import record from '../model/record';
 import ScheduleModel from '../model/schedule';
 import * as setting from '../model/setting';
+import system from '../model/system';
 import storage from '../model/storage';
 import user from '../model/user';
 
@@ -173,6 +176,18 @@ export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
         await document.setStatus(domainId, document.TYPE_CONTEST, tdoc.docId, uid, { journal, ...stats } as any);
     }
     await syncObjectiveStatus(domainId, tdoc);
+    /*
+     * ⚡ Then the Quick Review of a TEST (lib/quick_review.ts), so it is
+     * ready when the teacher opens it (ai_tutor.quick_review_auto). Done
+     * here — the single point every end-of-test path goes through: the
+     * schedule task, the page fallbacks above, the re-run after an end-time
+     * extension — rather than in each caller. Detached; a review generated
+     * by the system in the last two minutes is not rebuilt (two paths can
+     * evaluate the same end within seconds).
+     */
+    if (tdoc.rule !== 'homework' && system.get('ai_tutor.quick_review_auto') !== false) {
+        startQuickReview(domainId, tdoc, 'contest', { by: 'system' });
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -584,6 +599,21 @@ export class ContestDetailHandler extends ContestDetailBaseHandler {
                 this.tsdoc = await contest.getStatus(domainId, tid, this.user._id) || this.tsdoc;
             }
             if (this.tsdoc?.attend) this.response.body.myResults = await myResultsOf(domainId, this.tdoc, this.tsdoc.detail || {});
+            /*
+             * ⚡ Quick Review — the student's own weak points (missed
+             * questions grouped by knowledge point, the class misconception
+             * when their answer was the dominant wrong one, practice tasks),
+             * only when the feedback policy allows (model/quick_review.ts).
+             */
+            if (this.tsdoc?.attend && !this.user.own(this.tdoc)) {
+                const q = await getQuickForStudent(domainId, String(tid), this.user._id).catch(() => null);
+                if (q && studentFeedbackVisible(this.tdoc, q)) {
+                    this.response.body.weakPoints = await studentWeakPoints(domainId, this.tdoc, this.user._id, q).catch(() => null);
+                    this.response.body.paperUrl = this.url('contest_paper', { tid });
+                    // the class-review deck (AiClassReportHandler.respondDeck)
+                    this.response.body.quickDeckUrl = this.url('ai_class_report', { tid });
+                }
+            }
         }
     }
 
@@ -860,12 +890,14 @@ export class ContestEditHandler extends Handler {
     @param('keepScoreboardHidden', Types.Boolean)
     @param('langs', Types.CommaSeperatedArray, true)
     @param('paper', Types.Content, true)
+    @param('endAtDate', Types.Date, true)
+    @param('endAtTime', Types.Time, true)
     async postUpdate(
         domainId: string, tid: ObjectId, beginAtDate: string, beginAtTime: string, duration: number,
         title: string, content: string, rule: string, _pids: string, rated = false,
         _code = '', autoHide = false, assign: string[] = [], lock: number = null,
         contestDuration: number = null, maintainer: number[] = [], allowViewCode = false, allowPrint = false,
-        keepScoreboardHidden = false, langs: string[] = [], paper = '',
+        keepScoreboardHidden = false, langs: string[] = [], paper = '', endAtDate = '', endAtTime = '',
     ) {
         // PTA: one rule for every test (model/contest TEST_RULE). A test that
         // was created under a legacy rule keeps it until it is re-saved.
@@ -879,8 +911,23 @@ export class ContestEditHandler extends Handler {
         const pids = parsedPaper ? parsedPaper.pids : _pids.replace(/，/g, ',').split(',').map((i) => +i).filter((i) => i);
         const beginAtMoment = moment.tz(`${beginAtDate} ${beginAtTime}`, this.user.timeZone);
         if (!beginAtMoment.isValid()) throw new ValidationError('beginAtDate', 'beginAtTime');
-        const endAt = beginAtMoment.clone().add(duration, 'hours').toDate();
-        if (beginAtMoment.isSameOrAfter(endAt)) throw new ValidationError('duration');
+        /*
+         * PTA: the editor lets the teacher set the END directly (end date +
+         * time, kept in sync with the duration on the page). When both end
+         * fields arrive they are authoritative — an end typed as 17:45 is
+         * stored as 17:45, not as "begin + 1.3333 hours" — and `duration`
+         * is only the fallback for API callers that send hours alone.
+         */
+        let endAt: Date;
+        if (endAtDate && endAtTime) {
+            const endAtMoment = moment.tz(`${endAtDate} ${endAtTime}`, this.user.timeZone);
+            if (!endAtMoment.isValid()) throw new ValidationError('endAtDate', 'endAtTime');
+            endAt = endAtMoment.toDate();
+            if (beginAtMoment.isSameOrAfter(endAt)) throw new ValidationError('endAtTime', null, 'The end must be after the begin time.');
+        } else {
+            endAt = beginAtMoment.clone().add(duration, 'hours').toDate();
+            if (beginAtMoment.isSameOrAfter(endAt)) throw new ValidationError('duration');
+        }
         const beginAt = beginAtMoment.toDate();
         const lockAt = lock ? moment(endAt).add(-lock, 'minutes').toDate() : null;
         if (lockAt && contestDuration) throw new ValidationError('lockAt', 'duration');
@@ -1453,6 +1500,7 @@ export async function apply(ctx: Context) {
                  */
                 tasks.push(repairLegacyHiddenFlags());
             }
+            // ⚡ evaluateContainerResults chains the test's Quick Review.
             if (op === 'syncObjective') tasks.push(evaluateContainerResults(doc.domainId, tdoc));
         }
         await Promise.all(tasks);

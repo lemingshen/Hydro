@@ -58,7 +58,9 @@ export type EvidenceKind =
     | 'transfer_fail'    // 🧠 re-encounter relapsed (level <= 1)
     | 'ownership'        // 🎓 post-acceptance walkthrough level on a carrying task
     | 'reasoning'        // 🧩 failure-phase reasoning level on a carrying task
-    | 'attributed';      // 🤖 LLM attributed a failure outside self-learning to this point
+    | 'attributed'       // 🤖 LLM attributed a failure outside self-learning to this point
+    | 'quiz_ok' // ⚡ a question of a finished test carrying the point, answered correctly
+    | 'quiz_fail'; // ⚡ ... answered wrongly or left blank
 
 export interface MasteryEvidence {
     kind: EvidenceKind;

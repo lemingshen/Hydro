@@ -168,12 +168,50 @@ const page = new NamedPage(['contest_edit', 'contest_create', 'homework_create',
     $(`.contest-rule--${rule} input`).removeAttr('disabled');
     $(`.contest-rule--${rule}`).show();
   }).trigger('change');
+  /*
+   * PTA: begin, duration and END are kept in sync BOTH ways.
+   *  - begin or duration changed → the end date/time follow;
+   *  - end date/time changed     → the duration follows (hours, 2 decimals);
+   * an end at or before the begin shows a hint and is refused on submit.
+   * On save the server takes the end fields as authoritative, so an end
+   * typed as 17:45 is stored as exactly 17:45.
+   */
+  const $hint = $('#pta-endtime-hint');
+  const beginMoment = () => moment(`${$('[name="beginAtDate"]').val()} ${$('[name="beginAtTime"]').val()}`, 'YYYY-M-D H:mm');
+  const endMoment = () => moment(`${$('[name="endAtDate"]').val()} ${$('[name="endAtTime"]').val()}`, 'YYYY-M-D H:mm');
+  const showEndHint = (bad: boolean) => {
+    $hint.text(bad ? i18n('The end must be after the begin time.') : '').toggle(bad);
+    $('[name="endAtDate"], [name="endAtTime"]').toggleClass('is-invalid', bad);
+  };
   $('[name="beginAtDate"], [name="beginAtTime"], [name="duration"]').on('change', () => {
-    const beginAtDate = $('[name="beginAtDate"]').val();
-    const beginAtTime = $('[name="beginAtTime"]').val();
-    const duration = $('[name="duration"]').val();
-    const endAt = moment(`${beginAtDate} ${beginAtTime}`).add(+duration, 'hours').toDate();
-    if (endAt) $('[name="endAt"]').val(moment(endAt).format('YYYY-MM-DD HH:mm'));
+    const begin = beginMoment();
+    const duration = +$('[name="duration"]').val();
+    if (!begin.isValid() || !(duration > 0)) return;
+    const endAt = begin.clone().add(duration, 'hours');
+    $('[name="endAtDate"]').val(endAt.format('YYYY-MM-DD'));
+    $('[name="endAtTime"]').val(endAt.format('HH:mm'));
+    showEndHint(false);
+  });
+  $('[name="endAtDate"], [name="endAtTime"]').on('change', () => {
+    const begin = beginMoment();
+    const end = endMoment();
+    if (!begin.isValid() || !end.isValid()) return;
+    const hours = end.diff(begin, 'minutes', true) / 60;
+    if (hours <= 0) {
+      showEndHint(true);
+      return;
+    }
+    $('[name="duration"]').val(String(Math.round(hours * 100) / 100));
+    showEndHint(false);
+  });
+  $('form').on('submit', (ev) => {
+    const begin = beginMoment();
+    const end = endMoment();
+    if (begin.isValid() && end.isValid() && !end.isAfter(begin)) {
+      ev.preventDefault();
+      showEndHint(true);
+      Notification.error(i18n('The end must be after the begin time.'));
+    }
   });
   $('[name="permission"]').removeAttr('disabled').on('change', () => {
     const type = $('[name="permission"]').val();

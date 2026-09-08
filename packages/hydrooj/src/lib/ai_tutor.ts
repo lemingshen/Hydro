@@ -55,6 +55,20 @@ registerSystemSettingsIdempotent(
     Setting('setting_ai_tutor', 'ai_tutor.report_reduce_chars', 110000, 'number', 'ai_tutor.report_reduce_chars', 'Class report: max characters handed to the final REDUCE call (min 30000)'),
     Setting('setting_ai_tutor', 'ai_tutor.report_concurrency', 3, 'number', 'ai_tutor.report_concurrency', 'Class report: parallel MAP calls (1-8)'),
     Setting('setting_ai_tutor', 'ai_tutor.report_max_calls', 40, 'number', 'ai_tutor.report_max_calls', 'Class report: max provider calls per report (min 8)'),
+    // ⚡ Quick Review (tests / in-class quizzes) — lib/quick_review.ts.
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_auto', true, 'boolean', 'ai_tutor.quick_review_auto', 'Quick Review: generate automatically when a test ends'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_top', 5, 'number', 'ai_tutor.quick_review_top', 'Quick Review: number of "re-teach now" items (3-10)'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_model', '', 'text', 'ai_tutor.quick_review_model', 'Quick Review: model for the diagnosis call (empty = the tutor model)'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_student_feedback', 'on_end', { on_end: 'At the end of the test', on_teacher: 'When the teacher releases it', off: 'Off' }, 'ai_tutor.quick_review_student_feedback', 'Quick Review: when students see their weak points and Explain'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_infer_points', true, 'boolean', 'ai_tutor.quick_review_infer_points', 'Quick Review: infer knowledge points per question from the catalog when none are set'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_prewarm', true, 'boolean', 'ai_tutor.quick_review_prewarm', 'Quick Review: pre-generate Explain reports for the most-missed questions'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_prewarm_max', 150, 'number', 'ai_tutor.quick_review_prewarm_max', 'Quick Review: max pre-generated Explain reports per test'),
+    // Large classes: code is labelled in bounded batches (map) and only the
+    // resulting histogram reaches the diagnosis call (reduce).
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_map_batch', 8, 'number', 'ai_tutor.quick_review_map_batch', 'Quick Review: code excerpts per labelling call (4-12)'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_map_max_calls', 10, 'number', 'ai_tutor.quick_review_map_max_calls', 'Quick Review: max labelling calls per test (0 = off)'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_map_lines', 60, 'number', 'ai_tutor.quick_review_map_lines', 'Quick Review: max code lines per excerpt in a labelling call'),
+    Setting('setting_ai_tutor', 'ai_tutor.quick_review_prompt_budget', 12000, 'number', 'ai_tutor.quick_review_prompt_budget', 'Quick Review: token budget of the diagnosis prompt (the digest is condensed to fit)'),
 );
 
 interface ProviderPreset {
@@ -1816,6 +1830,148 @@ Then close with:
 If EVERY question of the task is correct, instead write two or three sentences confirming the answer and explaining briefly why it is right — nothing else.
 
 Rules: use only the questions, options and answers given; never invent a question or change a key; never mention grades, other students or hidden tests; be encouraging, never scolding; keep the whole explanation under 400 words.`;
+
+/* ============================ ⚡ QUICK REVIEW (tests) ============================ */
+
+/**
+ * The ONE call of the Quick Review (lib/quick_review.ts). The model sees an
+ * aggregated digest — questions, keys, answer distributions, the dominant
+ * wrong answer, error clusters, weak knowledge points — and NO student
+ * identifiers. It explains; it never computes: every number the panel shows
+ * comes from the digest, and the output is validated as strict JSON.
+ */
+const QUICK_DIAGNOSIS_SYSTEM_PROMPT = [
+    'You are a teaching assistant helping a lecturer review an in-class quiz with the class in the next ten minutes. Your output is projected as SLIDES, one idea per slide, so every field must be short and readable from the back of a room.',
+    'You receive an ANONYMOUS, AGGREGATED digest: for each item to review, the question, its options and answer key, how the class answered (percentages), the dominant wrong answer, and the knowledge points involved (from the course catalog). For programming tasks you receive verdict clusters and short anonymised code excerpts.',
+    'FORMAT: every text field is Markdown and is rendered as-is. Put EVERY identifier, variable, expression, operator, keyword, value and single line of code in backticks (`pos[]`, `x->next`, `break`); put multi-line code ONLY in a fenced block with its language. Use **bold** for the one key word of a bullet. No headings, no tables, no links, no HTML, no arrows such as → — write `->` in code.',
+    'For EVERY item, produce:',
+    '  - "headline": at most 8 words naming the error itself, as a slide title (e.g. "Unlinking a node without a null guard", "`break` missing after each `case`").',
+    '  - "misconception": ONE or TWO sentences (max 40 words): the specific misunderstanding that makes the dominant wrong answer tempting. Name the mechanism (what the student assumed), not just "they were confused".',
+    '  - "reteach": an OBJECT (never a string) with',
+    '      "bullets": an ARRAY of 2 to 4 strings, each at most 14 words, spoken to the class, that re-teach the idea (rule, then why, then how to check);',
+    '      "code": ONE minimal example that exposes the misconception, as an OBJECT { "lang": "<language>", "text": "<code>" } — at most 12 short lines, real newlines inside the string, a one-line comment marking the key line; null only when code would not help. Write it in the language the questions or tasks use; if none is visible, use C++;',
+    '      "takeaway": ONE memorable sentence (max 16 words) the students should remember.',
+    '    "misconception", "reteach.bullets" and "reteach.takeaway" are REQUIRED for every item — the slides are empty without them.',
+    '  - "check": one NEW check question in the SAME format as the original (true/false, single choice with options, fill-in, ...) that tests the same point with different surface details; give "answer" (the letter, or the exact expected text) and "why" (one sentence explaining the answer). Keep the prompt under 45 words; if it needs code, put the code in the prompt as a fenced block; options are Markdown too ("A. `if (x->next != nullptr)`").',
+    '  - "points": the knowledge points involved, chosen ONLY from the list provided for that item (copy the names verbatim). Empty array if none fit.',
+    'Also produce "summary": at most 3 short lines (max 18 words each) for the lecturer — what to re-teach now, what is fine, one sentence on the weakest knowledge point.',
+    'Rules: never invent numbers, never mention students, never contradict the answer key, no markdown headings, no long paragraphs. Do not judge writing style or language fluency.',
+    'Respond with ONE JSON object only, no prose around it:',
+    '{ "summary": ["...", "..."], "items": { "<item id>": { "headline": "...", "misconception": "...", "reteach": { "bullets": ["...", "..."], "code": { "lang": "cpp", "text": "int s = 0;\\n..." }, "takeaway": "..." }, "check": { "prompt": "...", "options": ["A. ...", "B. ..."], "answer": "B", "why": "..." }, "points": ["<knowledge point name>"] } } }',
+].join('\n');
+
+export async function runQuickDiagnosis(digestText: string): Promise<string> {
+    const model = sysStr('ai_tutor.quick_review_model').trim();
+    return await callProvider(
+        QUICK_DIAGNOSIS_SYSTEM_PROMPT,
+        [{ role: 'user', content: digestText }],
+        { temperature: 0.3, timeoutMs: 90000, ...(model ? { model } : {}) },
+    );
+}
+
+/**
+ * Map pass of the Quick Review for large classes: a SMALL batch of
+ * anonymised failing excerpts of ONE task is labelled with the conceptual
+ * error. Every excerpt is a sample of a failure cluster (same verdict,
+ * same first failing case / compiler diagnostic); the caller extrapolates
+ * the labels over the whole cluster, so 200 students cost a handful of
+ * bounded calls instead of one impossible prompt.
+ */
+export const FAILURE_LABELS = [
+    'off-by-one / wrong loop bound', 'wrong condition or comparison', 'integer division or type truncation', 'uninitialised or wrongly reset variable',
+    'missing break / fallthrough', 'array index out of bounds', 'null or dangling pointer', 'wrong input parsing', 'wrong output format',
+    'overflow or wrong data type', 'wrong algorithm / logic', 'inefficient algorithm (time limit)', 'recursion base case', 'string handling',
+    'compile error: syntax', 'compile error: undeclared or wrong type', 'incomplete solution', 'hard-coded or partial cases',
+];
+
+const FAILURE_LABEL_SYSTEM_PROMPT = [
+    'You label failing student submissions of ONE programming task with the conceptual error behind the failure, for a class-level review.',
+    'You receive the task summary, then numbered excerpts; each has its verdict, the first failing test case or compiler diagnostic, and the code (possibly truncated).',
+    `Pick for EVERY excerpt exactly one label, preferably from this list: ${FAILURE_LABELS.map((l) => `"${l}"`).join(', ')}. If none fits, write a short new label (max 5 words).`,
+    'Add "note": at most 12 words quoting the decisive line or fact (e.g. "`for (i = 1; i <= n; i++)` starts at 1"). Never mention students. Do not judge style.',
+    'Respond with ONE JSON object only: { "<excerpt number>": { "label": "...", "note": "..." }, ... }',
+].join('\n');
+
+export interface FailureExcerpt {
+    n: number;
+    verdict: string;
+    failCase?: string | null;
+    compileSig?: string | null;
+    lang: string;
+    code: string;
+}
+
+export async function runFailureLabeling(input: { taskLabel: string, taskTitle: string, statement: string, excerpts: FailureExcerpt[] }): Promise<Record<number, { label: string, note: string }>> {
+    const user = [
+        `Task ${input.taskLabel} · ${input.taskTitle}`,
+        input.statement ? `Task summary: ${truncate(input.statement, 700, '...')}` : '',
+        '--- Excerpts ---',
+        ...input.excerpts.map((e) => [
+            `#${e.n} · ${e.verdict}${e.failCase ? ` · first failing case ${e.failCase}` : ''}${e.compileSig ? ` · ${e.compileSig}` : ''} · ${e.lang || 'code'}`,
+            '```', e.code, '```',
+        ].join('\n')),
+        'Respond with the JSON object only.',
+    ].filter((x) => x).join('\n');
+    const raw = await callProvider(FAILURE_LABEL_SYSTEM_PROMPT, [{ role: 'user', content: user }], { temperature: 0, timeoutMs: 90000 });
+    const cleaned = raw.trim().replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/```\s*$/, '').trim();
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('no JSON object in the model reply');
+    const parsed: any = JSON.parse(cleaned.slice(start, end + 1));
+    const out: Record<number, { label: string, note: string }> = {};
+    for (const e of input.excerpts) {
+        const v = parsed[e.n] ?? parsed[`#${e.n}`] ?? parsed[String(e.n)];
+        const label = typeof v === 'string' ? v : v && typeof v === 'object' ? String(v.label || '') : '';
+        if (!label.trim()) continue;
+        out[e.n] = { label: truncate(label.trim().toLowerCase(), 60, ''), note: truncate(String((v && typeof v === 'object' && v.note) || '').trim(), 160, '...') };
+    }
+    return out;
+}
+
+const QUESTION_POINTS_SYSTEM_PROMPT = [
+    'You label quiz questions with knowledge points from a course catalog.',
+    'You receive the task\'s own tags, the catalog names allowed, and the questions (number, text, options, answer key).',
+    'For each question pick 1-3 catalog names that the question ACTUALLY tests — the concept a student must understand to answer it, not the topic of the task as a whole. Prefer the most specific fitting name. Copy names verbatim from the allowed list; never invent names.',
+    'Respond with ONE JSON object only: { "<question number>": ["<catalog name>", ...], ... }',
+].join('\n');
+
+/**
+ * Per-question knowledge points for an objective task (Quick Review
+ * fallback when the task has no stored per-question points). One call per
+ * task; the result is cached in ai.question_points as `inferred`.
+ */
+export async function inferQuestionPoints(input: {
+    taskLabel: string; taskTags: string[]; catalogNames: string[];
+    questions: { key: string, prompt: string, options: string[], answer: string[] }[];
+}): Promise<Record<string, string[]>> {
+    const allowed = new Map(input.catalogNames.map((n) => [n.toLowerCase(), n]));
+    const user = [
+        `Task ${input.taskLabel}; task tags: ${input.taskTags.join(', ') || '(none)'}`,
+        `Allowed catalog names (${input.catalogNames.length}): ${input.catalogNames.join(' | ')}`,
+        '--- Questions ---',
+        ...input.questions.map((q) => [
+            `Q${q.key}: ${truncate(q.prompt, 400, '...')}`,
+            ...(q.options.length ? [`  options: ${q.options.map((o) => truncate(o, 90, '...')).join(' / ')}`] : []),
+            `  key: ${q.answer.join(', ') || '?'}`,
+        ].join('\n')),
+        'Respond with the JSON object only.',
+    ].join('\n');
+    const raw = await callProvider(QUESTION_POINTS_SYSTEM_PROMPT, [{ role: 'user', content: user }], { temperature: 0, timeoutMs: 60000 });
+    const cleaned = raw.trim().replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/```\s*$/, '').trim();
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('no JSON object in the model reply');
+    const parsed: any = JSON.parse(cleaned.slice(start, end + 1));
+    const out: Record<string, string[]> = {};
+    for (const q of input.questions) {
+        const raw2 = parsed[q.key] ?? parsed[`Q${q.key}`] ?? parsed[`q${q.key}`];
+        const names = (Array.isArray(raw2) ? raw2 : typeof raw2 === 'string' ? [raw2] : [])
+            .map((n: any) => allowed.get(String(n || '').trim().toLowerCase()))
+            .filter((n: string | undefined): n is string => !!n);
+        out[q.key] = [...new Set(names)].slice(0, 3);
+    }
+    return out;
+}
 
 export async function runObjectiveFeedback(contextBlock: string): Promise<string> {
     return await callProvider(

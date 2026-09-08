@@ -103,6 +103,17 @@ const median = (xs: number[]) => {
 const mean1 = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
 const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
 const verdictOf = (status: number) => STATUS_SHORT_TEXTS[status] || STATUS_TEXTS[status] || String(status);
+/** "main.cpp:12:5: error: 'x' was not declared in this scope" → "error: '?' was not declared in this scope" */
+export function normalizeCompileLine(line: string): string {
+    return line
+        .replace(/^.*?:\d+:\d+:\s*/, '')
+        .replace(/'[^']*'/g, "'?'")
+        .replace(/"[^"]*"/g, '"?"')
+        .replace(/\d+/g, '#')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+}
 const cut = (s: any, n: number) => {
     const t = String(s ?? '');
     return t.length > n ? `${t.slice(0, n)}…` : t;
@@ -372,6 +383,13 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
 
     // ---- code of the accepted (or last failing) attempt on programming tasks ----
     const codeOf = new Map<string, string>();
+    /*
+     * ⚡ Failure signature of a last failing attempt (Quick Review): the
+     * first failing test case and, for compile errors, the normalised first
+     * diagnostic line. Cheap to load, and enough to cluster a class of any
+     * size without the model reading every submission.
+     */
+    const failSigOf = new Map<string, { failCase: string | null, compileSig: string | null }>();
     if (!light) {
         const wanted: { rid: any, cap: number }[] = [];
         for (const [k, c] of cells) {
@@ -382,8 +400,19 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
         }
         const capOf = new Map(wanted.map((w) => [String(w.rid), w.cap]));
         for (let i = 0; i < wanted.length; i += 500) {
-            const docs = await record.getMulti(domainId, { _id: { $in: wanted.slice(i, i + 500).map((w) => w.rid) } }).project({ code: 1 }).limit(501).toArray() as any[];
-            for (const d of docs) codeOf.set(String(d._id), String(d.code || '').slice(0, capOf.get(String(d._id)) || CODE_FAIL_CAP));
+            const docs = await record.getMulti(domainId, { _id: { $in: wanted.slice(i, i + 500).map((w) => w.rid) } })
+                .project({ code: 1, status: 1, compilerTexts: 1, 'testCases.id': 1, 'testCases.subtaskId': 1, 'testCases.status': 1 }).limit(501).toArray() as any[];
+            for (const d of docs) {
+                codeOf.set(String(d._id), String(d.code || '').slice(0, capOf.get(String(d._id)) || CODE_FAIL_CAP));
+                if (d.status === STATUS.STATUS_ACCEPTED) continue;
+                const firstFail = (d.testCases || []).find((tc: any) => tc.status !== STATUS.STATUS_ACCEPTED);
+                const firstLine = (Array.isArray(d.compilerTexts) ? d.compilerTexts.join('\n') : String(d.compilerTexts || ''))
+                    .split('\n').map((l: string) => l.trim()).find((l: string) => /error/i.test(l)) || '';
+                failSigOf.set(String(d._id), {
+                    failCase: firstFail ? `${firstFail.subtaskId ?? '?'}-${firstFail.id ?? '?'}` : null,
+                    compileSig: d.status === STATUS.STATUS_COMPILE_ERROR && firstLine ? normalizeCompileLine(firstLine) : null,
+                });
+            }
         }
     }
 
@@ -562,7 +591,9 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
                 };
                 if (t.kind === 'programming') {
                     entry.lang = c.attempts[c.attempts.length - 1]?.lang || '';
-                    entry.code = c.acRid ? { kind: 'accepted', text: codeOf.get(String(c.acRid)) || '' } : c.lastFailRid ? { kind: `last failing (${verdictOf(c.lastFailStatus)})`, text: codeOf.get(String(c.lastFailRid)) || '' } : null;
+                    entry.code = c.acRid ? { kind: 'accepted', text: codeOf.get(String(c.acRid)) || '' } : c.lastFailRid ? {
+                        kind: `last failing (${verdictOf(c.lastFailStatus)})`, text: codeOf.get(String(c.lastFailRid)) || '', ...(failSigOf.get(String(c.lastFailRid)) || {}),
+                    } : null;
                 } else {
                     const sheet = answerOf.get(cellKey(uid, t.pid)) || {};
                     entry.answers = t.questions.map((qq) => {

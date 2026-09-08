@@ -28,6 +28,9 @@
 {% if tdoc %}
   {{ set(UiContext, 'tdoc', tdoc) }}
   {{ set(UiContext, 'tsdoc', tsdoc) }}
+  {#- Container end (server clock), for the client-side gates that wait for
+      the whole test to finish, e.g. AI Suggestions in a test. -#}
+  {{ set(UiContext, 'tdocDone', model.contest.isDone(tdoc)) }}
 {% endif %}
 {% if tdoc and mode == 'contest' %}
   {{ set(UiContext, 'canViewRecord', model.contest.canShowSelfRecord.call(handler, tdoc)) }}
