@@ -2,7 +2,7 @@ __flag: 🇹🇼
 __id: zh_TW
 __interface: yes
 __langname: 正體中文
-ai_tutor.api_key: API 金鑰
+ai_tutor.api_key: "API 金鑰（每行一個，可多個）"
 ai_tutor.base_url: API 位址（可選）
 ai_tutor.enabled: 啟用 AI 輔導員
 ai_tutor.max_messages: 每個對話最大訊息數
@@ -2876,3 +2876,12 @@ ai_tutor.sched_slots_max: "排程器 — 自適應並發上限"
 "adaptive": "自適應"
 "fixed": "固定"
 "Drafting… (live)": "正在起草……（即時）"
+ai_tutor.key_max_inflight: "每個 API 金鑰的並發請求數"
+ai_tutor.key_rpm: "每個 API 金鑰的每分鐘請求數"
+"API keys": "API 金鑰"
+"usable": "可用"
+"capacity": "容量"
+"Health": "狀態"
+"limit": "上限"
+"{0} key(s) for {1}": "{1} 已儲存 {0} 個金鑰"
+"No keys saved for {0} yet": "{0} 尚未儲存金鑰"

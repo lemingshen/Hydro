@@ -2,7 +2,7 @@ __flag: 🇨🇳
 __id: zh
 __interface: yes
 __langname: 简体中文
-ai_tutor.api_key: API 密钥
+ai_tutor.api_key: "API 密钥（每行一个，可多个）"
 ai_tutor.base_url: API 地址（可选）
 ai_tutor.enabled: 启用 AI 辅导员
 ai_tutor.max_messages: 每个对话最大消息数
@@ -2972,3 +2972,12 @@ ai_tutor.sched_slots_max: "调度器 — 自适应并发上限"
 "adaptive": "自适应"
 "fixed": "固定"
 "Drafting… (live)": "正在起草……（实时）"
+ai_tutor.key_max_inflight: "每个 API 密钥的并发请求数"
+ai_tutor.key_rpm: "每个 API 密钥的每分钟请求数"
+"API keys": "API 密钥"
+"usable": "可用"
+"capacity": "容量"
+"Health": "状态"
+"limit": "上限"
+"{0} key(s) for {1}": "{1} 已保存 {0} 个密钥"
+"No keys saved for {0} yet": "{0} 尚未保存密钥"

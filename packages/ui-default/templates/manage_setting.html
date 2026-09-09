@@ -3,4 +3,52 @@
 <div class="section">
   {% include "partials/setting.html" %}
 </div>
+{#
+  PTA fork — the API key box follows the provider dropdown.
+  The box shows the keys saved for the selected provider; picking another
+  provider switches it to that provider's own keys (typed-but-unsaved text is
+  kept per provider while the page is open). A hidden field tells the backend
+  which provider the box is showing, so the keys are stored under the right
+  provider even when the dropdown was changed on the same form.
+  Inline on purpose: it works from the template alone, with no UI rebuild.
+#}
+{% if UiContext.aiProviderKeys %}
+<script>
+(function () {
+  if (window.__aiKeysWired) return;
+  var ctx = window.UiContext && window.UiContext.aiProviderKeys;
+  var box = document.querySelector('textarea[name="ai_tutor.api_key"]');
+  var sel = document.querySelector('select[name="ai_tutor.provider"]');
+  if (!ctx || !box || !sel) return;
+  window.__aiKeysWired = true;
+  var T = { some: {{ _('{0} key(s) for {1}')|json|safe }}, none: {{ _('No keys saved for {0} yet')|json|safe }} };
+  var map = {};
+  Object.keys(ctx.map || {}).forEach(function (k) { map[k] = ctx.map[k]; });
+  var shown = sel.value || ctx.provider || '';
+  if (!box.value.trim() && map[shown] !== undefined) box.value = map[shown];
+  var hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.name = 'ai_tutor.api_key_provider';
+  hidden.value = shown;
+  box.parentNode.insertBefore(hidden, box.nextSibling);
+  var note = document.createElement('div');
+  note.className = 'help-text';
+  note.style.cssText = 'margin-top:4px;font-size:12px;opacity:.8';
+  hidden.parentNode.insertBefore(note, hidden.nextSibling);
+  function describe() {
+    var n = box.value.split(/\r?\n/).filter(function (l) { l = l.trim(); return l && l.charAt(0) !== '#'; }).length;
+    note.textContent = n ? T.some.replace('{0}', String(n)).replace('{1}', shown) : T.none.replace('{0}', shown);
+  }
+  describe();
+  box.addEventListener('input', function () { map[shown] = box.value; describe(); });
+  sel.addEventListener('change', function () {
+    map[shown] = box.value;
+    shown = sel.value;
+    box.value = map[shown] || '';
+    hidden.value = shown;
+    describe();
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

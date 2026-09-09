@@ -30,7 +30,7 @@ const settings: Record<string, any> = {
 // on the class shadows the instance method for the whole test.
 const system = require('../packages/hydrooj/src/model/system').default;
 system.get = (key: string) => settings[key];
-system.set = async () => { };
+system.set = async (key: string, value: any) => { settings[key] = value; };
 
 const aiTutor = require('../packages/hydrooj/src/lib/ai_tutor');
 const { aiScheduler } = aiTutor;
@@ -227,6 +227,93 @@ describe('ai transport', () => {
             settings['ai_tutor.base_url'] = provider.url;
             await flaky.close();
             aiScheduler.reset();
+        }
+    });
+
+    it('uses a pool of keys concurrently: per-key limits respected, a dead key sidelined, a 429 confined to its key', async () => {
+        // Five keys, each allowing 3 concurrent requests at the provider; one of them is invalid.
+        const keys = ['sk-1', 'sk-2', 'sk-3', 'sk-4', 'sk-5'];
+        const strict = await startFakeProvider({ latencyMs: 400, ttftMs: 10, perKeyLimit: 3, invalidKeys: ['sk-5'] });
+        const prevSlots = settings['ai_tutor.sched_slots'];
+        const prevMax = settings['ai_tutor.sched_slots_max'];
+        try {
+            settings['ai_tutor.provider'] = 'openai';
+            settings['ai_tutor.base_url'] = strict.url;
+            // The keys go in the ONE API-key box, one per line (max=4 asks for one more than the provider allows: the pool must learn).
+            settings['ai_tutor.api_key'] = keys.map((k) => `${k} | max=4`).join('\n');
+            settings['ai_tutor.sched_slots'] = 24;
+            settings['ai_tutor.sched_slots_max'] = 24;
+            settings['ai_tutor.sched_interactive_reserve'] = 0;
+            aiScheduler.reset();
+            aiTutor.keyPool.reset();
+            const t0 = Date.now();
+            const results = await Promise.all(Array.from({ length: 24 }, (_, i) => aiScheduler.run(
+                { feature: 'tutor', lane: 'interactive', uid: 500 + i },
+                () => aiTutor.callProvider('sys', [{ role: 'user', content: `q${i}` }], { cacheKey: `d:tutor:${i % 4}:x` }),
+            )));
+            const elapsed = Date.now() - t0;
+            expect(results.every((r) => r.length > 10)).to.equal(true);
+            const st = aiTutor.keyPool.status();
+            const dead = st.keys.find((k) => k.id === aiTutor.keyPool.status().keys.find((x) => x.health === 'disabled')?.id);
+            expect(dead && dead.reason).to.equal('invalid key');
+            expect(st.usable).to.equal(4);
+            // Real concurrency across keys: 24 calls of 400 ms through 4 keys × 3 finished in a few rounds, not 24 × 400 ms.
+            expect(strict.stats.peakInflight).to.be.at.least(6);
+            expect(elapsed).to.be.lessThan(24 * 400);
+            // Every valid key was used, and none beyond what the provider allows for long (429s were absorbed per key).
+            const used = Object.keys(strict.stats.byKey).filter((k) => k !== 'sk-5');
+            expect(used.length).to.equal(4);
+            expect(aiScheduler.status().cooldownMs).to.equal(0); // no process-wide pause for one key's 429
+            expect(aiScheduler.status().pool!.keys).to.equal(5);
+        } finally {
+            settings['ai_tutor.api_key'] = 'test-key';
+            settings['ai_tutor.sched_slots'] = prevSlots;
+            settings['ai_tutor.sched_slots_max'] = prevMax;
+            settings['ai_tutor.sched_interactive_reserve'] = 2;
+            settings['ai_tutor.base_url'] = provider.url;
+            aiTutor.keyPool.reset();
+            aiScheduler.reset();
+            await strict.close();
+        }
+    });
+
+    it('remembers the keys per provider: switching the provider brings its own keys back', async () => {
+        const saved = { ...settings };
+        try {
+            // Root saves DeepSeek keys, then switches to OpenAI with new keys, then back to DeepSeek with the box left blank.
+            settings['ai_tutor.provider'] = 'deepseek';
+            settings['ai_tutor.api_key'] = 'ds-1\nds-2';
+            await aiTutor.rememberProviderKeys({ ai_tutor: { provider: 'deepseek', api_key: 'ds-1\nds-2', model: 'x' } });
+            expect(aiTutor.effectiveKeyText()).to.equal('ds-1\nds-2');
+            settings['ai_tutor.provider'] = 'openai';
+            settings['ai_tutor.api_key'] = 'oa-1';
+            await aiTutor.rememberProviderKeys({ ai_tutor: { provider: 'openai', api_key: 'oa-1' } });
+            expect(aiTutor.effectiveKeyText()).to.equal('oa-1');
+            // Back to DeepSeek, box left blank (the form posts '' and the secret keeps the stored value 'oa-1').
+            settings['ai_tutor.provider'] = 'deepseek';
+            await aiTutor.rememberProviderKeys({ ai_tutor: { provider: 'deepseek', api_key: '' } });
+            expect(aiTutor.effectiveKeyText()).to.equal('ds-1\nds-2'); // DeepSeek's own keys, not OpenAI's
+            aiTutor.keyPool.reset();
+            expect(aiTutor.ensureKeyPool().size).to.equal(2);
+            // A provider never given keys has none (and is reported as not configured).
+            settings['ai_tutor.provider'] = 'claude';
+            expect(aiTutor.effectiveKeyText().trim()).to.equal('');
+            expect(aiTutor.tutorConfigured()).to.equal(false);
+            // The page shows DeepSeek's keys, root changes the dropdown to Claude on the SAME form and saves:
+            // the box (still DeepSeek's text, api_key_provider=deepseek) must not be stored as Claude's keys.
+            await aiTutor.rememberProviderKeys({ ai_tutor: { provider: 'claude', api_key: 'ds-1\nds-2', api_key_provider: 'deepseek' } });
+            expect(aiTutor.providerKeyMap().claude).to.equal(undefined);
+            expect(aiTutor.providerKeyMap().deepseek).to.equal('ds-1\nds-2');
+            // An emptied box on a page that showed the keys clears that provider's keys.
+            settings['ai_tutor.provider'] = 'openai';
+            settings['ai_tutor.api_key'] = '';
+            await aiTutor.rememberProviderKeys({ ai_tutor: { provider: 'openai', api_key: '', api_key_provider: 'openai' } });
+            expect(aiTutor.providerKeyMap().openai).to.equal(undefined);
+            expect(aiTutor.effectiveKeyText().trim()).to.equal('');
+        } finally {
+            for (const k of Object.keys(settings)) delete settings[k];
+            Object.assign(settings, saved);
+            aiTutor.keyPool.reset();
         }
     });
 

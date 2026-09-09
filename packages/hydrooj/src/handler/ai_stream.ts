@@ -24,15 +24,20 @@
  * carries the events to the browser.
  */
 import { Context } from '../context';
+import { Logger } from '../logger';
 import { ForbiddenError, NotFoundError } from '../error';
 import { aiMetrics } from '../lib/ai_metrics';
 import { aiScheduler } from '../lib/ai_scheduler';
 import { AiStreamEvent, aiStreams } from '../lib/ai_stream';
-import { streamingEnabled } from '../lib/ai_tutor';
+import {
+    effectiveKeyText, ensureKeyPool, providerKeyMap, rememberProviderKeys, streamingEnabled, tutorEnabled,
+} from '../lib/ai_tutor';
 import { PRIV } from '../model/builtin';
 import {
     ConnectionHandler, Handler, param, Types,
 } from '../service/server';
+
+const logger = new Logger('ai-stream');
 
 /** Owner, or root: the only readers of a stream. */
 function canRead(user: { _id: number, hasPriv: (p: bigint | number) => boolean }, id: string): boolean {
@@ -120,6 +125,8 @@ class AiStatusHandler extends Handler {
             scheduler: aiScheduler.status(),
             metrics: aiMetrics.snapshot(),
             streams: aiStreams.count(),
+            // Key pool health: ids are short hashes, never the keys.
+            keys: tutorEnabled() ? { provider: String((global as any).Hydro?.model?.system?.get?.('ai_tutor.provider') || ''), ...ensureKeyPool().status() } : null,
         };
     }
 }
@@ -142,6 +149,24 @@ export function registerAiStreamRoutes(ctx: Context) {
     // (whole-reply) requests instead of a request it cannot serve.
     ctx.on('handler/after' as any, (h: any) => {
         if (h?.UiContext && typeof h.UiContext === 'object') h.UiContext.aiStream = streamingEnabled();
+    });
+    // The settings form was saved: remember the API keys under their provider.
+    ctx.on('system/setting', (args: any) => {
+        rememberProviderKeys(args).catch((e) => logger.warn('api keys not remembered: %s', e.message));
+    });
+    // The settings page (root, sudo): the API key box shows the keys saved for
+    // the selected provider, and the page gets every provider's keys so the
+    // box can switch with the dropdown (pages/ai_status.page.js).
+    ctx.on('handler/after/SystemSetting#get' as any, (h: any) => {
+        if (!h?.response?.body?.current) return;
+        const saved = String((global as any).Hydro?.model?.system?.get?.('ai_tutor.provider') || 'claude');
+        const provider = String(h.args?.provider || '') || saved;
+        const map = { ...providerKeyMap() };
+        const current = effectiveKeyText();
+        if (current.trim() && !map[saved]) map[saved] = current;
+        h.response.body.current['ai_tutor.api_key'] = map[provider] || '';
+        if (provider !== saved) h.response.body.current['ai_tutor.provider'] = provider; // ?provider=x previews that provider
+        if (h.UiContext) h.UiContext.aiProviderKeys = { provider, map };
     });
     ctx.effect(() => () => { (global as any).__ptaAiStreamRoutes = false; });
 }

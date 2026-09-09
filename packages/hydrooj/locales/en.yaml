@@ -2,7 +2,7 @@ __flag: 🇬🇧
 __id: en
 __interface: yes
 __langname: English
-ai_tutor.api_key: API Key
+ai_tutor.api_key: "API Key(s) — one per line"
 ai_tutor.base_url: API Base URL
 ai_tutor.enabled: Enable AI Tutor
 ai_tutor.max_messages: Max Messages per Conversation
@@ -158,3 +158,5 @@ ai_tutor.summary_every: "Thread Summaries — Refresh Every N Student Turns"
 "The AI is busy right now ({0} ahead, about {1} s to wait). Retrying automatically in {2} s.": "The AI is busy right now ({0} ahead, about {1} s to wait). Retrying automatically in {2} s."
 ai_tutor.sched_adaptive: "Scheduler — Adapt the Limit to the Provider (grow while it keeps up, halve on a rate limit)"
 ai_tutor.sched_slots_max: "Scheduler — Ceiling of the Adaptive Limit"
+ai_tutor.key_max_inflight: "Concurrent Requests per API Key"
+ai_tutor.key_rpm: "Requests per Minute per API Key"

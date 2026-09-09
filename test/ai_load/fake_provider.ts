@@ -43,6 +43,11 @@ export interface FakeProviderOptions {
     stallMs?: number;
     /** Send the stop reason but never `[DONE]` / `message_stop` (a gateway that omits the end marker). */
     omitDoneMarker?: boolean;
+    /** Per-key concurrency limit: a key with more than this many requests in flight gets 429 (keys read from the auth header). */
+    perKeyLimit?: number;
+    /** Keys answered 401 (invalid) / 402 (no balance). */
+    invalidKeys?: string[];
+    quotaKeys?: string[];
     log?: boolean;
 }
 
@@ -55,6 +60,8 @@ export interface FakeProviderStats {
     cacheHits: number;
     cacheMisses: number;
     byPath: Record<string, number>;
+    /** Per key (as sent in the auth header): requests, peak concurrency, 429s served. */
+    byKey: Record<string, { calls: number, inflight: number, peak: number, served429: number }>;
 }
 
 export interface FakeProvider {
@@ -96,7 +103,7 @@ export function startFakeProvider(opts: FakeProviderOptions = {}): Promise<FakeP
     const rate429 = opts.rate429 ?? 0;
     const cacheTtl = opts.cacheTtlMs ?? 5 * 60 * 1000;
     const stats: FakeProviderStats = {
-        requests: 0, streamed: 0, served429: 0, inflight: 0, peakInflight: 0, cacheHits: 0, cacheMisses: 0, byPath: {},
+        requests: 0, streamed: 0, served429: 0, inflight: 0, peakInflight: 0, cacheHits: 0, cacheMisses: 0, byPath: {}, byKey: {},
     };
     const prefixSeen = new Map<string, number>();
 
@@ -146,7 +153,17 @@ export function startFakeProvider(opts: FakeProviderOptions = {}): Promise<FakeP
         stats.byPath[path] = (stats.byPath[path] || 0) + 1;
         stats.inflight += 1;
         stats.peakInflight = Math.max(stats.peakInflight, stats.inflight);
-        const done = () => { stats.inflight -= 1; };
+        const key = String(req.headers['x-api-key'] || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '') || '(none)');
+        const ks = stats.byKey[key] || (stats.byKey[key] = {
+            calls: 0, inflight: 0, peak: 0, served429: 0,
+        });
+        ks.calls += 1;
+        ks.inflight += 1;
+        ks.peak = Math.max(ks.peak, ks.inflight);
+        const done = () => {
+            stats.inflight -= 1;
+            ks.inflight -= 1;
+        };
         // The request's own `destroyed` flag flips as soon as its body is
         // consumed (autoDestroy), so "the client went away" is the RESPONSE
         // side closing before it was finished.
@@ -160,6 +177,23 @@ export function startFakeProvider(opts: FakeProviderOptions = {}): Promise<FakeP
             }
             const style: 'anthropic' | 'openai' = path === '/v1/messages' ? 'anthropic' : 'openai';
             const body = await readBody(req);
+            if (opts.invalidKeys?.includes(key)) {
+                res.writeHead(401, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ error: { type: 'authentication_error', message: 'Invalid API key (fake)' } }));
+                return;
+            }
+            if (opts.quotaKeys?.includes(key)) {
+                res.writeHead(402, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ error: { type: 'insufficient_quota', message: 'Insufficient Balance (fake)' } }));
+                return;
+            }
+            if (opts.perKeyLimit && ks.inflight > opts.perKeyLimit) {
+                ks.served429 += 1;
+                stats.served429 += 1;
+                res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '1' });
+                res.end(JSON.stringify({ error: { type: 'rate_limit_error', message: `Key concurrency limit ${opts.perKeyLimit} exceeded (fake)` } }));
+                return;
+            }
             if (opts.log) console.log('[fake-provider]', style, body.stream ? 'stream' : 'json', `${stats.inflight} in flight`);
             if (rate429 > 0 && Math.random() < rate429) {
                 stats.served429 += 1;
@@ -268,7 +302,7 @@ export function startFakeProvider(opts: FakeProviderOptions = {}): Promise<FakeP
                 stats,
                 reset: () => {
                     Object.assign(stats, {
-                        requests: 0, streamed: 0, served429: 0, peakInflight: stats.inflight, cacheHits: 0, cacheMisses: 0, byPath: {},
+                        requests: 0, streamed: 0, served429: 0, peakInflight: stats.inflight, cacheHits: 0, cacheMisses: 0, byPath: {}, byKey: {},
                     });
                     prefixSeen.clear();
                 },

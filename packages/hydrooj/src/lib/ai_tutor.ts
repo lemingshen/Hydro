@@ -12,10 +12,12 @@ import {
 import {
     AiAbortedError, AiBusyError, AiCallMeta, aiScheduler, AiSlot, currentSlot, DEFAULT_FEATURE_CAPS, parseFeatureCaps,
 } from './ai_scheduler';
+import { KeyLease, keyPool, parseKeySpecs } from './ai_keys';
 import {
     decodeAnthropicEvent, decodeOpenAIEvent, JsonFieldStreamer, SseParser, StreamSignal,
 } from './ai_stream';
 
+export { keyPool } from './ai_keys';
 export { aiMetrics } from './ai_metrics';
 export { codeDelta, codeHash } from './ai_prompt';
 export type { PromptBlock } from './ai_prompt';
@@ -58,7 +60,14 @@ registerSystemSettingsIdempotent(
     Setting('setting_ai_tutor', 'ai_tutor.enabled', true, 'boolean', 'ai_tutor.enabled', 'Enable the AI Socratic tutor'),
     Setting('setting_ai_tutor', 'ai_tutor.provider', 'claude', { claude: 'Anthropic Claude', openai: 'OpenAI', deepseek: 'DeepSeek', ollama: 'Ollama (local, no key)' }, 'ai_tutor.provider', 'AI provider'),
     Setting('setting_ai_tutor', 'ai_tutor.model', '', 'text', 'ai_tutor.model', 'Model name (leave blank for the provider default)'),
-    Setting('setting_ai_tutor', 'ai_tutor.api_key', '', 'password', 'ai_tutor.api_key', 'API key of the selected provider. For security the saved key is never displayed, so this field always looks blank. Leave it blank to keep the current key.', FLAG_SECRET),
+    Setting('setting_ai_tutor', 'ai_tutor.api_key', '', 'textarea', 'ai_tutor.api_key', 'One or more API keys of the selected provider, ONE PER LINE — several keys are used concurrently. The box shows the keys saved for the provider selected above; change the provider and the box switches to that provider\'s own keys. Edit the list and save to replace it; an empty box saves no keys for that provider. Advanced options after "|" on a line: label=… max=<concurrent requests> rpm=<requests per minute> domain=<tenant> weight=…'),
+    Setting('setting_ai_tutor', 'ai_tutor.key_max_inflight', 8, 'number', 'ai_tutor.key_max_inflight', 'Concurrent requests per API key by default (each key adapts up to this)'),
+    Setting('setting_ai_tutor', 'ai_tutor.key_rpm', 0, 'number', 'ai_tutor.key_rpm', 'Requests per minute per API key by default (0 = no budget)'),
+    // The per-provider memory of the keys (JSON: provider → key lines) and the
+    // provider the visible box was last saved for. Hidden: maintained by the
+    // system when the settings form is saved, never edited by hand.
+    Setting('setting_ai_tutor', 'ai_tutor.provider_keys', '', 'textarea', 'ai_tutor.provider_keys', 'Keys remembered per provider (maintained automatically)', SettingModel.FLAG_HIDDEN | FLAG_SECRET),
+    Setting('setting_ai_tutor', 'ai_tutor.api_key_provider', '', 'text', 'ai_tutor.api_key_provider', 'Provider the API key box was last saved for (maintained automatically)', SettingModel.FLAG_HIDDEN),
     Setting('setting_ai_tutor', 'ai_tutor.base_url', '', 'text', 'ai_tutor.base_url', 'API base URL or full endpoint (optional, for proxies / compatible gateways). A base like https://api.deepseek.com works, and the chat path is appended automatically.'),
     Setting('setting_ai_tutor', 'ai_tutor.temperature', 0.6, 'float', 'ai_tutor.temperature', 'Sampling temperature'),
     Setting('setting_ai_tutor', 'ai_tutor.timeout', 60, 'number', 'ai_tutor.timeout', 'Legacy — no longer used: a provider call ends only when the provider ends it (completion, error, or closing the connection)'),
@@ -187,6 +196,94 @@ aiScheduler.configure(() => ({
 }));
 aiScheduler.log = (line: string) => logger.info(line);
 
+/* ------------------------------------------------------------------ */
+/*  🔑 API key pool (lib/ai_keys.ts): several keys used concurrently   */
+/* ------------------------------------------------------------------ */
+/** The per-provider key memory: provider id → the key lines saved for it. */
+export function providerKeyMap(): Record<string, string> {
+    try {
+        const v = JSON.parse(sysStr('ai_tutor.provider_keys') || '{}');
+        return v && typeof v === 'object' ? v : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+/**
+ * The key lines in force for the CURRENT provider: the visible box when it
+ * was saved for this provider, else what was remembered for this provider,
+ * else (legacy, before the memory existed) the visible box as is.
+ */
+export function effectiveKeyText(): string {
+    const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
+    const visible = sysStr('ai_tutor.api_key');
+    const visibleProvider = sysStr('ai_tutor.api_key_provider');
+    const map = providerKeyMap();
+    let text = '';
+    if (visible.trim() && visibleProvider === provider) text = visible;
+    else if (String(map[provider] || '').trim()) text = map[provider];
+    else if (visible.trim() && !visibleProvider) text = visible;
+    // Keys entered in the former separate pool box (older versions) still count.
+    const legacy = sysStr('ai_tutor.api_keys');
+    if (legacy.trim() && !text.includes(legacy.trim())) text = `${text}\n${legacy}`;
+    return text;
+}
+
+/**
+ * Called when the settings form was saved (handler/ai_stream.ts forwards
+ * the `system/setting` event): keys entered in the box are remembered under
+ * the provider that was selected on that form, so switching providers
+ * later brings each provider's own keys back.
+ */
+export async function rememberProviderKeys(args: any) {
+    const form = args?.ai_tutor && typeof args.ai_tutor === 'object' ? args.ai_tutor : null;
+    if (!form || typeof form.api_key !== 'string') return;
+    // The page keeps `api_key_provider` in step with the provider the box is
+    // showing keys for, so the text is stored under THAT provider even when
+    // the dropdown was changed on the same form. Older pages (no field): the
+    // posted provider.
+    const provider = String(form.api_key_provider || form.provider || system.get('ai_tutor.provider') || 'claude');
+    const text = String(form.api_key);
+    const map = providerKeyMap();
+    if (!text.trim()) {
+        // An emptied box (on a page that showed the keys) means "no keys for this provider".
+        if (form.api_key_provider && map[provider]) {
+            delete map[provider];
+            await system.set('ai_tutor.provider_keys', JSON.stringify(map));
+            logger.info('api keys cleared for provider %s', provider);
+        }
+        return;
+    }
+    if (map[provider] === text && sysStr('ai_tutor.api_key_provider') === provider) return;
+    map[provider] = text;
+    await system.set('ai_tutor.provider_keys', JSON.stringify(map));
+    await system.set('ai_tutor.api_key_provider', provider);
+    logger.info('api keys remembered for provider %s (%d line(s))', provider, text.split(/\r?\n/).filter((l) => l.trim()).length);
+}
+
+let keyPoolFingerprint = '';
+/** Rebuild the pool from the settings when they changed (cheap fingerprint check per call). */
+export function ensureKeyPool() {
+    const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
+    const text = effectiveKeyText();
+    const maxInflight = Math.max(1, numSetting('ai_tutor.key_max_inflight', 8));
+    const rpm = Math.max(0, numSetting('ai_tutor.key_rpm', 0));
+    const fp = `${provider}|${text.length}:${text.slice(-24)}|${maxInflight}|${rpm}`;
+    if (fp === keyPoolFingerprint) return keyPool;
+    keyPoolFingerprint = fp;
+    keyPool.configure(parseKeySpecs(text, { maxInflight, rpm }));
+    logger.info('api key pool for %s: %d key(s), up to %d concurrent each', provider, keyPool.size, maxInflight);
+    return keyPool;
+}
+keyPool.onCapacity = () => aiScheduler.wake();
+(keyPool as any).log = (line: string) => logger.info(line);
+aiScheduler.setCapacityProvider(() => {
+    if (system.get('ai_tutor.enabled') === false) return null;
+    const pool = ensureKeyPool();
+    if (!pool.size) return null;
+    return { ...pool.capacity(), keys: pool.size };
+});
+
 export function streamingEnabled(): boolean {
     return system.get('ai_tutor.stream_enabled') !== false;
 }
@@ -200,7 +297,7 @@ export function tutorEnabled() {
 }
 export function tutorConfigured() {
     const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
-    return tutorEnabled() && (!!sysStr('ai_tutor.api_key') || KEYLESS_PROVIDERS.includes(provider));
+    return tutorEnabled() && (!!effectiveKeyText().trim() || KEYLESS_PROVIDERS.includes(provider));
 }
 export function tutorProviderInfo() {
     const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
@@ -311,6 +408,8 @@ export interface CallOptions {
     meta?: Partial<AiCallMeta>;
     /** Prompt-cache routing key (OpenAI / DeepSeek `prompt_cache_key`); ai_prompt.buildPrompt supplies it. */
     cacheKey?: string;
+    /** The tenant making the call (for tenant-scoped keys); defaults to the domain in cacheKey. */
+    domainId?: string;
 }
 
 /** The provider-neutral request shape, built once and sent (with or without `stream`). */
@@ -325,16 +424,17 @@ interface ProviderRequest {
 
 function providerSettings(opts: { model?: string, temperature?: number } = {}) {
     if (!tutorEnabled()) throw new Error('The AI tutor is disabled by the administrator.');
-    const apiKey = sysStr('ai_tutor.api_key').trim();
     const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
-    if (!apiKey && !KEYLESS_PROVIDERS.includes(provider)) throw new Error('The AI tutor is not configured yet (missing API key). Please contact the administrator.');
+    const pool = ensureKeyPool();
+    if (!pool.size && !KEYLESS_PROVIDERS.includes(provider)) throw new Error('The AI tutor is not configured yet (missing API key). Please contact the administrator.');
     const preset = PROVIDERS[provider] || PROVIDERS.claude;
     const model = (String(opts?.model || '').trim() || sysStr('ai_tutor.model') || preset.defaultModel).trim();
     const url = resolveEndpoint(preset.style, sysStr('ai_tutor.base_url'), preset.url);
     const temperature = opts.temperature
         ?? (Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.6);
     const cacheTtl: '5m' | '1h' = sysStr('ai_tutor.cache_ttl', '5m') === '1h' ? '1h' : '5m';
-    const headers: Record<string, string> = preset.style === 'anthropic'
+    /** Request headers for one key of the pool (or none, for a keyless local server). */
+    const headersFor = (apiKey: string): Record<string, string> => (preset.style === 'anthropic'
         ? {
             'content-type': 'application/json',
             'x-api-key': apiKey,
@@ -346,10 +446,45 @@ function providerSettings(opts: { model?: string, temperature?: number } = {}) {
             // Ollama and other keyless local servers ignore auth; only send
             // the header when a key is configured.
             ...apiKey ? { authorization: `Bearer ${apiKey}` } : {},
-        };
+        });
     return {
-        apiKey, provider, preset, model, url, temperature, cacheTtl, headers,
+        provider, preset, model, url, temperature, cacheTtl, headersFor, pool,
     };
+}
+
+/**
+ * Take a key from the pool for one call — cache-affine (`affinity` = the
+ * prompt's cache key) and tenant-aware — waiting for room if every key is
+ * busy or cooling. Keyless local providers get no lease.
+ */
+async function acquireLease(cfg: ReturnType<typeof providerSettings>, opts: { affinity?: string, domain?: string }, signal: AbortSignal | undefined): Promise<KeyLease | null> {
+    if (!cfg.pool.size) return null;
+    for (;;) {
+        const lease = cfg.pool.acquire(opts);
+        if (lease) return lease;
+        if (signal?.aborted) throw new AiAbortedError();
+        await cfg.pool.waitForCapacity(signal);
+        if (signal?.aborted) throw new AiAbortedError();
+    }
+}
+
+/** What a failed call means for the key that made it. */
+function leaseOutcomeOf(e: any): 'error' | 'rate_limited' | 'auth' | 'quota' | 'aborted' {
+    if (e instanceof AiAbortedError || e?.name === 'AbortError') return 'aborted';
+    const status = +e?.status || 0;
+    const detail = String(e?.detail || e?.message || '');
+    if (status === 429) return 'rate_limited';
+    if (status === 401) return 'auth';
+    if (status === 402 || (status >= 400 && status < 500 && /insufficient.?balance|insufficient.?quota|quota.?exceeded|billing|credit/i.test(detail))) return 'quota';
+    return 'error';
+}
+
+/** The tenant of a call, for tenant-scoped keys: explicit, else the domain in the prompt's cache key. */
+function tenantOf(opts: CallOptions): string | undefined {
+    if (opts.domainId) return opts.domainId;
+    const ck = opts.cacheKey || '';
+    const i = ck.indexOf(':');
+    return i > 0 && ck.slice(0, i) !== '-' ? ck.slice(0, i) : undefined;
 }
 
 /**
@@ -611,7 +746,7 @@ export async function callProvider(
     const stream = !!(opts.stream || opts.onDelta);
     const msgs = mergeAlternating(messages);
     const req: ProviderRequest = {
-        url, headers: cfg.headers, style: preset.style, provider, model, body: {},
+        url, headers: {}, style: preset.style, provider, model, body: {},
     };
     if (preset.style === 'anthropic') {
         // Site policy: never impose a token limit. Anthropic REQUIRES the
@@ -636,55 +771,73 @@ export async function callProvider(
             req.body.prompt_cache_key = opts.cacheKey.slice(0, 64);
         }
     }
-    const resp = await sendWithFallbacks(req, signal);
-    if (!resp.ok) await throwProviderError(resp, url);
-
     let text = '';
     let finishReason = '';
     let usage: AiUsage | null = null;
     let thinkingOnly = false;
-    if (stream && /text\/event-stream/i.test(resp.headers.get('content-type') || '')) {
-        const out = await readStream(resp, preset.style, opts, slot, signal);
-        text = out.text;
-        finishReason = out.stopReason;
-        usage = out.usage;
-        thinkingOnly = out.thinkingOnly;
-    } else {
-        const data: any = await resp.json();
-        // Robust text extraction: strings, arrays of parts, {type:'text'|'output_text'}.
-        const collectText = (v: any): string => {
-            if (v == null) return '';
-            if (typeof v === 'string') return v;
-            if (Array.isArray(v)) return v.map(collectText).filter((x) => x).join('\n');
-            if (typeof v === 'object') {
-                if (typeof v.text === 'string' && (!v.type || v.type === 'text' || v.type === 'output_text')) return v.text;
-                return '';
+    // One key of the pool per attempt: cache-affine, tenant-aware. A key
+    // the provider rejects (invalid, no balance) is sidelined by the pool
+    // and the call moves to another key without the caller noticing.
+    for (let attempt = 0; ; attempt++) {
+        const lease = await acquireLease(cfg, { affinity: opts.cacheKey, domain: tenantOf(opts) }, signal);
+        req.headers = cfg.headersFor(lease?.key.secret || '');
+        try {
+            const resp = await sendWithFallbacks(req, signal);
+            if (!resp.ok) await throwProviderError(resp, url);
+            if (stream && /text\/event-stream/i.test(resp.headers.get('content-type') || '')) {
+                const out = await readStream(resp, preset.style, opts, slot, signal);
+                text = out.text;
+                finishReason = out.stopReason;
+                usage = out.usage;
+                thinkingOnly = out.thinkingOnly;
+            } else {
+                const data: any = await resp.json();
+                // Robust text extraction: strings, arrays of parts, {type:'text'|'output_text'}.
+                const collectText = (v: any): string => {
+                    if (v == null) return '';
+                    if (typeof v === 'string') return v;
+                    if (Array.isArray(v)) return v.map(collectText).filter((x) => x).join('\n');
+                    if (typeof v === 'object') {
+                        if (typeof v.text === 'string' && (!v.type || v.type === 'text' || v.type === 'output_text')) return v.text;
+                        return '';
+                    }
+                    return '';
+                };
+                usage = normalizeUsage(data.usage);
+                if (preset.style === 'anthropic') {
+                    text = collectText(data.content);
+                    finishReason = data.stop_reason || '';
+                    thinkingOnly = !text.trim() && finishReason === 'max_tokens'
+                        && Array.isArray(data.content) && data.content.some((c: any) => c?.type === 'thinking');
+                } else {
+                    const choice = data.choices?.[0] || {};
+                    text = collectText(choice.message?.content) || collectText(choice.text);
+                    finishReason = choice.finish_reason || '';
+                    thinkingOnly = !text.trim() && typeof choice.message?.reasoning_content === 'string' && !!choice.message.reasoning_content.trim();
+                }
+                if (!text.trim() && !thinkingOnly) {
+                    logger.warn(
+                        'empty AI response from %s/%s (finish/stop reason: %s), raw payload: %s',
+                        provider, model, finishReason || 'n/a', JSON.stringify(data).slice(0, 600),
+                    );
+                }
+                // A non-streamed reply that the caller wanted streamed: deliver it whole.
+                if (text.trim() && opts.onDelta) {
+                    slot.markEmitted();
+                    opts.onDelta(text);
+                }
             }
-            return '';
-        };
-        usage = normalizeUsage(data.usage);
-        if (preset.style === 'anthropic') {
-            text = collectText(data.content);
-            finishReason = data.stop_reason || '';
-            thinkingOnly = !text.trim() && finishReason === 'max_tokens'
-                && Array.isArray(data.content) && data.content.some((c: any) => c?.type === 'thinking');
-        } else {
-            const choice = data.choices?.[0] || {};
-            text = collectText(choice.message?.content) || collectText(choice.text);
-            finishReason = choice.finish_reason || '';
-            thinkingOnly = !text.trim() && typeof choice.message?.reasoning_content === 'string' && !!choice.message.reasoning_content.trim();
+        } catch (e) {
+            const outcome = leaseOutcomeOf(e);
+            lease?.done(outcome, e?.retryAfterMs);
+            if ((outcome === 'auth' || outcome === 'quota') && lease && cfg.pool.capacity().limit > 0 && attempt < cfg.pool.size) {
+                logger.warn('api key %s rejected by the provider (%s); retrying with another key', lease.key.label, outcome);
+                continue;
+            }
+            throw e;
         }
-        if (!text.trim() && !thinkingOnly) {
-            logger.warn(
-                'empty AI response from %s/%s (finish/stop reason: %s), raw payload: %s',
-                provider, model, finishReason || 'n/a', JSON.stringify(data).slice(0, 600),
-            );
-        }
-        // A non-streamed reply that the caller wanted streamed: deliver it whole.
-        if (text.trim() && opts.onDelta) {
-            slot.markEmitted();
-            opts.onDelta(text);
-        }
+        lease?.done('ok');
+    break;
     }
     if (usage) {
         slot.setUsage(usage);
@@ -1180,7 +1333,7 @@ export async function callProviderWithTools(
     if (signal?.aborted) throw new AiAbortedError();
     const stream = !!(opts.stream || opts.onDelta);
     const req: ProviderRequest = {
-        url, headers: cfg.headers, style: preset.style, provider: cfg.provider, model, body: {},
+        url, headers: {}, style: preset.style, provider: cfg.provider, model, body: {},
     };
 
     if (preset.style === 'anthropic') {
@@ -1229,67 +1382,86 @@ export async function callProviderWithTools(
             req.body.prompt_cache_key = opts.cacheKey.slice(0, 64);
         }
     }
-    const resp = await sendWithFallbacks(req, signal);
-    if (!resp.ok) await throwProviderError(resp, url);
+    const toolsResponse = async (lease: KeyLease | null): Promise<{ text: string, toolCalls: ToolCall[] }> => {
+        const resp = await sendWithFallbacks(req, signal);
+        if (!resp.ok) await throwProviderError(resp, url);
 
-    const parseArgs = (raw: any): Record<string, any> => {
-        if (raw && typeof raw === 'object') return raw;
-        try {
-            const v = JSON.parse(String(raw || '{}'));
-            return v && typeof v === 'object' ? v : {};
-        } catch (e) {
-            return {};
-        }
-    };
-
-    if (stream && /text\/event-stream/i.test(resp.headers.get('content-type') || '')) {
-        let toolSeen = false;
-        const out = await readStream(resp, preset.style, {
-            ...opts,
-            onDelta: (t) => { if (!toolSeen) opts.onDelta?.(t); },
-            onToolStart: (name) => {
-                // From here on the round is a tool call: the status line takes over.
-                toolSeen = true;
-                opts.onToolCall?.(name);
-            },
-        }, slot, signal);
-        if (out.toolCalls.length && !toolSeen) opts.onToolCall?.(out.toolCalls[0].name);
-        if (out.usage) {
-            slot.setUsage(out.usage);
-            opts.onUsage?.(out.usage);
-        }
-        return {
-            text: out.text.trim(),
-            toolCalls: out.toolCalls.filter((c) => c.name).map((c) => ({ id: c.id || `call_${Math.random().toString(36).slice(2, 10)}`, name: c.name, args: parseArgs(c.args) })),
+        const parseArgs = (raw: any): Record<string, any> => {
+            if (raw && typeof raw === 'object') return raw;
+            try {
+                const v = JSON.parse(String(raw || '{}'));
+                return v && typeof v === 'object' ? v : {};
+            } catch (e) {
+                return {};
+            }
         };
-    }
 
-    const json: any = await resp.json();
-    const usage = normalizeUsage(json?.usage);
-    if (usage) {
-        slot.setUsage(usage);
-        opts.onUsage?.(usage);
-    }
-    if (preset.style === 'anthropic') {
-        const blocks: any[] = json?.content || [];
-        const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-        const toolCalls = blocks.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, name: b.name, args: b.input || {} }));
-        if (text && opts.onDelta && !toolCalls.length) {
+        if (stream && /text\/event-stream/i.test(resp.headers.get('content-type') || '')) {
+            let toolSeen = false;
+            const out = await readStream(resp, preset.style, {
+                ...opts,
+                onDelta: (t) => { if (!toolSeen) opts.onDelta?.(t); },
+                onToolStart: (name) => {
+                    // From here on the round is a tool call: the status line takes over.
+                    toolSeen = true;
+                    opts.onToolCall?.(name);
+                },
+            }, slot, signal);
+            if (out.toolCalls.length && !toolSeen) opts.onToolCall?.(out.toolCalls[0].name);
+            if (out.usage) {
+                slot.setUsage(out.usage);
+                opts.onUsage?.(out.usage);
+            }
+            lease?.done('ok');
+            return {
+                text: out.text.trim(),
+                toolCalls: out.toolCalls.filter((c) => c.name).map((c) => ({ id: c.id || `call_${Math.random().toString(36).slice(2, 10)}`, name: c.name, args: parseArgs(c.args) })),
+            };
+        }
+
+        const json: any = await resp.json();
+        lease?.done('ok');
+        const usage = normalizeUsage(json?.usage);
+        if (usage) {
+            slot.setUsage(usage);
+            opts.onUsage?.(usage);
+        }
+        if (preset.style === 'anthropic') {
+            const blocks: any[] = json?.content || [];
+            const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+            const toolCalls = blocks.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, name: b.name, args: b.input || {} }));
+            if (text && opts.onDelta && !toolCalls.length) {
+                slot.markEmitted();
+                opts.onDelta(text);
+            }
+            if (toolCalls.length) opts.onToolCall?.(toolCalls[0].name);
+            return { text, toolCalls };
+        }
+        const choice = json?.choices?.[0]?.message || {};
+        const calls: ToolCall[] = (choice.tool_calls || []).map((c: any) => ({ id: c.id, name: c.function?.name, args: parseArgs(c.function?.arguments) }));
+        const text = String(choice.content || '').trim();
+        if (text && opts.onDelta && !calls.length) {
             slot.markEmitted();
             opts.onDelta(text);
         }
-        if (toolCalls.length) opts.onToolCall?.(toolCalls[0].name);
-        return { text, toolCalls };
+        if (calls.length) opts.onToolCall?.(calls[0].name);
+        return { text, toolCalls: calls };
+    };
+    for (let attempt = 0; ; attempt++) {
+        const lease = await acquireLease(cfg, { affinity: opts.cacheKey, domain: tenantOf(opts) }, signal);
+        req.headers = cfg.headersFor(lease?.key.secret || '');
+        try {
+            return await toolsResponse(lease);
+        } catch (e) {
+            const outcome = leaseOutcomeOf(e);
+            lease?.done(outcome, e?.retryAfterMs);
+            if ((outcome === 'auth' || outcome === 'quota') && lease && cfg.pool.capacity().limit > 0 && attempt < cfg.pool.size) {
+                logger.warn('api key %s rejected by the provider (%s); retrying with another key', lease.key.label, outcome);
+                continue;
+            }
+            throw e;
+        }
     }
-    const choice = json?.choices?.[0]?.message || {};
-    const calls: ToolCall[] = (choice.tool_calls || []).map((c: any) => ({ id: c.id, name: c.function?.name, args: parseArgs(c.function?.arguments) }));
-    const text = String(choice.content || '').trim();
-    if (text && opts.onDelta && !calls.length) {
-        slot.markEmitted();
-        opts.onDelta(text);
-    }
-    if (calls.length) opts.onToolCall?.(calls[0].name);
-    return { text, toolCalls: calls };
 }
 
 export function historyToChat(messages: TutorMessage[], keep = 30): ChatMessage[] {

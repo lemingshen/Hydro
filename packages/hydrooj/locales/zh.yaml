@@ -2,7 +2,7 @@ __flag: 🇨🇳
 __id: zh
 __interface: yes
 __langname: 简体中文
-ai_tutor.api_key: API 密钥
+ai_tutor.api_key: "API 密钥（每行一个，可多个）"
 ai_tutor.base_url: API 地址（可选）
 ai_tutor.enabled: 启用 AI 辅导员
 ai_tutor.max_messages: 每个对话最大消息数
@@ -1078,3 +1078,5 @@ ai_tutor.summary_every: "对话摘要 — 每 N 轮学生发言刷新一次"
 "The AI is busy right now ({0} ahead, about {1} s to wait). Retrying automatically in {2} s.": "AI 当前繁忙（前方 {0} 人，预计等待约 {1} 秒），将在 {2} 秒后自动重试。"
 ai_tutor.sched_adaptive: "调度器 — 根据提供商自适应并发（跟得上就增加，被限流就减半）"
 ai_tutor.sched_slots_max: "调度器 — 自适应并发上限"
+ai_tutor.key_max_inflight: "每个 API 密钥的并发请求数"
+ai_tutor.key_rpm: "每个 API 密钥的每分钟请求数"

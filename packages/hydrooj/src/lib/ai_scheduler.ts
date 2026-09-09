@@ -176,8 +176,22 @@ export class AiAbortedError extends Error {
     }
 }
 
+/** What a key pool tells the scheduler: how many calls the keys can carry right now. */
+export interface CapacityInfo {
+    /** Sum of the usable keys' concurrency limits. */
+    limit: number;
+    /** Free room right now. */
+    available: number;
+    /** When more room appears (a cool-down ends), or 0. */
+    nextFreeAt: number;
+    /** Number of configured keys (0 = no pool: the scheduler's own limit applies). */
+    keys: number;
+}
+
 export interface SchedulerDeps {
     now?: () => number;
+    /** A key pool's capacity (see CapacityInfo); absent = no pool. */
+    capacity?: () => CapacityInfo | null;
     setTimeout?: (fn: () => void, ms: number) => any;
     clearTimeout?: (t: any) => void;
     config?: () => Partial<SchedulerConfig>;
@@ -203,6 +217,8 @@ export interface SchedulerStatus {
     cooldownMs: number;
     features: Record<string, { inflight: number, cap: number | null, queued: number, tau: number }>;
     singleFlight: number;
+    /** The key pool's capacity, when one is bound. */
+    pool: { keys: number, limit: number, available: number } | null;
 }
 
 interface Entry<T = any> {
@@ -296,6 +312,7 @@ export class AiScheduler {
     private readonly isTransient: (e: any) => boolean;
     private readonly isRateLimit: (e: any) => boolean;
     private readonly random: () => number;
+    private capacityFn: (() => CapacityInfo | null) | null = null;
     readonly metrics: AiMetrics;
     log: (line: string) => void;
 
@@ -313,6 +330,24 @@ export class AiScheduler {
         this.metrics = deps.metrics || aiMetrics;
         this.log = deps.log || (() => { });
         this.random = deps.random || Math.random;
+        this.capacityFn = deps.capacity || null;
+    }
+
+    /** Bind (or unbind) a key pool: its capacity caps the limit and its cool-downs stay per key. */
+    setCapacityProvider(fn: (() => CapacityInfo | null) | null) {
+        this.capacityFn = fn;
+    }
+
+    /** A key pool's capacity right now (null when there is no pool). */
+    private poolCapacity(): CapacityInfo | null {
+        const c = this.capacityFn?.();
+        return c && c.keys > 0 ? c : null;
+    }
+
+    /** Something freed up outside the scheduler (a key came back): dispatch again. */
+    wake() {
+        this.pump();
+        if (this.queueLength('interactive') || this.queueLength('background')) this.ensureTimer();
     }
 
     /** Replace the configuration source (used by ai_tutor to bind the site settings). */
@@ -391,9 +426,13 @@ export class AiScheduler {
 
     /** The number of calls allowed in flight right now. */
     limit(cfg = this.config): number {
-        if (!cfg.adaptive || cfg.slotsMax <= cfg.slots) return cfg.slots;
+        const pool = this.poolCapacity();
+        const poolLimit = pool ? pool.limit : Infinity;
+        if (!cfg.adaptive || cfg.slotsMax <= cfg.slots) return Math.min(cfg.slots, poolLimit);
         if (!this.effSlots) this.effSlots = cfg.slots;
-        return Math.min(cfg.slotsMax, Math.max(cfg.slots, Math.round(this.effSlots)));
+        // With a key pool the ceiling is what the keys can carry, and the
+        // floor no longer applies when the keys can carry less than it.
+        return Math.min(cfg.slotsMax, Math.max(cfg.slots, Math.round(this.effSlots)), poolLimit);
     }
 
     /**
@@ -410,6 +449,8 @@ export class AiScheduler {
         if (!cfg.adaptive || cfg.slotsMax <= cfg.slots) return;
         if (!this.effSlots) this.effSlots = cfg.slots;
         const now = this.now();
+        const pool = this.poolCapacity();
+        if (outcome === 'rate_limited' && pool && pool.keys > 1) return; // the key pool halves THAT key's limit
         if (outcome === 'rate_limited') {
             this.effSlots = Math.max(cfg.slots, Math.ceil(this.effSlots / 2));
             this.okStreak = 0;
@@ -453,6 +494,7 @@ export class AiScheduler {
 
     status(): SchedulerStatus {
         const cfg = this.config;
+        const pool = this.poolCapacity();
         const queued = (lane: AiLane) => this.queues[lane].map((m) => [...m.values()].reduce((n, f) => n + f.length, 0));
         const qi = queued('interactive');
         const qb = queued('background');
@@ -493,6 +535,7 @@ export class AiScheduler {
             cooldownMs: Math.max(0, this.cooldownUntil - this.now()),
             features,
             singleFlight: this.singleFlight.size,
+            pool: pool ? { keys: pool.keys, limit: pool.limit, available: pool.available } : null,
         };
     }
 
@@ -679,6 +722,8 @@ export class AiScheduler {
         const cfg = this.config;
         if (this.now() < this.cooldownUntil) return false;
         if (this.running.size >= this.limit(cfg)) return false;
+        const pool = this.poolCapacity();
+        if (pool && pool.available <= 0) return false;
         if (lane === 'background' && this.inflightOf('background') >= this.backgroundLimit(cfg)) return false;
         const cap = cfg.featureCaps[feature];
         if (cap && (this.featureInflight.get(feature) || 0) >= cap) return false;
@@ -753,6 +798,11 @@ export class AiScheduler {
         }
         for (;;) {
             if (this.running.size >= this.limit(cfg)) break;
+            const pool = this.poolCapacity();
+            if (pool && pool.available <= 0) {
+                if (pool.nextFreeAt) this.ensureTimer();
+                break;
+            }
             const entry = this.pick(cfg);
             if (!entry) break;
             this.start(entry, cfg);
@@ -856,8 +906,16 @@ export class AiScheduler {
             // the letter — a fixed 4 s base would stall every student longer
             // than the provider asked for.
             const asked = Number.isFinite(+err?.retryAfterMs) && +err.retryAfterMs > 0 ? +err.retryAfterMs : 0;
-            const backoff = asked ? Math.round(Math.max(250, asked) * (1 + this.random() * 0.25)) : this.backoff(policy.baseMs, entry.attempts - 1);
-            if (outcome === 'rate_limited') this.noteRateLimit(asked || backoff);
+            const pool = this.poolCapacity();
+            // With a key pool, a 429 belongs to ONE key (the pool cooled it
+            // down already): the retry moves to another key almost at once and
+            // nobody else pauses. Only when the whole pool is exhausted does
+            // the shared cool-down apply.
+            const otherKeysFree = outcome === 'rate_limited' && !!pool && pool.keys > 1 && pool.available > 0;
+            const backoff = otherKeysFree
+                ? Math.round(250 * (1 + this.random()))
+                : asked ? Math.round(Math.max(250, asked) * (1 + this.random() * 0.25)) : this.backoff(policy.baseMs, entry.attempts - 1);
+            if (outcome === 'rate_limited' && !otherKeysFree) this.noteRateLimit(asked || backoff);
             this.adapt(cfg, outcome, saturated, null);
             this.metrics.retried();
             this.log(`ai.retry feature=${entry.feature} lane=${entry.lane} attempt=${entry.attempts}/${policy.attempts} in=${backoff}ms: ${String(err?.message || err).slice(0, 160)}`);

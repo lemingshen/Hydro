@@ -27,6 +27,19 @@ Every call to the AI provider in a backend process now goes through **one schedu
 
 `ai_tutor.report_concurrency` is no longer read: the `report_map` cap replaces it.
 
+### API keys — one box, one key per line, remembered per provider
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ai_tutor.api_key` | *(empty)* | The API key box on the settings page takes **one or more keys, one per line**; all of them are used concurrently. The box **shows the keys saved for the selected provider** (root, sudo only) and switches with the provider dropdown; edit the list and save to replace it, empty the box to save no keys for that provider. Advanced options after `\|` on a line: `label=…`, `max=<concurrent requests>`, `rpm=<requests per minute>`, `domain=<tenant>`, `weight=…`. |
+| `ai_tutor.key_max_inflight` | 8 | Default concurrency ceiling per key (each key adapts up to it — AIMD, halved on a 429). |
+| `ai_tutor.key_rpm` | 0 | Default requests-per-minute budget per key (0 = none). |
+| `ai_tutor.provider_keys`, `ai_tutor.api_key_provider` | *(hidden)* | Maintained by the system: the keys saved for each provider, and the provider the box was last saved for. |
+
+**Root's workflow** (`/manage/setting` → AI Tutor): pick the provider, enter the model name, optionally the base URL, then enter the keys — one per line — and save. The keys are remembered **for that provider** and shown in the box whenever that provider is selected: change the dropdown and the box switches to that provider's own keys (a provider that never received keys shows an empty box and is reported as not configured until keys are entered for it). A hidden field tells the backend which provider the box is showing, so changing the dropdown and saving on the same form never stores one provider's keys under another. The switching is wired inline in `templates/manage_setting.html`, so it works from the backend alone (restart), without a UI rebuild.
+
+Keys are selected per call: a tenant's own keys first (`domain=`), then by cache affinity (the same task keeps the same key while it has room, so the provider's prompt cache stays warm), else least loaded. A 429 cools down and halves **that key only**; an invalid key (401) or an exhausted balance (402) is sidelined and the call is resent with another key. The pool's capacity caps the scheduler's limit and wakes it when a key returns. Status: `GET /ai/status` → `keys`, and the settings-page card. Design and measurements: `api-key-pool-design.md`. Note that keys of one provider **organisation/account share that organisation's rate limits** — extra keys add capacity only when they belong to separately limited organisations, projects or customer accounts.
+
 ## Rollout
 
 1. Deploy with `sched_enabled=on` in a quiet period; watch the **AI status** card (`/manage/setting`, under "AI Tutor") or `GET /ai/status` (root, JSON).
@@ -64,6 +77,7 @@ Slots, queues, single-flight keys and streams are in memory. With several backen
 ## What changed where
 
 - `lib/ai_scheduler.ts` — scheduler, `AiBusyError` (HTTP 503, params `[ahead, etaSeconds, retryAfter]`), `runWhenCapacity`, `mapLimit`.
+- `lib/ai_keys.ts` — the API key pool (per-key adaptive limits, health, cache-affine selection, capacity for the scheduler).
 - `lib/ai_stream.ts` — stream registry, `startStreamJob`, SSE parser + Anthropic/OpenAI decoders, `JsonFieldStreamer`.
 - `lib/ai_prompt.ts` — cached prefixes, cache keys, five-line summaries, `codeDelta`.
 - `lib/ai_metrics.ts` — rings, counters, usage normalisation, the `ai.call …` log line.
@@ -99,7 +113,7 @@ Slots, queues, single-flight keys and streams are in memory. With several backen
 ## Tests and the load harness
 
 ```sh
-yarn test:ai            # scheduler (fake clock), streaming/prompt/summary/diff, transport against the fake provider
+yarn test:ai            # scheduler (fake clock), key pool, streaming/prompt/summary/diff, transport against the fake provider
 yarn test:ai-load       # 200 students / 60 s / 12 s latency — asserts the M1/M2 criteria (≈ 5 min)
 FAST=1 yarn test:ai-load 60 20 12000 0.15   # quick smoke run with a 15 % 429 rate (latencies scaled down 20×)
 node -r @hydrooj/register test/ai_load/fake_provider.ts 18080   # the fake provider alone (point ai_tutor.base_url at it)

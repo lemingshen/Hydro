@@ -86,6 +86,11 @@ function render($card, data) {
         const sf = (s.features || {})[f.feature] || {};
         return `<tr><td>${esc(f.feature)}</td><td class="num">${f.calls}</td><td class="num">${sf.inflight || 0}${sf.cap ? ` / ${sf.cap}` : ''}</td><td class="num">${f.errors}</td><td class="num">${ms(f.waitP50)}</td><td class="num">${ms(f.serviceP50)}</td><td class="num">${ms(f.serviceP95)}</td><td class="num">${ms(f.ttftP50)}</td><td class="num">${pct(f.cacheHitRate)}</td><td class="num">${f.tokensIn + f.cacheRead} / ${f.tokensOut}</td></tr>`;
       }).join('')}</tbody></table>` : `<div class="ais__muted">${esc(i18n('No AI calls in this process yet.'))}</div>`}
+    ${data.keys && data.keys.keys && data.keys.keys.length ? `<div style="margin-top:10px">
+      <span class="ais__muted">${esc(i18n('API keys'))}${data.keys.provider ? ` (${esc(data.keys.provider)})` : ''}: ${data.keys.usable}/${data.keys.keys.length} ${esc(i18n('usable'))} · ${esc(i18n('capacity'))} ${data.keys.available}/${data.keys.capacity}</span>
+      <table style="margin-top:4px"><thead><tr><th>${esc(i18n('Key'))}</th><th>${esc(i18n('Health'))}</th><th class="num">${esc(i18n('in flight'))}</th><th class="num">${esc(i18n('limit'))}</th><th class="num">rpm</th><th class="num">${esc(i18n('calls'))}</th><th class="num">429</th><th class="num">${esc(i18n('errors'))}</th></tr></thead>
+      <tbody>${data.keys.keys.map((k) => `<tr><td>${esc(k.label)} <span class="ais__muted">${esc(k.id)}${k.domain ? ` · ${esc(k.domain)}` : ''}</span></td><td>${esc(k.health)}${k.reason ? ` <span class="ais__muted">(${esc(k.reason)}${k.cooldownMs ? `, ${Math.ceil(k.cooldownMs / 1000)} s` : ''})</span>` : ''}</td><td class="num">${k.inflight}</td><td class="num">${k.limit} / ${k.maxInflight}</td><td class="num">${k.rpm ? `${k.rpmUsed} / ${k.rpm}` : k.rpmUsed}</td><td class="num">${k.calls}</td><td class="num">${k.rateLimits}</td><td class="num">${k.errors}</td></tr>`).join('')}</tbody></table>
+    </div>` : ''}
     <div class="ais__foot ais__muted">
       <span>${esc(i18n('Live streams'))}: ${n(data.streams)}</span>
       <span>${esc(i18n('Single-flight keys'))}: ${n(s.singleFlight)}</span>
@@ -93,7 +98,46 @@ function render($card, data) {
     </div>`);
 }
 
+/*
+ * The API key box shows the keys saved for the selected provider and follows
+ * the provider dropdown: pick another provider and the box switches to that
+ * provider's own keys (typed-but-unsaved text is kept per provider while the
+ * page is open). A hidden field tells the backend which provider the box is
+ * showing, so the keys are stored under the right one even when the dropdown
+ * was changed on the same form.
+ */
+function wireProviderKeys() {
+  if (window.__aiKeysWired) return; // the template's inline wiring is active
+  const ctx = window.UiContext && UiContext.aiProviderKeys;
+  const $box = $('textarea[name="ai_tutor.api_key"]');
+  const $sel = $('select[name="ai_tutor.provider"]');
+  if (!ctx || !$box.length || !$sel.length) return;
+  window.__aiKeysWired = true;
+  const map = { ...(ctx.map || {}) };
+  let shown = String($sel.val() || ctx.provider || '');
+  if (map[shown] !== undefined && !String($box.val() || '').trim()) $box.val(map[shown]);
+  const $hidden = $('<input type="hidden" name="ai_tutor.api_key_provider">').val(shown).insertAfter($box);
+  const $note = $('<div class="ais__muted" style="margin-top:4px"></div>').insertAfter($hidden);
+  const describe = () => {
+    const count = String($box.val() || '').split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#')).length;
+    $note.text(count ? i18n('{0} key(s) for {1}').replace('{0}', String(count)).replace('{1}', shown) : i18n('No keys saved for {0} yet').replace('{0}', shown));
+  };
+  describe();
+  $box.on('input', () => {
+    map[shown] = String($box.val() || '');
+    describe();
+  });
+  $sel.on('change', () => {
+    map[shown] = String($box.val() || '');
+    shown = String($sel.val() || '');
+    $box.val(map[shown] || '');
+    $hidden.val(shown);
+    describe();
+  });
+}
+
 export default new NamedPage('manage_setting', () => {
+  wireProviderKeys();
   const $heading = $('#setting_ai_tutor');
   if (!$heading.length) return;
   $('<style>').text(STYLE).appendTo(document.head);

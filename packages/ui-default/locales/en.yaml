@@ -2,7 +2,7 @@ __flag: 🇬🇧
 __id: en
 __interface: yes
 __langname: English
-ai_tutor.api_key: API Key
+ai_tutor.api_key: "API Key(s) — one per line"
 ai_tutor.base_url: API Base URL
 ai_tutor.enabled: Enable AI Tutor
 ai_tutor.max_messages: Max Messages per Conversation
@@ -1531,3 +1531,13 @@ ai_tutor.sched_slots_max: "Scheduler — Ceiling of the Adaptive Limit"
 "adaptive": "adaptive"
 "fixed": "fixed"
 "Drafting… (live)": "Drafting… (live)"
+ai_tutor.key_max_inflight: "Concurrent Requests per API Key"
+ai_tutor.key_rpm: "Requests per Minute per API Key"
+"API keys": "API keys"
+"usable": "usable"
+"capacity": "capacity"
+"Key": "Key"
+"Health": "Health"
+"limit": "limit"
+"{0} key(s) for {1}": "{0} key(s) for {1}"
+"No keys saved for {0} yet": "No keys saved for {0} yet"
