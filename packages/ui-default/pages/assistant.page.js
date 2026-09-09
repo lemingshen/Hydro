@@ -23,6 +23,9 @@
  */
 import $ from 'jquery';
 import { aiMarkdown } from 'vj/components/ai-report/pdf';
+import {
+  busyCountdown, busyInfo, ensureAiStreamStyle, formatQueue, MarkdownStreamRenderer, openAiStream, streamField,
+} from 'vj/components/aistream';
 import Notification from 'vj/components/notification';
 import { AutoloadPage } from 'vj/misc/Page';
 import { i18n, request } from 'vj/utils';
@@ -261,10 +264,56 @@ export default new AutoloadPage('assistantPage', async () => {
     messages = [...messages, { role: 'user', content: text }];
     renderMessages($msgs, messages, ctx, state.posture);
     $in.val('').css('height', '');
-    const $typing = $('<div class="pa__row"><div class="pa__mav">💬</div><div class="pa__typing"><i></i><i></i><i></i></div></div>').appendTo($msgs);
+    ensureAiStreamStyle();
+    const $typing = $('<div class="pa__row"><div class="pa__mav">💬</div><div class="pa__typing"><i></i><i></i><i></i></div><span class="pa__wait ai-stream__queue" hidden></span></div>').appendTo($msgs);
+    const $wait = $typing.find('.pa__wait');
     $msgs.scrollTop($msgs[0].scrollHeight);
+    /*
+     * ai-speedup WP2: the reply STREAMS. The request returns { streamId }
+     * at once; the queue position shows next to the typing dots while the
+     * scheduler has no free slot, tool phases show as a status line, and
+     * the answer renders as it is written (a Markdown re-render at most
+     * every 100 ms). A 503 "AI busy" refusal counts down and retries by
+     * itself. An older backend answers inline — handled the same way.
+     */
+    let $live = null;
+    let renderer = null;
+    const liveRow = () => {
+      if ($live) return $live;
+      $live = $('<div class="pa__row"><div class="pa__mav">💬</div><div class="pa__m pa__m--ai"></div></div>').insertBefore($typing);
+      renderer = new MarkdownStreamRenderer($live.find('.pa__m'), 100, aiMarkdown);
+      return $live;
+    };
+    const streamed = (streamId) => new Promise((resolve, reject) => {
+      openAiStream(streamId, {
+        onQueue: (q) => { $wait.prop('hidden', false).removeClass('ai-stream__queue--busy').text(formatQueue(q)); },
+        onStatus: (stage) => { $wait.prop('hidden', false).removeClass('ai-stream__queue--busy').text(stage); },
+        onDelta: (delta) => {
+          $wait.prop('hidden', true);
+          liveRow();
+          renderer.append(delta);
+          $msgs.scrollTop($msgs[0].scrollHeight);
+        },
+        onReset: () => { if (renderer) renderer.reset(); },
+        onDone: (result) => resolve(result),
+        onError: (err) => reject(Object.assign(new Error(err.message), { retryAfter: err.retryAfter })),
+      });
+    });
     try {
-      const res = await request.post(url(), { operation: 'message', text, ...ctx });
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          res = await request.post(url(), { operation: 'message', text, ...streamField(), ...ctx });
+          break;
+        } catch (e) {
+          const info = busyInfo(e);
+          if (!info || attempt >= 3) throw e;
+          $wait.prop('hidden', false).addClass('ai-stream__queue--busy');
+          const ok = await busyCountdown($wait, info).promise;
+          if (!ok) throw e;
+        }
+      }
+      if (res && res.streamId) res = await streamed(res.streamId);
       messages = [...messages, { role: 'assistant', content: res.reply, tools: res.tools || [] }];
       state.turnsToday = res.turnsToday; state.turnsCap = res.turnsCap;
       quota();
@@ -274,6 +323,7 @@ export default new AutoloadPage('assistantPage', async () => {
       $in.val(text);
       Notification.error(e.message);
     } finally {
+      if ($live) $live.remove();
       $typing.remove();
       busy = false; $send.prop('disabled', false);
       renderMessages($msgs, messages, ctx, state.posture);

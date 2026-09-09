@@ -35,6 +35,7 @@ import { buildActivityCorpus } from './activity_report';
 import * as aiTutor from './ai_tutor';
 import { scheduleMastery } from './knowledge_map';
 import { markDirty } from '../model/knowledgemap';
+import { mapLimit } from './ai_scheduler';
 import { runObjectiveFeedbackJob } from './objective_feedback';
 import KnowledgeModel from '../model/knowledge';
 import problem from '../model/problem';
@@ -671,6 +672,8 @@ export interface MapOptions {
     onProgress?: (done: number, total: number) => void;
     /** injectable for tests */
     label?: typeof aiTutor.runFailureLabeling;
+    /** ai-speedup WP5: waiting for scheduler capacity (null once granted). */
+    onWait?: (w: { ahead: number, eta: number } | null) => void;
 }
 
 interface Sample { pid: number, key: string, member: FailureMember }
@@ -756,39 +759,53 @@ export async function labelFailureClusters(digest: QuickDigest, corpus: any, opt
     const taskOf = new Map<number, any>(corpus.tasks.map((t: any) => [t.pid, t]));
     const results = new Map<number, Map<string, { member: FailureMember, label: string, note: string }[]>>(); // pid → key → labelled samples
     let done = 0;
-    let cursor = 0;
     const calls = new Map<number, number>();
-    const worker = async () => {
-        while (cursor < batches.length) {
-            const batch = batches[cursor++];
-            const pid = batch[0].pid;
-            const t = taskOf.get(pid);
-            calls.set(pid, (calls.get(pid) || 0) + 1);
-            try {
-                const labels = await labelFn({
-                    taskLabel: t?.label || String(pid),
-                    taskTitle: t?.title || '',
-                    statement: String(t?.statement || '').replace(/\s+/g, ' ').slice(0, 700),
-                    excerpts: batch.map((smp, i) => ({
-                        n: i + 1, verdict: smp.member.verdict, failCase: smp.member.failCase, compileSig: smp.member.compileSig, lang: smp.member.lang, code: excerptOf(smp.member.code!, opts.lines),
-                    })),
-                });
-                batch.forEach((smp, i) => {
-                    const l = labels[i + 1];
-                    if (!l) return;
-                    if (!results.has(pid)) results.set(pid, new Map());
-                    const byKey = results.get(pid)!;
-                    if (!byKey.has(smp.key)) byKey.set(smp.key, []);
-                    byKey.get(smp.key)!.push({ member: smp.member, label: l.label, note: l.note });
-                });
-            } catch (e) {
-                logger.warn('[quick-review] labelling batch failed for %s: %s', t?.label || pid, e.message);
+    /*
+     * ai-speedup WP5: no worker pool here any more — every batch is
+     * submitted to the scheduler, which runs at most `qr_label` (3) of them
+     * at a time within the background lane. A refusal for lack of capacity
+     * is reported through onWait and the batch resubmits itself.
+     */
+    let waiting = 0;
+    const labelOne = async (batch: typeof batches[number]) => {
+        const pid = batch[0].pid;
+        const t = taskOf.get(pid);
+        calls.set(pid, (calls.get(pid) || 0) + 1);
+        try {
+            const labels = await aiTutor.aiScheduler.runWhenCapacity({
+                feature: 'qr_label', lane: 'background', priority: 2, label: `quick-review label ${t?.label || pid}`,
+            }, () => labelFn({
+                taskLabel: t?.label || String(pid),
+                taskTitle: t?.title || '',
+                statement: String(t?.statement || '').replace(/\s+/g, ' ').slice(0, 700),
+                excerpts: batch.map((smp, i) => ({
+                    n: i + 1, verdict: smp.member.verdict, failCase: smp.member.failCase, compileSig: smp.member.compileSig, lang: smp.member.lang, code: excerptOf(smp.member.code!, opts.lines),
+                })),
+            }), {
+                onWait: (e) => {
+                    waiting += 1;
+                    opts.onWait?.({ ahead: e.position, eta: e.eta });
+                },
+            });
+            if (waiting) {
+                waiting = 0;
+                opts.onWait?.(null);
             }
-            done += 1;
-            opts.onProgress?.(done, batches.length);
+            batch.forEach((smp, i) => {
+                const l = labels[i + 1];
+                if (!l) return;
+                if (!results.has(pid)) results.set(pid, new Map());
+                const byKey = results.get(pid)!;
+                if (!byKey.has(smp.key)) byKey.set(smp.key, []);
+                byKey.get(smp.key)!.push({ member: smp.member, label: l.label, note: l.note });
+            });
+        } catch (e) {
+            logger.warn('[quick-review] labelling batch failed for %s: %s', t?.label || pid, e.message);
         }
+        done += 1;
+        opts.onProgress?.(done, batches.length);
     };
-    await Promise.all([worker(), worker(), worker()]);
+    await Promise.all(batches.map((b) => labelOne(b)));
 
     for (const task of digest.tasks) {
         const bySig = members.get(task.pid);
@@ -1177,16 +1194,15 @@ async function prewarmExplain(domainId: string, tdoc: any, digest: QuickDigest, 
     if (!queue.length) return;
     let done = 0;
     await setQuickPrewarm(domainId, tid, { queued: queue.length, done });
-    let cursor = 0;
-    const worker = async () => {
-        while (cursor < queue.length) {
-            const job = queue[cursor++];
-            await runObjectiveFeedbackJob(domainId, tdoc, job.uid, job.pid).catch(() => { /* the job wrote its own failure */ });
-            done += 1;
-            if (done % 5 === 0 || done === queue.length) await setQuickPrewarm(domainId, tid, { queued: queue.length, done }).catch(() => { /* cosmetic */ });
-        }
-    };
-    await Promise.all([worker(), worker(), worker()]);
+    // ai-speedup WP5: bulk work — priority 3, so it only ever uses idle
+    // capacity (aging keeps it moving); the scheduler's `explain` cap bounds
+    // the provider calls, the small local limit only bounds the DB reads
+    // each job does before its call.
+    await mapLimit(queue, 6, async (job) => {
+        await runObjectiveFeedbackJob(domainId, tdoc, job.uid, job.pid, { priority: 3 }).catch(() => { /* the job wrote its own failure */ });
+        done += 1;
+        if (done % 5 === 0 || done === queue.length) await setQuickPrewarm(domainId, tid, { queued: queue.length, done }).catch(() => { /* cosmetic */ });
+    });
 }
 
 /**
@@ -1204,9 +1220,17 @@ export async function generateQuickReview(domainId: string, tdoc: any, kind: 'co
     // review it generated moments ago. A teacher's click always rebuilds;
     // a changed scoreboard is caught by the GET's stale check anyway.
     if (opts.by === 'system' && existing?.generatedAt && Date.now() - new Date(existing.generatedAt).getTime() < SYSTEM_REBUILD_MIN_MS) return;
-    const progress = (stage: any, prog?: { done: number, total: number }) => setQuickJob(domainId, tid, {
-        status: 'running', stage, startedAt, updatedAt: new Date(), by: opts.by, ...(prog ? { progress: prog } : {}),
-    });
+    let lastProgress: { done: number, total: number } | undefined;
+    let currentStage: any = 'collect';
+    const progress = (stage: any, prog?: { done: number, total: number }, waiting: { ahead: number, eta: number } | null = null) => {
+        currentStage = stage;
+        if (prog) lastProgress = prog;
+        return setQuickJob(domainId, tid, {
+            status: 'running', stage, startedAt, updatedAt: new Date(), by: opts.by, ...(lastProgress ? { progress: lastProgress } : {}), waiting,
+        });
+    };
+    /** The scheduler had no capacity for the current call: the theatre shows "waiting for capacity · N ahead · ~T s". */
+    const onWait = (w: { ahead: number, eta: number } | null) => { progress(currentStage, undefined, w).catch(() => { /* cosmetic */ }); };
     try {
         await progress('collect');
         const corpus = await buildActivityCorpus(domainId, tdoc, kind, false);
@@ -1225,12 +1249,15 @@ export async function generateQuickReview(domainId: string, tdoc: any, kind: 'co
                 const missing = t.questions.filter((q: any) => !stored.has(questionPointKey(t.pid, q.key)));
                 if (!missing.length) continue;
                 try {
-                    const inferred = await aiTutor.inferQuestionPoints({
+                    const inferred = await aiTutor.aiScheduler.runWhenCapacity({
+                        feature: 'qr_points', lane: 'background', priority: 2, label: `quick-review points ${t.label}`,
+                    }, () => aiTutor.inferQuestionPoints({
                         taskLabel: t.label,
                         taskTags: t.points,
                         catalogNames: names,
                         questions: missing.map((q: any) => ({ key: q.key, prompt: q.prompt, options: (q.options || []).map((o: any) => `${o.letter}. ${o.text}`), answer: q.answer })),
-                    });
+                    }), { onWait: (e) => onWait({ ahead: e.position, eta: e.eta }) });
+                    onWait(null);
                     for (const q of missing) {
                         const pts = inferred[q.key] || [];
                         if (!pts.length) continue;
@@ -1280,6 +1307,7 @@ export async function generateQuickReview(domainId: string, tdoc: any, kind: 'co
                     maxCalls,
                     lines: Math.max(20, Math.min(120, +system.get('ai_tutor.quick_review_map_lines') || 60)),
                     onProgress: (done, total) => { progress('map', { done, total }).catch(() => { /* cosmetic */ }); },
+                    onWait,
                 }).catch((e) => logger.warn('[quick-review] map pass failed: %s', e.message));
             }
             /* REDUCE: one call on the condensed digest, within the token budget. */
@@ -1288,7 +1316,10 @@ export async function generateQuickReview(domainId: string, tdoc: any, kind: 'co
             const rendered = renderDigestWithinBudget(digest, budget);
             if (rendered.level > 0) logger.info('[quick-review] %s: digest condensed to level %d (~%d tokens, budget %d)', tid, rendered.level, estimateTokens(rendered.text), budget);
             try {
-                const raw = await aiTutor.callWithRetry(() => aiTutor.runQuickDiagnosis(rendered.text), { attempts: 2, label: 'quick-review' });
+                const raw = await aiTutor.aiScheduler.runWhenCapacity({
+                    feature: 'qr_diagnose', lane: 'background', priority: 1, label: 'quick-review diagnosis', retry: { attempts: 2 },
+                }, () => aiTutor.runQuickDiagnosis(rendered.text), { onWait: (e) => onWait({ ahead: e.position, eta: e.eta }) });
+                onWait(null);
                 diagnosisRaw = String(raw || '').slice(0, 40000);
                 diagnosis = parseDiagnosis(raw, digest, aiTutor.sysStr('ai_tutor.quick_review_model').trim() || aiTutor.sysStr('ai_tutor.model'));
             } catch (e) {

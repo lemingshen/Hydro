@@ -601,8 +601,14 @@ function openModal() {
       if (job.stage === 'reduce' && lastSeen.stage !== 'reduce') feedPush(`✍️ ${i18n('All findings merged — writing the report ({0} students)').replace('{0}', job.analyzed || total)}${job.unanalyzed ? ` · ${job.unanalyzed} ${i18n('not analyzed')}` : ''}`);
       if (job.stage === 'finalize' && lastSeen.stage !== 'finalize') feedPush(`🏷️ ${i18n('Report written; filling in names')}`);
     }
+    // ai-speedup WP5: the scheduler had no free slot for the current call.
+    const waitKey = job.status === 'running' && job.waiting ? `${job.stage}:${job.waiting.ahead}` : '';
+    if (waitKey && waitKey !== lastSeen.waitKey) {
+      const secs = Math.max(1, Math.round((job.waiting.eta || 0) / 1000));
+      feedPush(`⏳ ${i18n('waiting for capacity')} · ${i18n('{0} ahead').replace('{0}', String(Math.max(0, job.waiting.ahead || 0)))} · ~${secs} s`);
+    }
     if (job.stage === 'map' && !mapStartedAt) mapStartedAt = Date.now();
-    lastSeen = { stage: job.stage, done: job.done, total: job.total };
+    lastSeen = { stage: job.stage, done: job.done, total: job.total, waitKey };
   };
   const etaText = (job) => {
     if (job.stage === 'map' && mapStartedAt && job.done > 0 && job.total > job.done) {

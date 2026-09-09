@@ -5,6 +5,7 @@ import moment from 'moment-timezone';
 import { ObjectId } from 'mongodb';
 import { STATUS, STATUS_SHORT_TEXTS, STATUS_TEXTS } from '@hydrooj/common';
 import { Context } from '../context';
+import { registerAiStreamRoutes } from './ai_stream';
 import { Logger } from '../logger';
 import { ContestNotLiveError, ContestNotAttendedError,
     BadRequestError, ForbiddenError, NotFoundError, PermissionError,
@@ -44,7 +45,7 @@ import domain from '../model/domain';
 import problem from '../model/problem';
 import record, { harnessFor } from '../model/record';
 import storage from '../model/storage';
-import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, classReportJobStale, collProgress, collTutor, getClassReport, getClassReportMapCache, getSubjective, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads, RemedialPrompt, addClassReportDrafts } from '../model/selflearning';
+import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, classReportJobStale, collProgress, collTutor, getClassReport, getClassReportMapCache, getSubjective, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionJob, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads, RemedialPrompt, addClassReportDrafts } from '../model/selflearning';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
@@ -2845,7 +2846,8 @@ class SelfLearningEditHandler extends Handler {
      */
     @param('message', Types.String)
     @param('history', Types.String, true)
-    async postSuggest({ domainId }, message: string, history = '') {
+    @param('stream', Types.Boolean, true)
+    async postSuggest({ domainId }, message: string, history = '', stream = false) {
         if (!aiTutor.tutorEnabled() || !aiTutor.tutorConfigured()) throw new ForbiddenError('The AI assistant is not configured. Please ask the administrator to set an API key.');
         const goal = String(message || '').trim().slice(0, 2000);
         if (!goal) throw new BadRequestError('Describe what the session should train first.');
@@ -2924,86 +2926,108 @@ class SelfLearningEditHandler extends Handler {
             ...rest,
             ...(turns.length ? [{ role: 'user' as const, content: `TEACHER'S FOLLOW-UP: ${goal}\nRevise the suggestion accordingly and reply with the full JSON again.` }] : []),
         ];
-        const raw = await aiTutor.callProvider(ADVISOR_SYSTEM, messages, { temperature: 0.3 });
-        let j: any;
-        try {
-            j = parseJsonLoose(raw);
-        } catch (e) {
-            const retry = await aiTutor.callProvider(ADVISOR_SYSTEM, [
-                ...messages,
-                { role: 'assistant', content: raw.slice(0, 6000) },
-                { role: 'user', content: 'Your previous reply was not valid JSON. Reply again with ONLY the JSON value, no prose, no markdown fences.' },
-            ], { temperature: 0 });
-            j = parseJsonLoose(retry);
-        }
+        /*
+         * ai-speedup WP2: with `stream=1` the advice is a STREAM JOB — the
+         * "learning path" narrative shows word by word while the model is
+         * still listing the tasks, then the validated JSON closes the
+         * stream. Older pages get the inline shape. The teacher is waiting
+         * at the keyboard: interactive lane, behind the tutor (class 1).
+         */
+        const uid = this.user._id;
+        const advise = async (h: aiTutor.AiStreamHandle | null) => {
+            const pathStream = h ? new aiTutor.JsonFieldStreamer('path', h.delta) : null;
+            const raw = await aiTutor.callProvider(ADVISOR_SYSTEM, messages, {
+                temperature: 0.3, meta: { feature: 'author', lane: 'interactive', priority: 1, uid }, signal: h?.signal, ...(pathStream ? { onDelta: (t: string) => pathStream.feed(t) } : {}),
+            });
+            let j: any;
+            try {
+                j = parseJsonLoose(raw);
+            } catch (e) {
+                const retry = await aiTutor.callProvider(ADVISOR_SYSTEM, [
+                    ...messages,
+                    { role: 'assistant', content: raw.slice(0, 6000) },
+                    { role: 'user', content: 'Your previous reply was not valid JSON. Reply again with ONLY the JSON value, no prose, no markdown fences.' },
+                ], { temperature: 0, meta: { feature: 'author', lane: 'interactive', priority: 1, uid }, signal: h?.signal });
+                j = parseJsonLoose(retry);
+            }
 
-        // Validate against the candidates; unknown pids are dropped, never
-        // invented. The learning order is the model's "step" (its array
-        // order as fallback), re-numbered 1..n after validation.
-        const LEVELS = ['basic', 'intermediate', 'advanced'];
-        const seen = new Set<string>();
-        const rawTasks = (Array.isArray(j?.tasks) ? j.tasks : []).map((t: any, i: number) => ({ t, i }));
-        rawTasks.sort((a, b) => (Number(a.t?.step) || a.i + 1) - (Number(b.t?.step) || b.i + 1) || a.i - b.i);
-        const tasks = rawTasks.map(({ t }) => {
-            const c = byPid.get(String(t?.pid || '').trim().toLowerCase());
-            if (!c || seen.has(c.pid)) return null;
-            seen.add(c.pid);
-            const tagLower = new Map(c.tags.map((x) => [x.toLowerCase(), x] as const));
-            const pick = (list: any) => (Array.isArray(list) ? list : [])
-                .map((x: any) => tagLower.get(String(x || '').toLowerCase())).filter((x: any) => x);
-            const level = String(t.level || '').toLowerCase();
+            // Validate against the candidates; unknown pids are dropped, never
+            // invented. The learning order is the model's "step" (its array
+            // order as fallback), re-numbered 1..n after validation.
+            const LEVELS = ['basic', 'intermediate', 'advanced'];
+            const seen = new Set<string>();
+            const rawTasks = (Array.isArray(j?.tasks) ? j.tasks : []).map((t: any, i: number) => ({ t, i }));
+            rawTasks.sort((a, b) => (Number(a.t?.step) || a.i + 1) - (Number(b.t?.step) || b.i + 1) || a.i - b.i);
+            const tasks = rawTasks.map(({ t }) => {
+                const c = byPid.get(String(t?.pid || '').trim().toLowerCase());
+                if (!c || seen.has(c.pid)) return null;
+                seen.add(c.pid);
+                const tagLower = new Map(c.tags.map((x) => [x.toLowerCase(), x] as const));
+                const pick = (list: any) => (Array.isArray(list) ? list : [])
+                    .map((x: any) => tagLower.get(String(x || '').toLowerCase())).filter((x: any) => x);
+                const level = String(t.level || '').toLowerCase();
+                return {
+                    docId: c.docId,
+                    pid: c.pid,
+                    title: c.title,
+                    difficulty: c.difficulty,
+                    nSubmit: c.nSubmit,
+                    nAccept: c.nAccept,
+                    hidden: c.hidden,
+                    points: c.tags,
+                    goalPoints: pick(t.points),
+                    newPoints: pick(t.newPoints),
+                    level: LEVELS.includes(level) ? level : '',
+                    buildsOn: String(t.buildsOn || '').trim(),
+                    reason: String(t.reason || '').slice(0, 600),
+                };
+            }).filter((x: any) => x).slice(0, 8);
+            const suggestedPids = new Set(tasks.map((t: any) => t.pid.toLowerCase()));
+            tasks.forEach((t: any, i: number) => {
+                t.step = i + 1;
+                // buildsOn must name an EARLIER suggested task; otherwise it is the previous step.
+                const ref = tasks.find((o: any, k: number) => k < i && o.pid.toLowerCase() === t.buildsOn.toLowerCase());
+                t.buildsOn = i === 0 ? '' : (ref ? ref.pid : tasks[i - 1].pid);
+                // A level for every step, monotone along the path when the model left gaps.
+                if (!t.level) t.level = i === 0 ? 'basic' : i === tasks.length - 1 && tasks.length > 2 ? 'advanced' : (tasks[i - 1].level || 'intermediate');
+            });
+            const path = String(j?.path || '').slice(0, 900);
+            const overlap = (Array.isArray(j?.overlap) ? j.overlap : [])
+                .map((o: any) => ({
+                    point: String(o?.point || '').slice(0, 60),
+                    pids: (Array.isArray(o?.pids) ? o.pids : []).map((p: any) => String(p)).filter((p: string) => suggestedPids.has(p.toLowerCase())),
+                }))
+                .filter((o: any) => o.point && o.pids.length >= 2)
+                .slice(0, 20);
+            const points = (Array.isArray(j?.points) ? j.points : []).map((x: any) => String(x || '').slice(0, 60)).filter((x: string) => x).slice(0, 12);
+            const notes = String(j?.notes || '').slice(0, 1500);
             return {
-                docId: c.docId,
-                pid: c.pid,
-                title: c.title,
-                difficulty: c.difficulty,
-                nSubmit: c.nSubmit,
-                nAccept: c.nAccept,
-                hidden: c.hidden,
-                points: c.tags,
-                goalPoints: pick(t.points),
-                newPoints: pick(t.newPoints),
-                level: LEVELS.includes(level) ? level : '',
-                buildsOn: String(t.buildsOn || '').trim(),
-                reason: String(t.reason || '').slice(0, 600),
-            };
-        }).filter((x: any) => x).slice(0, 8);
-        const suggestedPids = new Set(tasks.map((t: any) => t.pid.toLowerCase()));
-        tasks.forEach((t: any, i: number) => {
-            t.step = i + 1;
-            // buildsOn must name an EARLIER suggested task; otherwise it is the previous step.
-            const ref = tasks.find((o: any, k: number) => k < i && o.pid.toLowerCase() === t.buildsOn.toLowerCase());
-            t.buildsOn = i === 0 ? '' : (ref ? ref.pid : tasks[i - 1].pid);
-            // A level for every step, monotone along the path when the model left gaps.
-            if (!t.level) t.level = i === 0 ? 'basic' : i === tasks.length - 1 && tasks.length > 2 ? 'advanced' : (tasks[i - 1].level || 'intermediate');
-        });
-        const path = String(j?.path || '').slice(0, 900);
-        const overlap = (Array.isArray(j?.overlap) ? j.overlap : [])
-            .map((o: any) => ({
-                point: String(o?.point || '').slice(0, 60),
-                pids: (Array.isArray(o?.pids) ? o.pids : []).map((p: any) => String(p)).filter((p: string) => suggestedPids.has(p.toLowerCase())),
-            }))
-            .filter((o: any) => o.point && o.pids.length >= 2)
-            .slice(0, 20);
-        const points = (Array.isArray(j?.points) ? j.points : []).map((x: any) => String(x || '').slice(0, 60)).filter((x: string) => x).slice(0, 12);
-        const notes = String(j?.notes || '').slice(0, 1500);
-        this.response.body = {
-            points,
-            path,
-            tasks,
-            overlap,
-            notes,
-            candidates: candidates.length,
-            labeled: labeled.length,
-            // What the client stores as the assistant turn for follow-ups.
-            summary: JSON.stringify({
                 points,
                 path,
-                tasks: tasks.map((t: any) => ({ step: t.step, pid: t.pid, level: t.level, buildsOn: t.buildsOn, newPoints: t.newPoints, points: t.goalPoints })),
+                tasks,
                 overlap,
                 notes,
-            }),
+                candidates: candidates.length,
+                labeled: labeled.length,
+                // What the client stores as the assistant turn for follow-ups.
+                summary: JSON.stringify({
+                    points,
+                    path,
+                    tasks: tasks.map((t: any) => ({ step: t.step, pid: t.pid, level: t.level, buildsOn: t.buildsOn, newPoints: t.newPoints, points: t.goalPoints })),
+                    overlap,
+                    notes,
+                }),
+            };
         };
+        const meta: aiTutor.AiCallMeta = {
+            feature: 'author', lane: 'interactive', priority: 1, uid,
+        };
+        if (stream && aiTutor.streamingEnabled()) {
+            const { id } = aiTutor.startStreamJob({ uid, meta, run: (h) => advise(h) });
+            this.response.body = { streamId: id };
+            return;
+        }
+        this.response.body = await aiTutor.scheduled(meta, () => advise(null));
     }
 
     @param('title', Types.Title)
@@ -5027,7 +5051,9 @@ class SelfLearningSolveHandler extends SelfLearningProblemBaseHandler {
  * tests and sandbox verification in the background. No tutor on bonus
  * tasks: submit, see the verdict, retry.
  */
-const BONUS_SYSTEM = `You are the assistant of a programming tutor. From one student's work in a self-learning session you identify the student's WEAK POINTS and design the brief for ONE new programming task that makes them practise exactly those. You never solve anything for the student; you only design practice. You write in English only, whatever language the student's code, comments or the session's tasks use.`;
+/** ai-speedup WP5: bonus-task diagnosis is background work (feature `bonus`). */
+const BONUS_META: aiTutor.AiCallMeta = { feature: 'bonus', lane: 'background', priority: 2 };
+const BONUS_SYSTEM = 'You are the assistant of a programming tutor. From one student\'s work in a self-learning session you identify the student\'s WEAK POINTS and design the brief for ONE new programming task that makes them practise exactly those. You never solve anything for the student; you only design practice. You write in English only, whatever language the student\'s code, comments or the session\'s tasks use.';
 
 const BONUS_PROMPT = `Below is a student's complete work in a session: each task with its knowledge points, the student's judged attempts (verdicts, scores, the latest code), and the exchanges with the Socratic tutor. Diagnose and design.
 Reply with ONLY JSON:
@@ -5303,7 +5329,7 @@ async function runBonusDiagnosis(domainId: string, sdoc: SelfLearningDoc, uid: n
         const raw = await aiTutor.callProvider(BONUS_SYSTEM, [{
             role: 'user',
             content: [BONUS_PROMPT, catalogBlock, blocks.join('\n\n').slice(0, 24000)].filter((x) => x).join('\n\n'),
-        }], { temperature: 0.4 });
+        }], { temperature: 0.4, meta: BONUS_META });
         let j: any;
         try {
             j = parseJsonLoose(raw);
@@ -5312,7 +5338,7 @@ async function runBonusDiagnosis(domainId: string, sdoc: SelfLearningDoc, uid: n
                 { role: 'user', content: [BONUS_PROMPT, catalogBlock, blocks.join('\n\n').slice(0, 24000)].filter((x) => x).join('\n\n') },
                 { role: 'assistant', content: raw.slice(0, 6000) },
                 { role: 'user', content: 'Your previous reply was not valid JSON. Reply again with ONLY the JSON value.' },
-            ], { temperature: 0 });
+            ], { temperature: 0, meta: BONUS_META });
             j = parseJsonLoose(retry);
         }
         const weak: { name: string, description?: string }[] = [];
@@ -5594,12 +5620,70 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             uiLang,
             problemKind,
             attempts,
+            uid: this.user._id,
         };
     }
 
     async everAccepted(domainId: string) {
         const psdoc = await problem.getStatus(domainId, this.pdoc.docId, this.user._id);
         return psdoc?.status === STATUS.STATUS_ACCEPTED;
+    }
+
+    /* ---------------- ai-speedup WP2: stream jobs ---------------- */
+
+    /** The client opted into streaming (`stream=1`) and the site allows it. */
+    get wantsStream(): boolean {
+        return ['1', 'true', 'on', 'yes'].includes(String(this.args.stream ?? '').toLowerCase()) && aiTutor.streamingEnabled();
+    }
+
+    /**
+     * Run `work` — the provider call PLUS the persistence that follows it —
+     * as a stream job (the response is `{ streamId }`; the browser attaches
+     * over /ai/stream and sees queue position, deltas and the final JSON
+     * result) or inline in the old shape when the client did not ask for a
+     * stream. Either way the call is scheduled (lib/ai_scheduler.ts): an
+     * admission refusal surfaces as an AiBusyError → HTTP 503 with a
+     * retry-after the client counts down. Nothing here awaits the provider
+     * inside the web request once the client streams.
+     */
+    async respondJob<T>(feature: string, work: (stream: aiTutor.AiStreamHandle | null) => Promise<T>, opts: { priority?: 0 | 1 | 2 | 3, key?: string } = {}) {
+        const meta: aiTutor.AiCallMeta = {
+            feature, lane: 'interactive', uid: this.user._id, priority: opts.priority, key: opts.key,
+        };
+        if (this.wantsStream) {
+            const { id } = aiTutor.startStreamJob({ uid: this.user._id, meta, run: (h) => work(h) });
+            this.response.body = { streamId: id };
+            return;
+        }
+        this.response.body = await aiTutor.scheduled(meta, () => work(null));
+    }
+
+    /**
+     * ai-speedup WP4: after a turn that sent the student's code, remember it
+     * (later turns send a diff against it) and, on the summary cadence,
+     * refresh the rolling thread summary in the background lane. Both are
+     * best-effort and never delay the reply.
+     */
+    afterTurn(thread: TutorThreadDoc, sentCode: string | null) {
+        if (sentCode) {
+            SelfLearningModel.setLastSentCode(thread._id, sentCode, aiTutor.codeHash(sentCode))
+                .catch((e) => logger.warn('[ai-tutor] lastSentCode not stored: %s', e.message));
+        }
+        const { domainId } = this.args;
+        const { ssid, pid, uid } = { ssid: this.sdoc.docId, pid: this.pdoc.docId, uid: this.user._id };
+        // Outside the current slot on purpose: the summary is a separate
+        // background call, never a tail of the interactive one.
+        aiTutor.aiScheduler.runOutside({
+            feature: 'summary', lane: 'background', priority: 1, uid, key: `summary:${thread._id.toHexString()}`,
+        }, async () => {
+            const fresh = await SelfLearningModel.getThread(domainId, ssid, pid, uid);
+            if (!fresh || !aiTutor.threadSummaryDue(fresh)) return null;
+            const summary = await aiTutor.summarizeThread(fresh, uid);
+            if (summary) await SelfLearningModel.setThreadSummary(thread._id, summary);
+            return summary;
+        }).catch((e) => {
+            if (!(e instanceof aiTutor.AiBusyError)) logger.warn('[ai-tutor] thread summary skipped: %s', e.message);
+        });
     }
 
     /** Serialize a stored message for the client, keeping card metadata. */
@@ -5684,15 +5768,24 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         // If sameRid but the last message is not from the assistant, a previous
         // provider call failed after the marker was stored — retry the reply only.
         const ctx = await this.tutorCtx(rdoc, attemptCount || 1, await this.everAccepted(domainId));
+        ctx.thread = thread;
         const directive = accepted
             ? (isFirst ? aiTutor.ACCEPTED_OPENING_DIRECTIVE : aiTutor.ACCEPTED_DIRECTIVE)
             : (isFirst ? aiTutor.OPENING_DIRECTIVE : aiTutor.RESUBMIT_DIRECTIVE);
-        const reply = await aiTutor.runTutorTurn(ctx, thread.messages, directive);
-        await SelfLearningModel.pushMessages(thread._id, [{ role: 'assistant', kind: 'chat', content: reply }]);
-        const messages = [...thread.messages, { role: 'assistant', kind: 'chat', content: reply }];
-        this.response.body = {
-            messages: messages.map((m: any) => SelfLearningTutorHandler.mapMsg(m)),
-        };
+        const startThread = thread;
+        await this.respondJob('tutor', async (stream) => {
+            let sentCode: string | null = null;
+            const reply = await aiTutor.runTutorTurn(ctx, startThread.messages, directive, {
+                onDelta: stream?.delta, signal: stream?.signal, onCodeSent: (code) => { sentCode = code; },
+            });
+            await SelfLearningModel.pushMessages(startThread._id, [{ role: 'assistant', kind: 'chat', content: reply }]);
+            this.afterTurn(startThread, sentCode);
+            const messages = [...startThread.messages, { role: 'assistant', kind: 'chat', content: reply }];
+            return {
+                reply,
+                messages: messages.map((m: any) => SelfLearningTutorHandler.mapMsg(m)),
+            };
+        });
     }
 
     @param('rid', Types.ObjectId)
@@ -5770,7 +5863,20 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             }
             ctx.ownership = { asked: ownership.questions.length, min: ownership.minQ, max: ownership.maxQ };
         }
-        const annotation = await aiTutor.runAnnotationTurn(ctx, askedList);
+        // ai-speedup WP2: the question is generated as a job (interactive
+        // lane, class 0 — the student is waiting for it just as for a reply);
+        // the question text streams and the JSON result closes the stream.
+        const annoThread = thread;
+        const annoOwnership = ownership;
+        await this.respondJob('annotate', async (stream) => this.completeAnnotate(domainId, ctx, askedList, annoThread, annoOwnership, marker, accepted, stream));
+    }
+
+    /** The provider call of postAnnotate and everything it persists (runs inside the job). */
+    async completeAnnotate(
+        domainId: string, ctx: aiTutor.TutorTurnContext, askedList: string[], thread: TutorThreadDoc, ownership: OwnershipState | undefined,
+        marker: string | null, accepted: boolean, stream: aiTutor.AiStreamHandle | null,
+    ) {
+        const annotation = await aiTutor.runAnnotationTurn(ctx, askedList, { signal: stream?.signal, onDelta: stream?.delta });
         if (annotation && thread) {
             await SelfLearningModel.pushMessages(thread._id, [{
                 role: 'assistant', kind: 'anno', content: annotation.question, line: annotation.line, endLine: annotation.endLine,
@@ -5806,7 +5912,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         // route back through this endpoint, which finishes once the budget
         // is spent or the model closes the sequence).
         const gate = (accepted && !annotation) ? await this.finishTask(domainId) : await this.gateView();
-        this.response.body = {
+        return {
             annotation,
             marker,
             markerAccepted: accepted,
@@ -5891,10 +5997,11 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             return;
         }
         const ctx = await this.tutorCtx(rdoc, thread?.attemptCount || 1, await this.everAccepted(domainId));
+        ctx.thread = thread;
         if (typeof this.args.code === 'string' && this.args.code.trim()) {
             ctx.liveCode = String(this.args.code).slice(0, 8000);
         }
-        const result = await aiTutor.runAnnotationDialogue(ctx, {
+        const dialogueInput: aiTutor.AnnotationDialogueInput = {
             line,
             endLine,
             question: question.slice(0, 300),
@@ -5903,6 +6010,21 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             // ⭐ First-attempt acceptance (frozen at walkthrough creation
             // from the record history) activates the ownership leniency.
             firstAttempt: thread?.ownership ? (thread.ownership.acceptedAttempt === 1 || (thread.ownership.minQ ?? 0) >= 5) : false,
+        };
+        // ai-speedup WP2: the reply streams word by word into the card while
+        // the model is still writing the JSON object around it; the grading
+        // and persistence below run inside the same job.
+        await this.respondJob('tutor', async (stream) => this.completeAnnotateReply(domainId, rdoc, thread, ctx, dialogueInput, line, endLine, question, text, stream));
+    }
+
+    /** The provider call of postAnnotateReply and everything it persists (runs inside the job). */
+    async completeAnnotateReply(
+        domainId: string, rdoc: RecordDoc, thread: TutorThreadDoc, ctx: aiTutor.TutorTurnContext, input: aiTutor.AnnotationDialogueInput,
+        line: number, endLine: number, question: string, text: string, stream: aiTutor.AiStreamHandle | null,
+    ) {
+        let sentCode: string | null = null;
+        const result = await aiTutor.runAnnotationDialogue(ctx, input, {
+            onDelta: stream?.delta, signal: stream?.signal, onCodeSent: (code) => { sentCode = code; },
         });
         /*
          * 🎓 CODE-OWNERSHIP grading: runAnnotationDialogue returns a level
@@ -5959,7 +6081,8 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         // the sequence. (Failed-verdict cards keep sending the student back
         // to the editor, exactly as before.)
         const gate = await this.refreshGate(domainId);
-        this.response.body = {
+        this.afterTurn(thread, sentCode);
+        return {
             reply: result.reply,
             resolved: result.resolved,
             // Per-answer feedback: the just-graded level. levelKind picks the
@@ -5985,13 +6108,20 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         }
         const rdoc = await record.get(domainId, thread.rid);
         const ctx = await this.tutorCtx(rdoc, thread.attemptCount || 1, await this.everAccepted(domainId));
+        ctx.thread = thread;
         const history = [...thread.messages, { role: 'user' as const, kind: 'chat' as const, content: text, at: new Date() }];
-        const reply = await aiTutor.runTutorTurn(ctx, history, '');
-        await SelfLearningModel.pushMessages(thread._id, [
-            { role: 'user', kind: 'chat', content: text },
-            { role: 'assistant', kind: 'chat', content: reply },
-        ]);
-        this.response.body = { reply };
+        await this.respondJob('tutor', async (stream) => {
+            let sentCode: string | null = null;
+            const reply = await aiTutor.runTutorTurn(ctx, history, '', {
+                onDelta: stream?.delta, signal: stream?.signal, onCodeSent: (code) => { sentCode = code; },
+            });
+            await SelfLearningModel.pushMessages(thread._id, [
+                { role: 'user', kind: 'chat', content: text },
+                { role: 'assistant', kind: 'chat', content: reply },
+            ]);
+            this.afterTurn(thread, sentCode);
+            return { reply };
+        });
     }
 
     @param('rid', Types.ObjectId)
@@ -6234,13 +6364,21 @@ class AiSuggestionsHandler extends Handler {
         // Saved-report lookup: lets the modal show the last generated report
         // instantly (and token-free) instead of regenerating every time.
         const doc = await getSuggestionReport(domainId, pid, this.user._id);
-        this.response.body = doc
-            ? { report: doc.report, updateAt: doc.updateAt, attempts: doc.attempts }
-            : { report: null };
+        // ai-speedup WP2: a generation still running (this process) can be
+        // re-attached to by its stream id; a stale job block is reported dead.
+        let job = doc?.job || null;
+        if (job && (job.status === 'queued' || job.status === 'running')) {
+            const live = job.streamId ? aiTutor.aiStreams.get(job.streamId) : null;
+            if (!live || live.state === 'done' || live.state === 'error') job = { ...job, status: live?.state === 'done' ? 'done' : 'failed', streamId: undefined };
+        }
+        this.response.body = doc && doc.report
+            ? { report: doc.report, updateAt: doc.updateAt, attempts: doc.attempts, job }
+            : { report: null, job };
     }
 
     @param('pid', Types.PositiveInt)
-    async post({ domainId }, pid: number) {
+    @param('stream', Types.Boolean, true)
+    async post({ domainId }, pid: number, stream = false) {
         if (!aiTutor.tutorConfigured()) throw new ForbiddenError('The AI tutor is not configured. Please ask the administrator to set an API key.');
         const lock = await liveTestLockingAi(this, domainId, pid);
         if (lock) throw new ForbiddenError('AI Suggestions are available after the test ends.');
@@ -6264,10 +6402,38 @@ class AiSuggestionsHandler extends Handler {
         const pdoc = await problem.get(domainId, pid);
         if (!pdoc) throw new NotFoundError(pid);
         const uiLang = this.user.viewLang || this.session.viewLang || system.get('server.language') || 'en';
-        const report = await aiTutor.runSuggestionsReport({ pdoc, attempts, uiLang });
-        const updateAt = await setSuggestionReport(domainId, pid, this.user._id, report, attempts.length);
-        this.response.body = { report, updateAt };
-        logger.info('[pta-ui] AI Suggestions generated and saved for uid=%d pid=%d over %d attempt(s)', this.user._id, pid, attempts.length);
+        const uid = this.user._id;
+        /*
+         * ai-speedup WP2: the report is a JOB. Its single-flight key means a
+         * double click (or two tabs) shares one generation; the Markdown
+         * streams into the modal while it is written and is stored through
+         * setSuggestionReport exactly as before; GET is unchanged (cached
+         * report). Without `stream=1` (an older page) the request awaits
+         * the same job inline and answers in the old shape.
+         */
+        const meta: aiTutor.AiCallMeta = {
+            feature: 'suggest', lane: 'interactive', priority: 1, uid, key: `suggest:${domainId}:${uid}:${pid}`,
+        };
+        const work = async (h: aiTutor.AiStreamHandle | null) => {
+            await setSuggestionJob(domainId, pid, uid, { status: 'running', stage: 'writing', startedAt: new Date(), ...(h ? { streamId: h.id } : {}) }).catch(() => { /* cosmetic */ });
+            try {
+                const report = await aiTutor.runSuggestionsReport({ pdoc, attempts, uiLang }, { onDelta: h?.delta, signal: h?.signal, uid });
+                const updateAt = await setSuggestionReport(domainId, pid, uid, report, attempts.length);
+                await setSuggestionJob(domainId, pid, uid, { status: 'done', stage: 'done', finishedAt: new Date(), streamId: undefined }).catch(() => { /* cosmetic */ });
+                logger.info('[pta-ui] AI Suggestions generated and saved for uid=%d pid=%d over %d attempt(s)', uid, pid, attempts.length);
+                return { report, updateAt };
+            } catch (e) {
+                await setSuggestionJob(domainId, pid, uid, { status: 'failed', stage: 'failed', finishedAt: new Date(), streamId: undefined, error: String(e?.message || e).slice(0, 300) }).catch(() => { /* cosmetic */ });
+                throw e;
+            }
+        };
+        if (stream && aiTutor.streamingEnabled()) {
+            const { id } = aiTutor.startStreamJob({ uid, meta, run: (h) => work(h) });
+            await setSuggestionJob(domainId, pid, uid, { status: 'queued', stage: 'queued', startedAt: new Date(), streamId: id }).catch(() => { /* cosmetic */ });
+            this.response.body = { streamId: id };
+            return;
+        }
+        this.response.body = await aiTutor.scheduled(meta, () => work(null));
     }
 }
 
@@ -6458,7 +6624,6 @@ function extractConceptBlock(md: string, validLabels?: Set<string>): { report: s
 const SESSION_REPORT_MAX_STUDENTS = 600;
 const SESSION_BATCH_CHARS = () => Math.max(12000, +system.get('ai_tutor.report_batch_chars') || 48000);
 const SESSION_REDUCE_CHARS = () => Math.max(30000, +system.get('ai_tutor.report_reduce_chars') || 110000);
-const SESSION_MAP_CONCURRENCY = () => Math.min(8, Math.max(1, +system.get('ai_tutor.report_concurrency') || 3));
 /** Wall-clock guard: above this many map calls the whole class is rendered one level tighter (every student still read). */
 const SESSION_MAX_CALLS = () => Math.max(8, +system.get('ai_tutor.report_max_calls') || 40);
 const SESSION_CODE_AC_CAP = 1200;
@@ -6938,7 +7103,13 @@ function sessionReportContext(corpus: any, findings: any): string {
 async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: number): Promise<void> {
     const tid = String(sdoc.docId);
     const startedAt = new Date();
-    const progress = (patch: any) => setClassReportJob(domainId, tid, { status: 'running', stage: 'collect', done: 0, total: 0, startedAt, by, ...patch });
+    let lastPatch: any = { stage: 'collect', done: 0, total: 0 };
+    const progress = (patch: any) => {
+        lastPatch = { ...lastPatch, ...patch };
+        return setClassReportJob(domainId, tid, { status: 'running', startedAt, by, ...lastPatch });
+    };
+    /** ai-speedup WP5: no scheduler capacity for the current call → the job shows the wait (null once granted). */
+    const onWait = (w: { ahead: number, eta: number } | null) => { progress({ waiting: w }).catch(() => { /* cosmetic */ }); };
     try {
         await progress({ stage: 'collect' });
         const corpus = await buildSessionCorpus(domainId, sdoc, false);
@@ -7017,7 +7188,11 @@ async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: 
             const ctx = sessionBatchContext(corpus, items);
             for (let ask = 0; ask < 2; ask++) {
                 try {
-                    const raw = await aiTutor.callWithRetry(() => aiTutor.runSessionMapBatch(ctx), { label: `session map (${items.length} block(s))` });
+                    // ai-speedup WP5: through the scheduler under the `report_map` cap.
+                    const raw = await aiTutor.aiScheduler.runWhenCapacity({
+                        feature: 'report_map', lane: 'background', priority: 2, label: `session map (${items.length} block(s))`,
+                    }, () => aiTutor.runSessionMapBatch(ctx), { onWait: (e) => onWait({ ahead: e.position, eta: e.eta }) });
+                    onWait(null);
                     absorb(parseSessionMap(raw, tokens, labels, pointNames), items);
                     return;
                 } catch (e) {
@@ -7037,17 +7212,13 @@ async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: 
                 await analyzeItems([tighter], depth + 1);
             }
         };
-        let cursor = 0;
-        const worker = async () => {
-            for (;;) {
-                const idx = cursor++;
-                if (idx >= batches.length) return;
-                await analyzeItems(batches[idx]);
-                done += 1;
-                await progress({ stage: 'map', done, total: batches.length, students: corpus.uids.length, analyzed: analyzedNow.size + cachedNow.size, cached: cachedNow.size });
-            }
-        };
-        await Promise.all(Array.from({ length: SESSION_MAP_CONCURRENCY() }, () => worker()));
+        // ai-speedup WP5: every batch is submitted at once; the scheduler's
+        // `report_map` cap bounds the calls in flight, not a worker pool.
+        await Promise.all(batches.map(async (batch) => {
+            await analyzeItems(batch);
+            done += 1;
+            await progress({ stage: 'map', done, total: batches.length, students: corpus.uids.length, analyzed: analyzedNow.size + cachedNow.size, cached: cachedNow.size });
+        }));
 
         // 🗂 Remember this run's per-student findings for the next one.
         for (const st of fresh) {
@@ -7065,7 +7236,10 @@ async function runSessionReportJob(domainId: string, sdoc: SelfLearningDoc, by: 
         const failed = unanalyzed.length;
         await progress({ stage: 'reduce', done: batches.length, total: batches.length, students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed });
         const sessionCtx = sessionReportContext(corpus, findings);
-        const raw = await aiTutor.callWithRetry(() => aiTutor.runSessionReport(sessionCtx), { label: 'session reduce' });
+        const raw = await aiTutor.aiScheduler.runWhenCapacity({
+            feature: 'report_reduce', lane: 'background', priority: 1, label: 'session reduce',
+        }, () => aiTutor.runSessionReport(sessionCtx), { onWait: (e) => onWait({ ahead: e.position, eta: e.eta }) });
+        onWait(null);
         await progress({ stage: 'finalize', done: batches.length, total: batches.length, students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: failed });
         const sidMap = [...corpus.sOf.entries()].map(([uid, sTok]) => ({ s: sTok, uid, uname: corpus.udict[uid]?.uname || `user#${uid}` }));
         // Remedial prompts first (so their block is stripped), then concepts.
@@ -7998,6 +8172,9 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
 }
 
 export async function apply(ctx: Context) {
+    // ai-speedup: the stream transport lives in handler/ai_stream.ts; register it
+    // from here as well when that new file was not picked up (see its header).
+    registerAiStreamRoutes(ctx);
     ctx.Route('self_learning', '/self-learning', SelfLearningMainHandler);
     ctx.Route('self_learning_create', '/self-learning/create', SelfLearningEditHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('self_learning_detail', '/self-learning/:ssid', SelfLearningDetailHandler);

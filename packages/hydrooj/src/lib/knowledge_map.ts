@@ -332,7 +332,11 @@ async function attributeFailures(
                 '=== STUDENT\'S LATEST FAILING SUBMISSION ===',
                 p.code,
             ].join('\n');
-            const reply = await aiTutor.callProvider(ATTRIBUTION_PROMPT, [{ role: 'user', content: user }], { temperature: 0 });
+            // ai-speedup WP5: bulk, lowest priority, under the `attrib` cap —
+            // it only ever uses idle capacity, and waits when there is none.
+            const reply = await aiTutor.aiScheduler.runWhenCapacity({
+                feature: 'attrib', lane: 'background', priority: 3, label: 'knowledge-map attribution',
+            }, () => aiTutor.callProvider(ATTRIBUTION_PROMPT, [{ role: 'user', content: user }], { temperature: 0 }));
             const names = parseNumberArray(reply, p.points.length).map((n) => p.points[n - 1]).filter((x) => x);
             await collAttribution.updateOne(
                 { _id: p.key } as any,

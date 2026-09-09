@@ -9,7 +9,7 @@ ai_tutor.max_messages: 每個對話最大訊息數
 ai_tutor.model: 模型名稱
 ai_tutor.provider: AI 供應商
 ai_tutor.temperature: 取樣溫度
-ai_tutor.timeout: 請求逾時（秒）
+ai_tutor.timeout: "請求逾時（已棄用——不再使用）"
 '"{data}" copied to clipboard!': '“{data}”已複製到剪貼簿！'
 '{0} {1} delete your discussion reply {2} in "{3}"({4}).': '{0} {1} 從討論 {3}({4}) 刪除了你的回覆 {2}。'
 '{0} comments': '{0} 條評論'
@@ -1055,3 +1055,21 @@ similarity.max_pairs: "每組最多保留配對數"
 similarity.timeout: "Dolos 逾時（秒）"
 similarity.extra_args: "Dolos 額外參數"
 grade_center: "成績中心"
+# ai-speedup: 排程器、串流輸出、提示詞快取（lib/ai_tutor.ts）
+ai_tutor.sched_enabled: "排程器 — 所有 AI 呼叫經由排程器（關閉 = 直連，用於回滾）"
+ai_tutor.sched_slots: "排程器 — 同時進行的呼叫總數"
+ai_tutor.sched_interactive_reserve: "排程器 — 為互動式呼叫保留的名額"
+ai_tutor.sched_background_max: "排程器 — 背景呼叫同時進行上限"
+ai_tutor.sched_user_inflight: "排程器 — 每位學生同時進行的呼叫數"
+ai_tutor.sched_queue_max: "排程器 — 每條通道的最大排隊數"
+ai_tutor.sched_max_wait: "排程器 — 預計等待超過此秒數即拒絕"
+ai_tutor.sched_age_ms: "排程器 — 排隊超過此毫秒數後提升優先級"
+ai_tutor.sched_feature_caps: "排程器 — 各功能的並發上限"
+ai_tutor.stream_enabled: "串流輸出 — 邊生成邊顯示回覆"
+ai_tutor.cache_enabled: "提示詞快取 — 啟用提供商前綴快取"
+ai_tutor.cache_ttl: "提示詞快取 — Anthropic 快取有效期"
+ai_tutor.summary_model: "對話摘要 — 模型"
+ai_tutor.summary_every: "對話摘要 — 每 N 輪學生發言更新一次"
+"The AI is busy right now ({0} ahead, about {1} s to wait). Retrying automatically in {2} s.": "AI 目前繁忙（前方 {0} 人，預計等待約 {1} 秒），將在 {2} 秒後自動重試。"
+ai_tutor.sched_adaptive: "排程器 — 依提供商自適應並發（跟得上就增加，被限流就減半）"
+ai_tutor.sched_slots_max: "排程器 — 自適應並發上限"

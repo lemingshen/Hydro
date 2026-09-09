@@ -21,7 +21,9 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '../error';
 import { Logger } from '../logger';
 import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as aiTutor from '../lib/ai_tutor';
-import { assistantEnabled, postureOf, runTurn } from '../lib/assistant';
+import {
+    assistantEnabled, assistantMeta, checkTurn, postureOf, runTurn,
+} from '../lib/assistant';
 import { cancelScheduledMastery, computeMastery, scheduleMastery } from '../lib/knowledge_map';
 import { seesEveryProblem } from './problem';
 import domain from '../model/domain';
@@ -272,7 +274,9 @@ class KnowledgePointsHandler extends Handler {
             '"points": exact names of leaf points placed DIRECTLY under this topic / sub-topic. "unplaced": leaf points that genuinely fit nowhere.',
             tree,
         ].join('\n\n');
-        const raw = await aiTutor.callProvider('You are a careful curriculum designer. You reply with JSON only.', [{ role: 'user', content: prompt }], { temperature: 0.2 });
+        const raw = await aiTutor.callProvider('You are a careful curriculum designer. You reply with JSON only.', [{ role: 'user', content: prompt }], {
+            temperature: 0.2, meta: { feature: 'author', lane: 'background', priority: 1, uid: this.user._id },
+        });
         let j: any;
         try {
             j = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
@@ -783,11 +787,33 @@ class AssistantHandler extends Handler {
     @param('name', Types.String, true)
     @param('pid', Types.Int, true)
     @param('tid', Types.String, true)
-    async postMessage({ domainId }, text: string, name = '', pid = 0, tid = '') {
+    @param('stream', Types.Boolean, true)
+    async postMessage({ domainId }, text: string, name = '', pid = 0, tid = '', stream = false) {
         if (!text.trim()) throw new BadRequestError('Say something first.');
         await this.limitRate('assistant', 60, 12, '{{user}}');
-        const res = await runTurn(domainId, this.user._id, this.pageOf(name, pid, tid), text.trim());
-        this.response.body = res;
+        const page = this.pageOf(name, pid, tid);
+        const uid = this.user._id;
+        // Posture / quota problems are plain errors of this request, never a stream that fails.
+        await checkTurn(domainId, uid, page);
+        /*
+         * ai-speedup WP2: with `stream=1` the turn runs as a stream job —
+         * tool phases arrive as status lines, the final answer streams, and
+         * the request returns at once with the stream id. Older pages get
+         * the old inline shape. Both hold ONE interactive slot for the whole
+         * tool loop; an admission refusal is a 503 with a retry-after.
+         */
+        if (stream && aiTutor.streamingEnabled()) {
+            const { id } = aiTutor.startStreamJob({
+                uid,
+                meta: assistantMeta(uid),
+                run: (h) => runTurn(domainId, uid, page, text.trim(), {
+                    onDelta: h.delta, onStatus: h.stage, onReset: h.reset, signal: h.signal,
+                }),
+            });
+            this.response.body = { streamId: id };
+            return;
+        }
+        this.response.body = await aiTutor.scheduled(assistantMeta(uid), () => runTurn(domainId, uid, page, text.trim()));
     }
 
     @param('style', Types.String, true)

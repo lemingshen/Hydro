@@ -73,7 +73,6 @@ const QUESTION_CAP = 240;
 const OPTION_CAP = 90;
 const BATCH_CHARS = () => Math.max(12000, +system.get('ai_tutor.report_batch_chars') || 48000);
 const REDUCE_CHARS = () => Math.max(30000, +system.get('ai_tutor.report_reduce_chars') || 110000);
-const MAP_CONCURRENCY = () => Math.min(8, Math.max(1, +system.get('ai_tutor.report_concurrency') || 3));
 const MAX_CALLS = () => Math.max(8, +system.get('ai_tutor.report_max_calls') || 40);
 const NONFINAL_STATUS = [0, 20, 21, 22]; // waiting / judging / compiling / fetched
 /**
@@ -920,9 +919,15 @@ export function extractConceptBlock(md: string, validLabels?: Set<string>): { re
 export async function runActivityReportJob(domainId: string, tdoc: any, kind: 'homework' | 'contest', by: number): Promise<void> {
     const tid = String(tdoc.docId);
     const startedAt = new Date();
-    const progress = (patch: any) => setClassReportJob(domainId, tid, {
-        status: 'running', stage: 'collect', done: 0, total: 0, startedAt, by, ...patch,
-    });
+    let lastPatch: any = { stage: 'collect', done: 0, total: 0 };
+    const progress = (patch: any) => {
+        lastPatch = { ...lastPatch, ...patch };
+        return setClassReportJob(domainId, tid, {
+            status: 'running', startedAt, by, ...lastPatch,
+        });
+    };
+    /** ai-speedup WP5: no scheduler capacity for the current call → the job shows the wait (null once granted). */
+    const onWait = (w: { ahead: number, eta: number } | null) => { progress({ waiting: w }).catch(() => { /* cosmetic */ }); };
     try {
         await progress({ stage: 'collect' });
         const corpus = await buildActivityCorpus(domainId, tdoc, kind, false);
@@ -1002,7 +1007,12 @@ export async function runActivityReportJob(domainId: string, tdoc: any, kind: 'h
             const ctx = batchContext(corpus, items);
             for (let ask = 0; ask < 2; ask++) {
                 try {
-                    const raw = await aiTutor.callWithRetry(() => aiTutor.runActivityMapBatch(ctx), { label: `activity map (${items.length} block(s))` });
+                    // ai-speedup WP5: through the scheduler under the `report_map`
+                    // cap; no capacity → the job reports "waiting" and resubmits.
+                    const raw = await aiTutor.aiScheduler.runWhenCapacity({
+                        feature: 'report_map', lane: 'background', priority: 2, label: `activity map (${items.length} block(s))`,
+                    }, () => aiTutor.runActivityMapBatch(ctx), { onWait: (e) => onWait({ ahead: e.position, eta: e.eta }) });
+                    onWait(null);
                     absorb(parseMap(raw, tokens, labels, pointNames), items);
                     return;
                 } catch (e) {
@@ -1021,19 +1031,16 @@ export async function runActivityReportJob(domainId: string, tdoc: any, kind: 'h
                 await analyzeItems([{ ...it, level: it.level + 1, text: renderActivityStudent(it.st, it.level + 1, it.tasks, it.part) }], depth + 1);
             }
         };
-        let cursor = 0;
-        const worker = async () => {
-            for (;;) {
-                const idx = cursor++;
-                if (idx >= batches.length) return;
-                await analyzeItems(batches[idx]);
-                done += 1;
-                await progress({
-                    stage: 'map', done, total: batches.length, students: corpus.uids.length, analyzed: analyzedNow.size + cachedNow.size, cached: cachedNow.size,
-                });
-            }
-        };
-        await Promise.all(Array.from({ length: MAP_CONCURRENCY() }, () => worker()));
+        // ai-speedup WP5: every batch goes to the scheduler at once; the
+        // `report_map` cap (and the background lane total) bound the calls
+        // in flight, not a worker pool of our own.
+        await Promise.all(batches.map(async (batch) => {
+            await analyzeItems(batch);
+            done += 1;
+            await progress({
+                stage: 'map', done, total: batches.length, students: corpus.uids.length, analyzed: analyzedNow.size + cachedNow.size, cached: cachedNow.size,
+            });
+        }));
         for (const st of fresh) {
             const f = perStudent.get(st.s);
             if (f && analyzedNow.has(st.s)) await setClassReportMapCache(domainId, tid, st.uid, hashOf.get(st.uid)!, { ...f, s: undefined }).catch(() => {});
@@ -1049,7 +1056,10 @@ export async function runActivityReportJob(domainId: string, tdoc: any, kind: 'h
         const covPatch = { students: corpus.uids.length, analyzed: findings.coverage.analyzed, cached: cachedNow.size, unanalyzed: unanalyzed.length };
         await progress({ stage: 'reduce', done: batches.length, total: batches.length, ...covPatch });
         const reduceCtx = activityReportContext(corpus, findings);
-        const raw = await aiTutor.callWithRetry(() => aiTutor.runActivityReport(reduceCtx), { label: 'activity reduce' });
+        const raw = await aiTutor.aiScheduler.runWhenCapacity({
+            feature: 'report_reduce', lane: 'background', priority: 1, label: 'activity reduce',
+        }, () => aiTutor.runActivityReport(reduceCtx), { onWait: (e) => onWait({ ahead: e.position, eta: e.eta }) });
+        onWait(null);
         await progress({ stage: 'finalize', done: batches.length, total: batches.length, ...covPatch });
         const sidMap = [...corpus.sOf.entries()].map(([uid, sTok]) => ({ s: sTok, uid, uname: corpus.udict[uid]?.uname || `user#${uid}` }));
         const { report: withoutRemedial, remedial: remedialAnon } = extractRemedialBlock(raw, labels, new Set(sidMap.map((e) => e.s)));

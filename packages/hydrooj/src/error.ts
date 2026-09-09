@@ -6,6 +6,8 @@ import {
     BadRequestError, ForbiddenError, NotFoundError,
 } from '@hydrooj/framework';
 
+// ai-speedup: admission refusal of the AI scheduler (HTTP 503 with a retry-after).
+export { AiAbortedError, AiBusyError } from './lib/ai_scheduler';
 export * from '@hydrooj/framework/error';
 export const RemoteOnlineJudgeError = Err('RemoteOnlineJudgeError', UserFacingError, 'RemoteOnlineJudgeError', 500);
 export const SendMailError = Err('SendMailError', UserFacingError, 'Failed to send mail to {0}. (1)', 500);

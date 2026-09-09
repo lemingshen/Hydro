@@ -46,6 +46,9 @@ import system from '../model/system';
 import db from '../service/db';
 import { Handler, param, Types } from '../service/server';
 
+/** ai-speedup WP5: the Studio's calls are teacher work — background lane, ahead of bulk jobs, under the `author` cap. */
+const AUTHOR_META: aiTutor.AiCallMeta = { feature: 'author', lane: 'background', priority: 1 };
+
 const logger = new Logger('handler/ai_author');
 
 /**
@@ -251,6 +254,8 @@ export interface AuthorDraftDoc {
         evidence?: string;
         startedAt?: Date;
         finishedAt?: Date;
+        /** ai-speedup WP2: while the statement is being drafted, the live stream the page attaches to (this process only). */
+        streamId?: string;
     };
     measured?: {
         cases: { name: string, timeMs: number, memoryKiB: number, status: number }[];
@@ -459,9 +464,18 @@ function parseTitleBody(raw: string): { title: string, body: string } | null {
 }
 
 /** One title+body artifact, with a JSON fallback for models that ignore the markers. */
-async function aiTitleBody(userPrompt: string, model?: string): Promise<{ title: string, body: string }> {
+/** ai-speedup WP2: a drafting call may stream its statement body to the teacher's page as it is written. */
+interface DraftStreamOptions { onDelta?: (text: string) => void }
+
+async function aiTitleBody(userPrompt: string, model?: string, opts: DraftStreamOptions = {}): Promise<{ title: string, body: string }> {
     const prompt = `${userPrompt}\n\n${FORMAT_TITLE_BODY}`;
-    const first = await aiTutor.callProvider(SYS_TEXT, [{ role: 'user', content: prompt }], { temperature: 0.4, model });
+    // The body between the sentinels streams word by word (the title line
+    // before it is a few words and arrives with the final draft).
+    const bodyStream = opts.onDelta ? new aiTutor.TextSpanStreamer(new RegExp(`${BODY_OPEN}[ \\t]*\\r?\\n?`), new RegExp(BODY_CLOSE), opts.onDelta) : null;
+    const first = await aiTutor.callProvider(SYS_TEXT, [{ role: 'user', content: prompt }], {
+        temperature: 0.4, model, meta: AUTHOR_META, ...(bodyStream ? { onDelta: (t: string) => bodyStream.feed(t) } : {}),
+    });
+    bodyStream?.finish();
     let lastRaw = first;
     let r = parseTitleBody(first);
     if (!r) {
@@ -475,7 +489,7 @@ async function aiTitleBody(userPrompt: string, model?: string): Promise<{ title:
             { role: 'user', content: prompt },
             { role: 'assistant', content: first.slice(0, 4000) },
             { role: 'user', content: `Your reply did not use the required format. Send it again using EXACTLY the "TITLE:" line, then ${BODY_OPEN} on its own line, the body, then ${BODY_CLOSE} on its own line. Nothing else.` },
-        ], { temperature: 0.2, model });
+        ], { temperature: 0.2, model, meta: AUTHOR_META });
         lastRaw = retry;
         r = parseTitleBody(retry);
     }
@@ -499,8 +513,11 @@ function aiJSON2(systemPrompt: string, model: string, parts: string[] | string):
     return aiJSON(systemPrompt, prompt, model || undefined);
 }
 
-async function aiJSON(systemPrompt: string, userPrompt: string, model?: string): Promise<any> {
-    const first = await aiTutor.callProvider(systemPrompt, [{ role: 'user', content: userPrompt }], { temperature: 0.4, model });
+async function aiJSON(systemPrompt: string, userPrompt: string, model?: string, opts: DraftStreamOptions & { field?: string } = {}): Promise<any> {
+    const fieldStream = opts.onDelta ? new aiTutor.JsonFieldStreamer(opts.field || 'body', opts.onDelta) : null;
+    const first = await aiTutor.callProvider(systemPrompt, [{ role: 'user', content: userPrompt }], {
+        temperature: 0.4, model, meta: AUTHOR_META, ...(fieldStream ? { onDelta: (t: string) => fieldStream.feed(t) } : {}),
+    });
     try {
         return extractJson(first);
     } catch (e) {
@@ -512,7 +529,7 @@ async function aiJSON(systemPrompt: string, userPrompt: string, model?: string):
                 { role: 'assistant', content: first.slice(0, 6000) },
                 { role: 'user', content: 'Your previous reply was not valid JSON. Reply again with ONLY the JSON value, no prose, no markdown fences.' },
             ],
-            { temperature: 0.2, model },
+            { temperature: 0.2, model, meta: AUTHOR_META },
         );
         try {
             return extractJson(retry);
@@ -1184,13 +1201,13 @@ function objAnswersDigest(body: string, map: Record<string, [any, number]>): str
 }
 
 /** Generation for objective drafts. */
-async function generateObjectiveArtifact(d: AuthorDraftDoc, target: string): Promise<any> {
+async function generateObjectiveArtifact(d: AuthorDraftDoc, target: string, stream: DraftStreamOptions = {}): Promise<any> {
     const brief = briefBlock(d);
     if (target === 'questions') {
         // Review phase: questions only. Any answer key from an earlier round
         // is dropped by the caller, since it can no longer be trusted to
         // match the questions that just replaced it.
-        const j = await aiTitleBody(`${P_OBJ_QUESTIONS}\n\n${brief}`);
+        const j = await aiTitleBody(`${P_OBJ_QUESTIONS}\n\n${brief}`, undefined, stream);
         let body = String(j.body).slice(0, 30000);
         let v = validateObjectiveBody(body);
         if (v.issues.length) {
@@ -1265,10 +1282,10 @@ async function generateObjectiveArtifact(d: AuthorDraftDoc, target: string): Pro
 }
 
 /** Generation for subjective drafts: one statement, plus the teacher briefing. */
-async function generateSubjectiveArtifact(d: AuthorDraftDoc, target: string): Promise<any> {
+async function generateSubjectiveArtifact(d: AuthorDraftDoc, target: string, stream: DraftStreamOptions = {}): Promise<any> {
     const brief = briefBlock(d);
     if (target === 'statement' || target === 'questions') {
-        const j = await aiTitleBody(`${P_SUBJECTIVE}\n\n${brief}`);
+        const j = await aiTitleBody(`${P_SUBJECTIVE}\n\n${brief}`, undefined, stream);
         return { statement: { title: j.title, body: j.body.slice(0, 30000) } };
     }
     if (target === 'report') {
@@ -1317,12 +1334,19 @@ function chatFormatRules(kind: AuthorKind): string {
  * only when it actually changed, so an unchanged answer never rewrites the
  * artifact (and never clobbers an edit the teacher made in the meantime).
  */
-async function runStatementChat(d: AuthorDraftDoc, message: string): Promise<{ reply: string, statement?: { title: string, body: string } }> {
+async function runStatementChat(
+    d: AuthorDraftDoc, message: string, opts: { onDelta?: (text: string) => void, signal?: AbortSignal } = {},
+): Promise<{ reply: string, statement?: { title: string, body: string } }> {
     const s = d.artifacts.statement;
     if (!s) throw new BadRequestError('Draft the statement first, then chat about it.');
     const kind: AuthorKind = (d.brief.kind || 'programming') as AuthorKind;
     const history = (d.chat || []).slice(-CHAT_SEND)
         .map((t) => `${t.role === 'user' ? 'TEACHER' : 'YOU'}: ${t.content.slice(0, 1500)}`).join('\n');
+    // ai-speedup WP2: the REPLY line streams word by word into the chat
+    // while the model may still be writing a revised statement after it.
+    const replyStream = opts.onDelta
+        ? new aiTutor.TextSpanStreamer(/^[ \t]*REPLY:[ \t]*/im, new RegExp(`\\r?\\n|TITLE:|${BODY_OPEN}`), opts.onDelta)
+        : null;
     const raw = await aiTutor.callProvider(SYS_TEXT, [{
         content: [
             P_CHAT,
@@ -1334,13 +1358,24 @@ async function runStatementChat(d: AuthorDraftDoc, message: string): Promise<{ r
             `TEACHER: ${message.slice(0, 4000)}`,
         ].filter((x) => x).join('\n\n'),
         role: 'user' as const,
-    }], { temperature: 0.4 });
+    }], {
+        temperature: 0.4,
+        meta: AUTHOR_META,
+        signal: opts.signal,
+        // A statement rewrite is a long reply: streamed, the request timeout
+        // is only an idle guard; unstreamed, give the whole reply three minutes.
+        ...(replyStream ? { onDelta: (t: string) => replyStream.feed(t) } : { timeoutMs: 180000 }),
+    });
+    replyStream?.finish();
     // The body block is present only when the AI actually rewrote something,
     // so its presence IS the "changed" signal — no separate flag to distrust.
     const rb = parseTitleBody(raw);
     const head = rb ? raw.slice(0, raw.indexOf(BODY_OPEN)) : raw;
     const rm = /^[ \t]*REPLY:[ \t]*(.+)$/im.exec(head);
-    const reply = (rm ? rm[1] : head.replace(/^[ \t]*TITLE:.*$/im, '').trim()).trim().slice(0, 4000);
+    let reply = (rm ? rm[1] : head.replace(/^[ \t]*TITLE:.*$/im, '').trim()).trim().slice(0, 4000);
+    // A model that answers with the revised statement alone (no REPLY line)
+    // has still done the work: report it instead of failing the turn.
+    if (!reply && rb && rb.body.trim()) reply = 'I revised the statement as asked — check the text above.';
     if (!reply) throw new BadRequestError('The AI reply was empty; try rephrasing.');
     const title = (rb && rb.title ? rb.title : s.title).slice(0, 120);
     const body = rb ? rb.body.slice(0, 30000) : '';
@@ -1592,10 +1627,10 @@ function harnessContext(d: AuthorDraftDoc): string {
     return `=== JUDGE PROGRAM (${d.artifacts.harness.language}) — the student's function is inserted at the marker ===\n${d.artifacts.harness.code.slice(0, 12000)}\n=== END JUDGE PROGRAM ===`;
 }
 
-async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any> {
+async function generateArtifact(d: AuthorDraftDoc, target: string, stream: DraftStreamOptions = {}): Promise<any> {
     const kind = kindOf(d);
-    if (kind === 'objective') return generateObjectiveArtifact(d, target);
-    if (kind === 'subjective') return generateSubjectiveArtifact(d, target);
+    if (kind === 'objective') return generateObjectiveArtifact(d, target, stream);
+    if (kind === 'subjective') return generateSubjectiveArtifact(d, target, stream);
     const brief = briefBlock(d);
     const isFn = kind === 'function';
     if (target === 'questions') target = 'statement'; // review phase alias
@@ -1610,11 +1645,11 @@ async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any>
          * sections, replacing only the embedded program.
          */
         const wantLang = d.brief.language;
-        const ask = async (extra = '') => aiJSON(SYS_COMMON, [
+        const ask = async (extra = '', live?: DraftStreamOptions) => aiJSON(SYS_COMMON, [
             `${F_DESIGN}\nRequested judge language id: ${wantLang} (${judgeLangs()[wantLang] || wantLang}) — ${langPromptHint(wantLang)}`,
             extra, brief, target === 'harness' ? statementContext(d) : '',
-        ].filter((x) => x).join('\n\n'));
-        let j = await ask();
+        ].filter((x) => x).join('\n\n'), undefined, live);
+        let j = await ask('', target === 'statement' ? stream : undefined);
         if (!j?.body || !j?.harness) throw new BadRequestError('The AI did not return a usable function exercise.');
         let issues = fStatementIssues(j.body);
         if (issues.length) {
@@ -1636,7 +1671,7 @@ async function generateArtifact(d: AuthorDraftDoc, target: string): Promise<any>
         return { statement: { title: String(j.title || '').slice(0, 120), body }, harness: { language, code: harness }, stub: { language, code: stub } };
     }
     if (target === 'statement') {
-        let j = await aiTitleBody(`${P_SPEC}\n\n${brief}`);
+        let j = await aiTitleBody(`${P_SPEC}\n\n${brief}`, undefined, stream);
         // The five-section contract is what teachers review and students
         // read; one cheap repair round fixes most first-pass slips (a
         // missing Samples section, an unnamed sample fence).
@@ -2462,15 +2497,28 @@ async function runGenerateStatement(domainId: string, id: ObjectId) {
         const d = await getDraft(domainId, id);
         const kind = kindOf(d);
         if (cancelled.has(key)) throw Object.assign(new StoppedError('Stopped by the teacher'), { stage: 'generate' });
+        // ai-speedup WP2: the draft streams to the teacher's page while it is
+        // written (the page attaches through pipeline.streamId).
+        const live = aiTutor.streamingEnabled() ? aiTutor.aiStreams.create(d.owner, { feature: 'author', lane: 'background', abortWhenAbandoned: false }) : null;
+        const liveHandle = live ? aiTutor.aiStreams.handle(live.id) : null;
         await patchDraft(id, {
             pipeline: {
                 status: 'running',
                 stage: 'generate',
                 message: kind === 'objective' ? 'Drafting the questions...' : 'Drafting the statement...',
                 startedAt: new Date(),
+                ...(live ? { streamId: live.id } : {}),
             },
         });
-        const patch = await generateArtifact(d, 'questions');
+        if (live) aiTutor.aiStreams.started(live.id);
+        let patch: any;
+        try {
+            patch = await generateArtifact(d, 'questions', liveHandle ? { onDelta: liveHandle.delta } : {});
+            if (live) aiTutor.aiStreams.finish(live.id, { ok: true });
+        } catch (e) {
+            if (live) aiTutor.aiStreams.fail(live.id, e);
+            throw e;
+        }
         // A fresh set of questions invalidates any key written for the old
         // ones: drop it rather than leave a mismatched pair on the draft.
         const flat: any = { approved: false, chat: [] };
@@ -3527,37 +3575,67 @@ class AiStudioDetailHandler extends AiStudioBaseHandler {
      * other control disabled until this resolves.
      */
     @param('text', Types.String)
-    async postChat({ domainId }, text: string) {
+    @param('stream', Types.Boolean, true)
+    async postChat({ domainId }, text: string, stream = false) {
         await this.limitRate('ai_author', 60, 20);
         if (this.ddoc.pipeline.status === 'running' || running.has(this.ddoc._id.toHexString())) {
             throw new BadRequestError('A generation or verification run is in progress; wait for it to finish.');
         }
         const message = String(text || '').trim().slice(0, 4000);
         if (!message) throw new BadRequestError('Type a message first.');
-        const { reply, statement } = await runStatementChat(this.ddoc, message);
-        const now = new Date();
-        const turns: AuthorChatTurn[] = [
-            { role: 'user', content: message, at: now },
-            { role: 'assistant', content: reply, at: new Date(now.getTime() + 1) },
-        ];
-        const $set: any = {};
-        if (statement) {
-            $set['artifacts.statement'] = statement;
-            // Re-editing an approved statement un-approves it: whatever was
-            // built downstream certified the OLD text.
-            if (phaseOf(this.ddoc) === 'approved') $set.approved = false;
-            if (this.ddoc.pipeline.status === 'passed') {
-                $set.pipeline = { status: 'idle', stage: 'review', message: 'Statement changed. Review it, then press Continue.' };
+        const ddoc = this.ddoc;
+        const uid = this.user._id;
+        /*
+         * ai-speedup WP2: the review chat is a STREAM JOB when the page asks
+         * for one (`stream=1`): the reply line shows word by word while the
+         * model may still be rewriting the statement; the draft is saved
+         * inside the job exactly as before and the final JSON closes the
+         * stream. Older pages get the inline shape. A teacher waiting at the
+         * keyboard is interactive work, ahead of the Studio's own pipeline.
+         */
+        const work = async (h: aiTutor.AiStreamHandle | null) => {
+            let turn: Awaited<ReturnType<typeof runStatementChat>>;
+            try {
+                turn = await runStatementChat(ddoc, message, { onDelta: h?.delta, signal: h?.signal });
+            } catch (e) {
+                // The page shows this message in the chat; the log keeps the reason.
+                logger.warn('[ai-studio] chat failed for %s (%s): %s', ddoc._id.toHexString(), aiTutor.tutorProviderInfo().model || '?', e.message);
+                throw e;
             }
+            const { reply, statement } = turn;
+            const now = new Date();
+            const turns: AuthorChatTurn[] = [
+                { role: 'user', content: message, at: now },
+                { role: 'assistant', content: reply, at: new Date(now.getTime() + 1) },
+            ];
+            const $set: any = {};
+            if (statement) {
+                $set['artifacts.statement'] = statement;
+                // Re-editing an approved statement un-approves it: whatever was
+                // built downstream certified the OLD text.
+                if (phaseOf(ddoc) === 'approved') $set.approved = false;
+                if (ddoc.pipeline.status === 'passed') {
+                    $set.pipeline = { status: 'idle', stage: 'review', message: 'Statement changed. Review it, then press Continue.' };
+                }
+            }
+            await coll.updateOne({ _id: ddoc._id }, {
+                $set: { ...$set, updateAt: new Date() },
+                $push: {
+                    chat: { $each: turns, $slice: -CHAT_KEEP },
+                    log: { $each: [{ at: now, actor: 'teacher', action: 'chat', detail: message.slice(0, 120) }], $slice: -80 },
+                },
+            } as any);
+            return { draft: toClient(await getDraft(domainId, ddoc._id)), reply, changed: !!statement };
+        };
+        const meta: aiTutor.AiCallMeta = {
+            feature: 'author', lane: 'interactive', priority: 1, uid,
+        };
+        if (stream && aiTutor.streamingEnabled()) {
+            const { id } = aiTutor.startStreamJob({ uid, meta, run: (h) => work(h) });
+            this.response.body = { streamId: id };
+            return;
         }
-        await coll.updateOne({ _id: this.ddoc._id }, {
-            $set: { ...$set, updateAt: new Date() },
-            $push: {
-                chat: { $each: turns, $slice: -CHAT_KEEP },
-                log: { $each: [{ at: now, actor: 'teacher', action: 'chat', detail: message.slice(0, 120) }], $slice: -80 },
-            },
-        } as any);
-        this.response.body = { draft: toClient(await getDraft(domainId, this.ddoc._id)), reply, changed: !!statement };
+        this.response.body = await aiTutor.scheduled(meta, () => work(null));
     }
 
     /** Clear the review conversation without touching the statement. */

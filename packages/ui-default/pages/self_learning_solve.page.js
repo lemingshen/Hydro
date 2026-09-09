@@ -1,5 +1,8 @@
 import $ from 'jquery';
 import MarkdownIt from 'markdown-it';
+import {
+  busyCountdown, busyInfo, ensureAiStreamStyle, formatQueue, openAiStream, streamField,
+} from 'vj/components/aistream';
 import { mountComposer } from 'vj/components/chat-composer';
 import { ConfirmDialog } from 'vj/components/dialog';
 import Notification from 'vj/components/notification';
@@ -105,6 +108,49 @@ export default new NamedPage('self_learning_solve', async () => {
    * verdict (answer-submission tasks) — no chat-mode tutor, no quiz form.
    */
   const tutorUrl = `${window.location.pathname}/tutor`;
+
+  /**
+   * ai-speedup WP2: POST a tutor operation asking for a stream. The server
+   * answers { streamId } (the call was queued / started) — we attach to it:
+   * queue position and ETA go to `hooks.onQueue`, reply text to
+   * `hooks.onDelta` as it is written, and the final JSON (the same shape the
+   * old inline reply had) resolves the promise. An older backend, or
+   * streaming switched off, answers inline and the promise resolves at
+   * once. A 503 "AI busy" refusal counts down its retry-after and retries
+   * by itself (three times), reporting each wait through `hooks.onBusy`.
+   */
+  async function tutorRequest(payload, hooks = {}) {
+    for (let attempt = 0; ; attempt++) {
+      let res;
+      try {
+        res = await request.post(tutorUrl, { ...payload, ...streamField() });
+      } catch (e) {
+        const busy = busyInfo(e);
+        if (!busy || attempt >= 3 || !hooks.busyEl) throw e;
+        const wait = busyCountdown(hooks.busyEl(), busy);
+        hooks.onBusy?.(busy, wait);
+        const ok = await wait.promise;
+        if (!ok) throw e;
+        continue;
+      }
+      if (!res || !res.streamId) return res;
+      return await new Promise((resolve, reject) => {
+        openAiStream(res.streamId, {
+          onQueue: (q) => hooks.onQueue?.(q),
+          onDelta: (t, full) => hooks.onDelta?.(t, full),
+          onStatus: (stage) => hooks.onStatus?.(stage),
+          onReset: () => hooks.onReset?.(),
+          onDone: (result) => resolve(result),
+          onError: (err) => {
+            const e = new Error(err.message);
+            e.retryAfter = err.retryAfter;
+            e.gone = err.gone;
+            reject(e);
+          },
+        });
+      });
+    }
+  }
   const recordUrl = `${window.location.pathname}/record`;
   const $chat = $('#sl-chat');
   const $tutor = $('#sl-tutor');
@@ -937,8 +983,10 @@ export default new NamedPage('self_learning_solve', async () => {
     if (meta && typeof meta.level === 'number') $bubble.append(levelChipHtml(meta.level, meta.levelKind || 'ownership'));
     $chat.append($msg);
     if (meta && meta.resolved) {
+      // Same words as the card: after acceptance the walkthrough simply
+      // moves on; the "fix this line" instruction belongs to failed verdicts only.
       const note = meta.accepted
-        ? i18n('Great reflection — you have truly mastered this problem!')
+        ? i18n('Nice — on to the next question.')
         : i18n('Great — now FIX this line in the editor.');
       $chat.append(`<div class="sl-msg assistant"><div class="sl-bubble sl-bubble--note">✏️ ${escapeHtml(note)}</div></div>`);
     }
@@ -1690,7 +1738,7 @@ export default new NamedPage('self_learning_solve', async () => {
       dom.className = 'sl-overlay';
       dom.innerHTML = '<div class="sl-overlay__box">'
         + '<span class="sl-spin"></span>'
-        + `<div>${escapeHtml(i18n('The tutor is thinking...'))}</div>`
+        + `<div class="sl-overlay__text">${escapeHtml(i18n('The tutor is thinking...'))}</div>`
         + '</div>';
       document.body.appendChild(dom);
     }
@@ -1784,6 +1832,21 @@ export default new NamedPage('self_learning_solve', async () => {
         return;
       }
       showOverlay();
+    }
+
+    /** The element carrying the wait text (thinking row or overlay label), for queue / busy lines. */
+    function thinkingTextEl() {
+      if (thinkingRow) {
+        const $t = $(thinkingRow).find('span').last();
+        if ($t.length) return $t;
+      }
+      const $ov = $('#sl-anno-overlay .sl-overlay__text').last();
+      return $ov.length ? $ov : $('<span>');
+    }
+
+    function setThinkingText(text) {
+      ensureAiStreamStyle();
+      thinkingTextEl().text(text);
     }
 
     function hideThinking() {
@@ -1886,14 +1949,17 @@ export default new NamedPage('self_learning_solve', async () => {
         + '<div class="sl-anno__actions-left"></div>'
         + '<div class="sl-anno__actions-right">'
         /*
-         * "Next issue" stays available throughout, as it always was: it is
-         * both the "already fixed it" advance and the stuck student's way
-         * out that the tutor itself points to after repeated "I don't
-         * know"s. Taking it does not unlock anything by itself — the next
-         * question re-takes the lock. The accepted walkthrough has no skip.
+         * The advance button stays available throughout. After a FAILED
+         * verdict it is "Next issue": both the "already fixed it" advance and
+         * the stuck student's way out that the tutor itself points to after
+         * repeated "I don't know"s (taking it does not unlock anything by
+         * itself — the next question re-takes the lock). After an ACCEPTED
+         * verdict the card is an ownership walkthrough question, so the same
+         * button reads "Next Question" — a skipped question stays unanswered
+         * in the rubric, which the tooltip says plainly.
          */
         + (accepted
-          ? ''
+          ? `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Skip to the next question (a skipped question counts as unanswered).'))}">${escapeHtml(i18n('Next Question'))} ➜</button>`
           : `<button type="button" class="sl-anno__skip" title="${escapeHtml(i18n('Already fixed it? Jump straight to the next issue.'))}">${escapeHtml(i18n('Next issue'))} ➜</button>`)
         + `<button type="button" class="sl-anno__send" title="${escapeHtml(i18n('Send'))} · ${escapeHtml(i18n('Enter to send · Shift+Enter for a new line'))}">➤</button>`
         + '</div></div>'
@@ -1941,9 +2007,10 @@ export default new NamedPage('self_learning_solve', async () => {
       $(dom).find('.sl-anno__skip').on('click', () => {
         const cs = cardState;
         if (!cs || cs.dom !== dom) return;
-        // Guided flow only (the accepted walkthrough has no skip): the
-        // student fixed the flaw in the editor and advances — the next
-        // question is generated against the CURRENT code.
+        // Guided flow: the student fixed the flaw in the editor and advances
+        // — the next question is generated against the CURRENT code.
+        // Accepted walkthrough: on to the next ownership question (the
+        // server keeps this one as asked-but-unanswered).
         if (!askedQuestions.includes(cs.question)) askedQuestions.push(cs.question);
         requestNextQuestion(cs.rid, cs.endLine, cs.accepted);
       });
@@ -2089,8 +2156,26 @@ export default new NamedPage('self_learning_solve', async () => {
         } else g.remove();
       };
       try {
-        const res = await request.post(tutorUrl, {
+        const waitLabel = (text) => {
+          // The queue line lands on whatever is showing the wait: the
+          // flying ghost's chip, else the in-card / overlay thinking row.
+          const $chip = ghost ? $(ghost).find('.sl-anno-ghost__chip span').last() : $();
+          if ($chip.length) $chip.text(text);
+          else setThinkingText(text);
+        };
+        const res = await tutorRequest({
           operation: 'annotate', rid, asked: JSON.stringify(askedQuestions.slice(-12)), code: currentEditorCode(),
+        }, {
+          onQueue: (q) => waitLabel(formatQueue(q)),
+          onStatus: () => waitLabel(i18n(accepted ? 'Preparing the next question...' : 'Finding the next issue...')),
+          // The question itself streams word by word into the chip / overlay
+          // while the model is still deciding where to anchor it; the card
+          // then opens at the anchor with the complete question.
+          onDelta: (delta, full) => waitLabel(full.length > 160 ? `…${full.slice(-160)}` : full),
+          busyEl: () => {
+            const $chip = ghost ? $(ghost).find('.sl-anno-ghost__chip span').last() : $();
+            return $chip.length ? $chip : thinkingTextEl();
+          },
         });
         if (session !== annoSession || !extended) {
           dropGhost(false);
@@ -2099,6 +2184,11 @@ export default new NamedPage('self_learning_solve', async () => {
         hideThinking();
         if (res.marker) appendDivider(res.marker, !!res.markerAccepted); // the panel history gains the divider
         absorbGate(res);
+        // The SERVER's verdict of the tutored submission decides the card's
+        // mode (button label, lock, resolution note): it is authoritative
+        // where the caller's flag may be stale (a reopened flow, a restored
+        // card, a re-submission).
+        const isAccepted = typeof res.markerAccepted === 'boolean' ? res.markerAccepted : (!!res.ownership || accepted);
         if (prevCard && cardState === prevCard) {
           removeZoneEntry(prevCard.entry); // non-ghost path only
           cardState = null;
@@ -2108,16 +2198,16 @@ export default new NamedPage('self_learning_solve', async () => {
           if (ghost) {
             const g = ghost;
             ghost = null;
-            await flyGhostToNewCard(g, () => showQuestionCard(rid, res.annotation, accepted, { hiddenEnter: true, ownership: res.ownership }));
+            await flyGhostToNewCard(g, () => showQuestionCard(rid, res.annotation, isAccepted, { hiddenEnter: true, ownership: res.ownership }));
           } else {
-            showQuestionCard(rid, res.annotation, accepted, { ownership: res.ownership });
+            showQuestionCard(rid, res.annotation, isAccepted, { ownership: res.ownership });
           }
         } else {
           dropGhost();
           // Accepted with nothing left to reflect on: the server finishes
           // the task here, so the card says so in the same words as a
           // resolved reflection would.
-          if (accepted) showInfoCard(`🎉 ${i18n('Accepted — nothing left to ask: you have truly mastered this problem!')}`, afterLine || 0);
+          if (isAccepted) showInfoCard(`🎉 ${i18n('Accepted — nothing left to ask: you have truly mastered this problem!')}`, afterLine || 0);
           else showInfoCard(i18n('All issues covered — apply your fixes and submit once to verify!'), afterLine || 0);
         }
       } catch (e) {
@@ -2157,8 +2247,21 @@ export default new NamedPage('self_learning_solve', async () => {
       // rubric — show the staged evaluation theatre instead of the plain
       // spinner. (The editor stays locked either way.)
       showThinking(cs.accepted ? 'ownership' : undefined);
+      // ai-speedup WP2: the tutor's reply streams into a live bubble while
+      // the grader is still writing; the stored reply replaces it on done.
+      let $live = null;
+      let liveText = '';
+      let liveTimer = null;
+      const paintLive = () => {
+        liveTimer = null;
+        if (!$live) return;
+        $live.html(`${md.render(liveText)}<span class="ai-stream__caret" aria-hidden="true"></span>`);
+        const $log = $(cs.dom).find('.sl-anno__log');
+        $log.scrollTop($log[0].scrollHeight);
+        fitZone(cs.entry, 60, cardMaxPx());
+      };
       try {
-        const res = await request.post(tutorUrl, {
+        const res = await tutorRequest({
           operation: 'annotateReply',
           rid: cs.rid,
           line: cs.line,
@@ -2167,12 +2270,34 @@ export default new NamedPage('self_learning_solve', async () => {
           history: JSON.stringify(priorHistory.slice(-10)),
           text,
           code: currentEditorCode(),
+        }, {
+          onQueue: (q) => setThinkingText(formatQueue(q)),
+          busyEl: () => thinkingTextEl(),
+          onDelta: (delta, full) => {
+            if (session !== annoSession || cardState !== cs) return;
+            liveText = full;
+            if (!$live) {
+              ensureAiStreamStyle();
+              // The theatre / spinner has done its job once words arrive.
+              if (cs.accepted && ownEval) ownEval.complete();
+              if (thinkingRow && thinkingRow.parentNode) thinkingRow.parentNode.removeChild(thinkingRow);
+              $live = $('<div class="sl-anno__msg tutor ai-stream ai-stream--live"></div>');
+              $(cs.dom).find('.sl-anno__log').append($live);
+            }
+            liveTimer ||= setTimeout(paintLive, 100);
+          },
         });
         if (session !== annoSession) return;
+        // An ownership grade can only come from an ACCEPTED submission: if
+        // the card was opened with a stale flag, the server's answer corrects
+        // it, so the notes and the next card follow the real verdict.
+        if (res.levelKind === 'ownership' && !cs.accepted) cs.accepted = true;
         cs.history.push({ role: 'student', content: text });
         cs.history.push({ role: 'tutor', content: res.reply });
         // Let the theatre reach its all-done beat before the reply lands.
-        if (cs.accepted && ownEval) await ownEval.complete();
+        if (cs.accepted && ownEval && !$live) await ownEval.complete();
+        if (liveTimer) clearTimeout(liveTimer);
+        if ($live) $live.remove();
         hideThinking();
         absorbGate(res);
         // 🎓 Immediate feedback: the LLM's grade for THIS answer lands as
@@ -2200,6 +2325,9 @@ export default new NamedPage('self_learning_solve', async () => {
             // into the next question. The server closes the sequence (and
             // finishes the task) once the budget is spent or no distinct
             // aspect remains — that final call shows the 🎉 mastery card.
+            // The advance button goes quiet meanwhile: the chain is already
+            // fetching the next question.
+            $(cs.dom).find('.sl-anno__skip').prop('disabled', true);
             appendCardNote(i18n('Nice — on to the next question.'), '👏');
             fitZone(cs.entry, 60, cardMaxPx());
             setTimeout(() => {
@@ -2219,6 +2347,8 @@ export default new NamedPage('self_learning_solve', async () => {
         }
       } catch (e) {
         if (session !== annoSession) return;
+        if (liveTimer) clearTimeout(liveTimer);
+        if ($live) $live.remove();
         hideThinking();
         appendCardMsg('tutor', `⚠️ ${e.message}`);
       }

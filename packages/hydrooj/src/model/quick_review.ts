@@ -36,6 +36,8 @@ export interface QuickJob {
     by: number | 'system';
     /** batches done / planned, for the `map` stage */
     progress?: { done: number, total: number };
+    /** ai-speedup WP5: the scheduler had no capacity for the current call (queue position / ETA), null once granted. */
+    waiting?: { ahead: number, eta: number } | null;
     error?: string;
 }
 

@@ -1,4 +1,7 @@
 import $ from 'jquery';
+import {
+  busyCountdown, busyInfo, ensureAiStreamStyle, formatQueue, openAiStream, streamField,
+} from 'vj/components/aistream';
 import LanguageSelectAutoComplete from 'vj/components/autocomplete/LanguageSelectAutoComplete';
 import ProblemSelectAutoComplete from 'vj/components/autocomplete/ProblemSelectAutoComplete';
 import { mountComposer } from 'vj/components/chat-composer';
@@ -230,9 +233,52 @@ function initAdvisor(selection) {
     $chat.append(`<div class="sla__msg sla__msg--me sla__msg--in"><div class="sla__bubble">${esc(message)}</div></div>`);
     const $wait = $(typingHtml()).appendTo($chat);
     scrollDown();
-    const stop = startProgress($wait);
+    let stop = startProgress($wait);
+    /*
+     * ai-speedup WP2: the advice STREAMS. The request returns { streamId }
+     * at once; the queue position replaces the staged captions while the
+     * scheduler has no free slot, the "learning path" narrative appears
+     * word by word while the model is still listing the tasks, and the
+     * validated suggestion closes the stream. A 503 "AI busy" refusal
+     * counts down and retries by itself; an older backend answers inline.
+     */
+    ensureAiStreamStyle();
+    const $stage = $wait.find('.sla__stage');
+    const streamed = (streamId) => new Promise((resolve, reject) => {
+      openAiStream(streamId, {
+        onQueue: (q) => {
+          stop();
+          stop = () => {};
+          $stage.text(formatQueue(q));
+        },
+        onStatus: () => { $stage.text(STAGES[2]); },
+        onDelta: (delta, full) => {
+          stop();
+          stop = () => {};
+          $wait.find('.sla__typing, .sla__progress').remove();
+          $stage.html(`📈 ${esc(full)}<span class="ai-stream__caret" aria-hidden="true"></span>`);
+          scrollDown();
+        },
+        onDone: (result) => resolve(result),
+        onError: (err) => reject(Object.assign(new Error(err.message), { retryAfter: err.retryAfter })),
+      });
+    });
     try {
-      const res = await request.post(window.location.pathname, { operation: 'suggest', message, history: JSON.stringify(turns) });
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          res = await request.post(window.location.pathname, { operation: 'suggest', message, history: JSON.stringify(turns), ...streamField() });
+          break;
+        } catch (e) {
+          const info = busyInfo(e);
+          if (!info || attempt >= 3) throw e;
+          stop();
+          stop = () => {};
+          const ok = await busyCountdown($stage, info).promise;
+          if (!ok) throw e;
+        }
+      }
+      if (res && res.streamId) res = await streamed(res.streamId);
       turns.push({ role: 'user', content: message }, { role: 'assistant', content: res.summary || '' });
       stop();
       $wait.replaceWith(replyHtml(res));

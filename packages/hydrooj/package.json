@@ -30,6 +30,7 @@
         "cac": "^7.0.0",
         "cordis": "4.0.0-rc.4",
         "csv-stringify": "^6.8.3",
+        "diff": "^9.0.0",
         "emoji-regex": "^10.6.0",
         "emojis-list": "2.1.0",
         "fs-extra": "^11.4.0",

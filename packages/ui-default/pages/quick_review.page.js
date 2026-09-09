@@ -385,7 +385,14 @@ const CAPTIONS = {
   evidence: ['Writing quiz evidence into each student\'s knowledge map', 'Scheduling the map rebuilds, one at a time'],
   done: ['Review ready'],
 };
-const theatre = { timer: null, startedAt: 0, stage: null, captionIdx: 0, lastCaptionAt: 0, feed: [] };
+const theatre = { timer: null, startedAt: 0, stage: null, captionIdx: 0, lastCaptionAt: 0, feed: [], waitingKey: '' };
+
+/** ai-speedup WP5: "waiting for capacity · 7 ahead · ~20 s" from the job's `waiting` block. */
+function waitingText(w) {
+  if (!w) return '';
+  const secs = Math.max(1, Math.round((w.eta || 0) / 1000));
+  return `${i18n('waiting for capacity')} · ${i18n('{0} ahead').replace('{0}', String(Math.max(0, w.ahead || 0)))} · ~${secs} s`;
+}
 
 function fmtClock(ms) {
   const sec = Math.max(0, Math.floor(ms / 1000));
@@ -468,6 +475,14 @@ function updateTheatre($body, job, stats) {
     $t.find('[data-role="barright"]').text(i18n(`stage:${stage}`));
   }
   $t.find('[data-role="subtitle"]').text(i18n(`stage:${stage}`));
+  // ai-speedup WP5: the scheduler had no free slot for the current call.
+  const waiting = job.status === 'running' && job.waiting ? job.waiting : null;
+  if (waiting) $t.find('[data-role="barright"]').text(waitingText(waiting));
+  const waitingKey = waiting ? `${stage}:${waiting.ahead}` : '';
+  if (waitingKey !== theatre.waitingKey) {
+    theatre.waitingKey = waitingKey;
+    if (waiting) pushFeed($t, `⏳ ${waitingText(waiting)}`);
+  }
   $t.find('[data-role="clock"]').text(fmtClock(Date.now() - theatre.startedAt));
   // captions: a new line when the stage changes, then rotate every 3.5 s
   const now = Date.now();

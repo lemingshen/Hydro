@@ -41,7 +41,7 @@ import RecordModel from '../model/record';
 import SelfLearningModel, { collTutor, getClassReportMapCache } from '../model/selflearning';
 import system from '../model/system';
 import {
-    AgentMessage, callProvider, callProviderWithTools, ToolCall, ToolSpec, tutorConfigured,
+    AgentMessage, AiCallMeta, aiScheduler, callProvider, callProviderWithTools, ToolCall, ToolSpec, tutorConfigured,
 } from './ai_tutor';
 
 const logger = new Logger('assistant');
@@ -395,8 +395,35 @@ export interface TurnResult {
     turnsCap: number;
 }
 
-/** One student message → one assistant reply, with tool use in between. */
-export async function runTurn(domainId: string, uid: number, page: PageContext, text: string): Promise<TurnResult> {
+/** ai-speedup WP2: what a streamed turn reports while it runs. */
+export interface TurnHooks {
+    /** A piece of the final answer. */
+    onDelta?: (text: string) => void;
+    /** A tool phase: the UI shows a status line ("looking at your knowledge map…"). */
+    onStatus?: (stage: string) => void;
+    /** Text streamed earlier in this turn is not the answer after all (a tool call followed it). */
+    onReset?: () => void;
+    signal?: AbortSignal;
+}
+
+/** The status line shown while a tool runs, by tool name. */
+const TOOL_STAGES: Record<string, string> = {
+    my_map: 'Looking at your knowledge map…',
+    explain_point: 'Checking your recorded mistakes…',
+    my_submissions: 'Reading your submissions…',
+    my_activities: 'Checking deadlines…',
+    task: 'Reading the task…',
+    catalog: 'Searching the catalog…',
+    set_pref: 'Noting your preference…',
+    set_goal: 'Noting your goal…',
+    remember: 'Making a note…',
+};
+export function stageOfTool(name: string): string {
+    return TOOL_STAGES[name] || `Working (${String(name || 'tool').replace(/_/g, ' ')})…`;
+}
+
+/** The checks a turn must pass, done BEFORE any stream or job exists so they fail as plain HTTP errors. */
+export async function checkTurn(domainId: string, uid: number, page: PageContext) {
     const { posture, reason, activity } = await postureOf(domainId, uid, page);
     if (posture === 'off') throw new Error(reason || 'The AI assistant is unavailable here.');
     const cap = +system.get('assistant.daily_turns') || 60;
@@ -404,6 +431,26 @@ export async function runTurn(domainId: string, uid: number, page: PageContext, 
     const thread = await getThread(domainId, uid);
     const turnsToday = thread?.turns?.[day] || 0;
     if (turnsToday >= cap) throw new Error(`You have used today's ${cap} assistant messages. It resets tomorrow.`);
+    return {
+        posture, activity, cap, turnsToday, thread,
+    };
+}
+
+/** The scheduler meta of an assistant turn (one interactive slot for the whole tool loop). */
+export function assistantMeta(uid: number, signal?: AbortSignal): AiCallMeta {
+    return {
+        feature: 'assistant', lane: 'interactive', uid, stream: true, signal,
+    };
+}
+
+/**
+ * One student message → one assistant reply, with tool use in between.
+ * With hooks (ai-speedup WP2) the tool phases report a status and only the
+ * final answer streams; the whole loop holds ONE scheduler slot (the
+ * caller runs it under `assistantMeta`, or it schedules itself).
+ */
+export async function runTurn(domainId: string, uid: number, page: PageContext, text: string, hooks: TurnHooks = {}): Promise<TurnResult> {
+    const { posture, activity, cap, turnsToday, thread } = await checkTurn(domainId, uid, page);
 
     const c: Ctx = { domainId, uid, page, posture, activity };
     const [course, student, screen] = await Promise.all([courseCard(domainId), studentCard(c), pageCard(c)]);
@@ -414,10 +461,33 @@ export async function runTurn(domainId: string, uid: number, page: PageContext, 
     const messages: AgentMessage[] = [...history, { role: 'user', content: text.slice(0, 4000) }];
     const used: string[] = [];
     let reply = '';
+    const streaming = !!hooks.onDelta;
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        let roundText = '';
         // eslint-disable-next-line no-await-in-loop
-        const out = await callProviderWithTools(sys, messages, TOOLS);
-        if (!out.toolCalls.length || round === MAX_TOOL_ROUNDS) { reply = out.text || reply; break; }
+        const out = await callProviderWithTools(sys, messages, TOOLS, {
+            signal: hooks.signal,
+            meta: assistantMeta(uid, hooks.signal),
+            ...(streaming ? {
+                onDelta: (t: string) => {
+                    roundText += t;
+                    hooks.onDelta!(t);
+                },
+                onToolCall: (name: string) => {
+                    if (roundText) {
+                        roundText = '';
+                        hooks.onReset?.();
+                    }
+                    hooks.onStatus?.(stageOfTool(name));
+                },
+            } : {}),
+        });
+        if (!out.toolCalls.length || round === MAX_TOOL_ROUNDS) {
+            reply = out.text || reply;
+            // A non-streamed transport delivered the whole answer at once — mirror it.
+            break;
+        }
+        if (roundText) hooks.onReset?.();
         messages.push({ role: 'assistant', content: out.text, toolCalls: out.toolCalls });
         for (const call of out.toolCalls) {
             used.push(call.name);
@@ -439,8 +509,13 @@ export async function runTurn(domainId: string, uid: number, page: PageContext, 
         { role: 'assistant', content: reply.slice(0, 12000), at: now, tools: [...new Set(used)] },
     ];
     const updated = await appendThread(domainId, uid, stored, true);
-    // Fire-and-forget: the student never waits on memory upkeep.
-    distill(domainId, uid, updated).catch((e) => logger.warn('[assistant] distill failed for %s/%d: %s', domainId, uid, e.message));
+    // Fire-and-forget: the student never waits on memory upkeep. The
+    // distillation is its own background call (ai-speedup WP5: `summary`
+    // cap), scheduled OUTSIDE the interactive slot this turn holds.
+    aiScheduler.runOutside({
+        feature: 'summary', lane: 'background', priority: 1, uid, key: `assistant-distill:${domainId}:${uid}`,
+    }, () => distill(domainId, uid, updated))
+        .catch((e) => logger.warn('[assistant] distill failed for %s/%d: %s', domainId, uid, e.message));
     return { reply, tools: [...new Set(used)], turnsToday: turnsToday + 1, turnsCap: cap };
 }
 
@@ -468,7 +543,9 @@ async function distill(domainId: string, uid: number, thread: any) {
     if (msgs.length < DISTILL_EVERY || msgs.length - since < DISTILL_EVERY) return;
     const transcript = msgs.slice(-16).map((m) => `${m.role === 'user' ? 'Student' : 'Assistant'}: ${String(m.content).slice(0, 700)}`).join('\n');
     const prev = thread?.summary ? `Previous summary: ${thread.summary}\n\n` : '';
-    const raw = await callProvider(DISTILL_PROMPT, [{ role: 'user', content: `${prev}Conversation:\n${transcript}` }], { temperature: 0 });
+    const raw = await callProvider(DISTILL_PROMPT, [{ role: 'user', content: `${prev}Conversation:\n${transcript}` }], {
+        temperature: 0, meta: { feature: 'summary', lane: 'background', priority: 1, uid },
+    });
     const m = /\{[\s\S]*\}/.exec(raw);
     if (!m) return;
     let j: any;

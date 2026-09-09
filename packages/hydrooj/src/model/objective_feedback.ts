@@ -19,6 +19,11 @@ export interface ObjectiveFeedbackDoc {
     snapshot?: { questions: number, wrong: number, unanswered: number, correct: number, ungraded?: number };
     job?: {
         status: 'running' | 'done' | 'failed';
+        /** ai-speedup WP5: 'waiting' while the scheduler has no capacity (with the queue position / ETA). */
+        stage?: 'waiting' | 'running';
+        waiting?: { ahead: number, eta: number };
+        /** ai-speedup WP2: the live stream the student's page attaches to (this process only; absent for pre-warmed reports). */
+        streamId?: string;
         startedAt: Date;
         updatedAt: Date;
         finishedAt?: Date;

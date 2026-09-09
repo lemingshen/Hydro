@@ -9,7 +9,7 @@ ai_tutor.max_messages: Max Messages per Conversation
 ai_tutor.model: Model Name
 ai_tutor.provider: AI Provider
 ai_tutor.temperature: Sampling Temperature
-ai_tutor.timeout: Request Timeout (seconds)
+ai_tutor.timeout: "Request Timeout (legacy — no longer used)"
 Can be Extended For: Extension
 contest_create: Contest Create
 contest_detail_problem_submit: Submit Contest Problem
@@ -140,3 +140,21 @@ similarity.max_pairs: "Max Pairs Kept per Group"
 similarity.timeout: "Dolos Timeout (seconds)"
 similarity.extra_args: "Extra Dolos Arguments"
 grade_center: "Grade Center"
+# ai-speedup: scheduler, streaming, prompt caching (lib/ai_tutor.ts)
+ai_tutor.sched_enabled: "Scheduler — Route Every AI Call Through the Scheduler"
+ai_tutor.sched_slots: "Scheduler — Total Calls in Flight"
+ai_tutor.sched_interactive_reserve: "Scheduler — Slots Reserved for Interactive Calls"
+ai_tutor.sched_background_max: "Scheduler — Max Background Calls in Flight"
+ai_tutor.sched_user_inflight: "Scheduler — Calls in Flight per Student"
+ai_tutor.sched_queue_max: "Scheduler — Max Queued Calls per Lane"
+ai_tutor.sched_max_wait: "Scheduler — Refuse Beyond This Estimated Wait (seconds)"
+ai_tutor.sched_age_ms: "Scheduler — Promote a Queued Call After (ms)"
+ai_tutor.sched_feature_caps: "Scheduler — Per-Feature Concurrency Caps"
+ai_tutor.stream_enabled: "Streaming — Show Replies as They Are Written"
+ai_tutor.cache_enabled: "Prompt Caching — Enable Provider Prefix Caching"
+ai_tutor.cache_ttl: "Prompt Caching — Anthropic Cache Lifetime"
+ai_tutor.summary_model: "Thread Summaries — Model"
+ai_tutor.summary_every: "Thread Summaries — Refresh Every N Student Turns"
+"The AI is busy right now ({0} ahead, about {1} s to wait). Retrying automatically in {2} s.": "The AI is busy right now ({0} ahead, about {1} s to wait). Retrying automatically in {2} s."
+ai_tutor.sched_adaptive: "Scheduler — Adapt the Limit to the Provider (grow while it keeps up, halve on a rate limit)"
+ai_tutor.sched_slots_max: "Scheduler — Ceiling of the Adaptive Limit"

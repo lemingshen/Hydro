@@ -2,11 +2,32 @@
 import { Logger } from '../logger';
 import { STATUS, STATUS_SHORT_TEXTS, STATUS_TEXTS } from '@hydrooj/common';
 import type { ProblemDoc, RecordDoc } from '../interface';
-import type { TutorMessage } from '../model/selflearning';
+import type { TutorMessage, TutorThreadDoc } from '../model/selflearning';
 import * as SettingModel from '../model/setting';
 import system from '../model/system';
+import { AiUsage, mergeStreamUsage, normalizeUsage } from './ai_metrics';
+import {
+    buildPrompt, codeDelta, limitSummary, memoByVersion, prefixText, PromptBlock, stableList, summaryDue, THREAD_SUMMARY_PROMPT, wordCount,
+} from './ai_prompt';
+import {
+    AiAbortedError, AiBusyError, AiCallMeta, aiScheduler, AiSlot, currentSlot, DEFAULT_FEATURE_CAPS, parseFeatureCaps,
+} from './ai_scheduler';
+import {
+    decodeAnthropicEvent, decodeOpenAIEvent, JsonFieldStreamer, SseParser, StreamSignal,
+} from './ai_stream';
+
+export { aiMetrics } from './ai_metrics';
+export { codeDelta, codeHash } from './ai_prompt';
+export type { PromptBlock } from './ai_prompt';
+export { AiAbortedError, AiBusyError, aiScheduler, currentSlot } from './ai_scheduler';
+export type { AiCallMeta, AiSlot } from './ai_scheduler';
+export {
+    aiStreams, JsonFieldStreamer, startStreamJob, TextSpanStreamer,
+} from './ai_stream';
+export type { AiStreamHandle } from './ai_stream';
 
 const { Setting, SystemSetting, FLAG_SECRET } = SettingModel;
+const logger = new Logger('ai-tutor');
 
 /* ------------------------------------------------------------------ */
 /*  System settings (Control Panel -> Settings -> AI Tutor, root only) */
@@ -40,7 +61,7 @@ registerSystemSettingsIdempotent(
     Setting('setting_ai_tutor', 'ai_tutor.api_key', '', 'password', 'ai_tutor.api_key', 'API key of the selected provider. For security the saved key is never displayed, so this field always looks blank. Leave it blank to keep the current key.', FLAG_SECRET),
     Setting('setting_ai_tutor', 'ai_tutor.base_url', '', 'text', 'ai_tutor.base_url', 'API base URL or full endpoint (optional, for proxies / compatible gateways). A base like https://api.deepseek.com works, and the chat path is appended automatically.'),
     Setting('setting_ai_tutor', 'ai_tutor.temperature', 0.6, 'float', 'ai_tutor.temperature', 'Sampling temperature'),
-    Setting('setting_ai_tutor', 'ai_tutor.timeout', 60, 'number', 'ai_tutor.timeout', 'Provider request timeout (seconds)'),
+    Setting('setting_ai_tutor', 'ai_tutor.timeout', 60, 'number', 'ai_tutor.timeout', 'Legacy — no longer used: a provider call ends only when the provider ends it (completion, error, or closing the connection)'),
     Setting('setting_ai_tutor', 'ai_tutor.max_messages', 80, 'number', 'ai_tutor.max_messages', 'Max stored messages per tutoring thread'),
     // 🤖 The student assistant (lib/assistant.ts) shares the provider, key
     // and model above; these only switch it on and bound its cost. It is
@@ -69,6 +90,25 @@ registerSystemSettingsIdempotent(
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_map_max_calls', 10, 'number', 'ai_tutor.quick_review_map_max_calls', 'Quick Review: max labelling calls per test (0 = off)'),
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_map_lines', 60, 'number', 'ai_tutor.quick_review_map_lines', 'Quick Review: max code lines per excerpt in a labelling call'),
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_prompt_budget', 12000, 'number', 'ai_tutor.quick_review_prompt_budget', 'Quick Review: token budget of the diagnosis prompt (the digest is condensed to fit)'),
+    // ⚙️ ai-speedup: the scheduler (lib/ai_scheduler.ts), streaming and
+    // provider prompt caching. Every AI call in the process goes through the
+    // scheduler; `sched_enabled=false` restores the direct path (rollback).
+    Setting('setting_ai_tutor', 'ai_tutor.sched_enabled', true, 'boolean', 'ai_tutor.sched_enabled', 'Scheduler: route every AI call through the scheduler (off = direct calls, for rollback)'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_slots', 12, 'number', 'ai_tutor.sched_slots', 'Scheduler: provider calls in flight (the base; adaptive mode grows from here)'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_adaptive', true, 'boolean', 'ai_tutor.sched_adaptive', 'Scheduler: adapt the limit to the provider — grow while it keeps up, halve on a rate limit (TCP-style)'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_slots_max', 24, 'number', 'ai_tutor.sched_slots_max', 'Scheduler: ceiling of the adaptive limit (set equal to the base for a fixed limit)'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_interactive_reserve', 6, 'number', 'ai_tutor.sched_interactive_reserve', 'Scheduler: slots reserved for interactive calls (tutor, assistant, suggestions)'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_background_max', 4, 'number', 'ai_tutor.sched_background_max', 'Scheduler: max background calls in flight (reports, explanations, grading)'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_user_inflight', 1, 'number', 'ai_tutor.sched_user_inflight', 'Scheduler: calls in flight per student'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_queue_max', 200, 'number', 'ai_tutor.sched_queue_max', 'Scheduler: max queued calls per lane before refusing with a retry-after'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_max_wait', 90, 'number', 'ai_tutor.sched_max_wait', 'Scheduler: refuse when the estimated wait exceeds this many seconds'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_age_ms', 30000, 'number', 'ai_tutor.sched_age_ms', 'Scheduler: a queued call is promoted one priority class after waiting this long (ms)'),
+    Setting('setting_ai_tutor', 'ai_tutor.sched_feature_caps', DEFAULT_FEATURE_CAPS, 'text', 'ai_tutor.sched_feature_caps', 'Scheduler: per-feature concurrency caps, e.g. explain:3,qr_label:3,report_map:3,attrib:2,summary:2,grade:2'),
+    Setting('setting_ai_tutor', 'ai_tutor.stream_enabled', true, 'boolean', 'ai_tutor.stream_enabled', 'Streaming: show tutor, assistant and suggestion replies as they are written (off = wait for the whole reply)'),
+    Setting('setting_ai_tutor', 'ai_tutor.cache_enabled', true, 'boolean', 'ai_tutor.cache_enabled', 'Prompt caching: send cache breakpoints / prompt cache keys so students on the same task share the cached prefix'),
+    Setting('setting_ai_tutor', 'ai_tutor.cache_ttl', '5m', { '5m': '5 minutes', '1h': '1 hour' }, 'ai_tutor.cache_ttl', 'Prompt caching: Anthropic cache lifetime (1 hour suits lecture slots with long pauses)'),
+    Setting('setting_ai_tutor', 'ai_tutor.summary_model', '', 'text', 'ai_tutor.summary_model', 'Thread summaries: model for the rolling tutoring summary (empty = the tutor model)'),
+    Setting('setting_ai_tutor', 'ai_tutor.summary_every', 4, 'number', 'ai_tutor.summary_every', 'Thread summaries: refresh the rolling summary every N student turns'),
 );
 
 interface ProviderPreset {
@@ -121,6 +161,38 @@ export function sysStr(key: string, fallback = ''): string {
         }
     }
 })();
+
+/* ------------------------------------------------------------------ */
+/*  ⚙️ Scheduler binding: the site settings are the scheduler's config  */
+/* ------------------------------------------------------------------ */
+const numSetting = (key: string, fallback: number) => {
+    const v: any = system.get(key);
+    return Number.isFinite(+v) && v !== '' && v !== null && v !== undefined ? +v : fallback;
+};
+
+aiScheduler.configure(() => ({
+    enabled: system.get('ai_tutor.sched_enabled') !== false,
+    slots: numSetting('ai_tutor.sched_slots', 12),
+    adaptive: system.get('ai_tutor.sched_adaptive') !== false,
+    slotsMax: numSetting('ai_tutor.sched_slots_max', 24),
+    interactiveReserve: numSetting('ai_tutor.sched_interactive_reserve', 6),
+    backgroundMax: numSetting('ai_tutor.sched_background_max', 4),
+    userInflight: numSetting('ai_tutor.sched_user_inflight', 1),
+    queueMax: numSetting('ai_tutor.sched_queue_max', 200),
+    maxWaitMs: numSetting('ai_tutor.sched_max_wait', 90) * 1000,
+    ageMs: numSetting('ai_tutor.sched_age_ms', 30000),
+    featureCaps: parseFeatureCaps(sysStr('ai_tutor.sched_feature_caps', DEFAULT_FEATURE_CAPS) || DEFAULT_FEATURE_CAPS),
+    retryAttempts: 4,
+    retryBaseMs: 4000,
+}));
+aiScheduler.log = (line: string) => logger.info(line);
+
+export function streamingEnabled(): boolean {
+    return system.get('ai_tutor.stream_enabled') !== false;
+}
+export function cacheEnabled(): boolean {
+    return system.get('ai_tutor.cache_enabled') !== false;
+}
 
 export function tutorEnabled() {
     const v = system.get('ai_tutor.enabled');
@@ -178,10 +250,80 @@ function mergeAlternating(messages: ChatMessage[]): ChatMessage[] {
     return out;
 }
 
-export async function callProvider(
-    systemPrompt: string, messages: ChatMessage[],
-    opts: { temperature?: number, timeoutMs?: number, model?: string } = {},
-): Promise<string> {
+/* ------------------------------------------------------------------ */
+/*  ⚙️ Scheduling: every provider call runs in a scheduler slot         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Run `fn` inside a scheduler slot (queueing, fairness, caps, retries —
+ * lib/ai_scheduler.ts). Every AI call site uses this, either explicitly
+ * (to hold one slot across several provider calls, or to stream) or
+ * implicitly: callProvider() called outside a slot schedules itself with
+ * the `meta` it was given (default: the background lane).
+ */
+export function scheduled<T>(meta: AiCallMeta, fn: (slot: AiSlot) => Promise<T>): Promise<T> {
+    return aiScheduler.run(meta, fn);
+}
+
+/** Merge several abort signals into one (undefined entries ignored). */
+export function combineSignals(...signals: (AbortSignal | undefined | null)[]): AbortSignal | undefined {
+    const list = signals.filter((x): x is AbortSignal => !!x);
+    if (!list.length) return undefined;
+    if (list.length === 1) return list[0];
+    const anyFn = (AbortSignal as any).any;
+    if (typeof anyFn === 'function') return anyFn.call(AbortSignal, list);
+    const c = new AbortController();
+    for (const sig of list) {
+        if (sig.aborted) c.abort();
+        else sig.addEventListener('abort', () => c.abort(), { once: true });
+    }
+    return c.signal;
+}
+
+/** Fields a provider rejected once in this process — remembered so we never send them again. */
+const unsupportedFields = new Set<string>();
+
+/**
+ * The Anthropic output ceiling a model accepted, per `provider:model`. The
+ * ladder starts at 64000 and steps down on a 400; remembering the accepted
+ * value saves that rejected round trip on EVERY later call of the process.
+ */
+const acceptedMaxTokens = new Map<string, number>();
+const ANTHROPIC_LADDER = [64000, 32000, 8192, 4096];
+const startMaxTokens = (provider: string, model: string) => acceptedMaxTokens.get(`${provider}:${model}`) ?? ANTHROPIC_LADDER[0];
+
+export interface CallOptions {
+    temperature?: number;
+    /** Accepted for older callers; has no effect — the platform never times a provider call out on its own. */
+    timeoutMs?: number;
+    model?: string;
+    /** Stream the reply; each text delta goes to onDelta (implied when onDelta is given). */
+    stream?: boolean;
+    onDelta?: (text: string) => void;
+    /** A reasoning model is "thinking": keeps a UI indicator alive, resets the first-token timer. */
+    onThinking?: () => void;
+    onUsage?: (usage: AiUsage) => void;
+    /** Internal: the first tool call of a streamed round started (text deltas stop being forwarded). */
+    onToolStart?: (name: string) => void;
+    /** Caller gone → abort the request (a cancellation, never a timeout). Merged with the slot's signal. */
+    signal?: AbortSignal;
+    /** How to schedule this call when it is made outside a slot (feature, lane, priority, uid, key…). */
+    meta?: Partial<AiCallMeta>;
+    /** Prompt-cache routing key (OpenAI / DeepSeek `prompt_cache_key`); ai_prompt.buildPrompt supplies it. */
+    cacheKey?: string;
+}
+
+/** The provider-neutral request shape, built once and sent (with or without `stream`). */
+interface ProviderRequest {
+    url: string;
+    headers: Record<string, string>;
+    body: Record<string, any>;
+    style: 'anthropic' | 'openai';
+    provider: string;
+    model: string;
+}
+
+function providerSettings(opts: { model?: string, temperature?: number } = {}) {
     if (!tutorEnabled()) throw new Error('The AI tutor is disabled by the administrator.');
     const apiKey = sysStr('ai_tutor.api_key').trim();
     const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
@@ -191,110 +333,369 @@ export async function callProvider(
     const url = resolveEndpoint(preset.style, sysStr('ai_tutor.base_url'), preset.url);
     const temperature = opts.temperature
         ?? (Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.6);
-    const timeout = opts.timeoutMs ?? ((+system.get('ai_tutor.timeout') || 60) * 1000);
+    const cacheTtl: '5m' | '1h' = sysStr('ai_tutor.cache_ttl', '5m') === '1h' ? '1h' : '5m';
+    const headers: Record<string, string> = preset.style === 'anthropic'
+        ? {
+            'content-type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            ...(cacheEnabled() && cacheTtl === '1h' ? { 'anthropic-beta': 'extended-cache-ttl-2025-04-11' } : {}),
+        }
+        : {
+            'content-type': 'application/json',
+            // Ollama and other keyless local servers ignore auth; only send
+            // the header when a key is configured.
+            ...apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+        };
+    return {
+        apiKey, provider, preset, model, url, temperature, cacheTtl, headers,
+    };
+}
 
-    const msgs = mergeAlternating(messages);
-    const doFetch = async (body: any): Promise<Response> => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeout);
-        try {
-            return await fetch(url, {
-                method: 'POST',
-                signal: controller.signal,
-                headers: preset.style === 'anthropic'
-                    ? {
-                        'content-type': 'application/json',
-                        'x-api-key': apiKey,
-                        'anthropic-version': '2023-06-01',
-                    }
-                    : {
-                        'content-type': 'application/json',
-                        // Ollama and other keyless local servers ignore auth;
-                        // only send the header when a key is configured.
-                        ...apiKey ? { authorization: `Bearer ${apiKey}` } : {},
-                    },
-                body: JSON.stringify(body),
-            });
-        } catch (e) {
-            if (e.name === 'AbortError') throw new Error('The AI provider timed out. Please try again.');
-            throw new Error(`Cannot reach the AI provider at ${url}: ${e.message}`);
-        } finally {
-            clearTimeout(timer);
+/**
+ * The system prompt as the provider wants it. A plain string is sent as
+ * is. Prompt blocks (ai_prompt.buildPrompt) become Anthropic content
+ * blocks with `cache_control` breakpoints on the blocks flagged `cache`
+ * (the last stable block, and the per-thread summary), or one system
+ * message for OpenAI-style providers — whose caching is automatic on the
+ * identical prefix.
+ */
+function systemArgument(style: 'anthropic' | 'openai', systemPrompt: string | PromptBlock[], cacheTtl: '5m' | '1h'): any {
+    if (typeof systemPrompt === 'string') return systemPrompt;
+    if (style !== 'anthropic' || !cacheEnabled()) return prefixText(systemPrompt);
+    return systemPrompt.map((b) => ({
+        type: 'text',
+        text: b.text,
+        ...(b.cache ? { cache_control: cacheTtl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' } } : {}),
+    }));
+}
+
+/** The provider's Retry-After header (seconds or an HTTP date) as milliseconds, when present and sane. */
+function retryAfterMs(resp: Response): number | undefined {
+    const raw = resp.headers.get('retry-after');
+    if (!raw) return undefined;
+    const secs = +raw;
+    if (Number.isFinite(secs) && secs >= 0) return Math.min(60000, Math.round(secs * 1000));
+    const at = Date.parse(raw);
+    if (Number.isFinite(at)) return Math.min(60000, Math.max(0, at - Date.now()));
+    return undefined;
+}
+
+/** Errors thrown by the request layer carry the HTTP status (and the provider's Retry-After) so the scheduler can classify them. */
+function providerHttpError(status: number, url: string, detail: string, retryAfter?: number): Error {
+    const err: any = new Error(`AI provider returned HTTP ${status} from ${url}. ${detail}`);
+    err.status = status;
+    err.detail = detail;
+    if (retryAfter !== undefined) err.retryAfterMs = retryAfter;
+    return err;
+}
+
+/**
+ * NO CLIENT-SIDE TIMEOUT, by site policy: a call that the provider is
+ * working on (and billing) is never abandoned by a timer of ours. It ends
+ * when the provider ends it — a completed reply, an error status or event,
+ * or the provider closing the connection (Node's HTTP client reports a
+ * connection that has gone silent as a network error) — or when the
+ * CALLER cancels it (a student who left, an abandoned stream).
+ */
+async function sendRequest(req: ProviderRequest, signal: AbortSignal | undefined): Promise<Response> {
+    if (signal?.aborted) throw new AiAbortedError();
+    try {
+        return await fetch(req.url, {
+            method: 'POST',
+            signal,
+            headers: req.headers,
+            body: JSON.stringify(req.body),
+        });
+    } catch (e) {
+        if (e.name === 'AbortError' || signal?.aborted) throw new AiAbortedError();
+        const code = String(e?.cause?.code || '');
+        if (/UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_CONNECT_TIMEOUT/.test(code)) {
+            throw new Error(`The AI provider stopped responding (connection timed out: ${code}).`);
+        }
+        throw new Error(`Cannot reach the AI provider at ${req.url}: ${e?.cause?.message || e.message}`);
+    }
+}
+
+/**
+ * Send with the Anthropic max_tokens ladder and the "unsupported field"
+ * fallback: a 400 naming `max_tokens` retries with the next ceiling; a 400
+ * naming `stream_options` / `prompt_cache_key` retries without that field
+ * and remembers it for the rest of the process.
+ */
+async function sendWithFallbacks(req: ProviderRequest, signal: AbortSignal | undefined): Promise<Response> {
+    const LADDER = ANTHROPIC_LADDER;
+    let ladderIdx = Math.max(0, LADDER.indexOf(req.body.max_tokens));
+    let stepped = false;
+    let resp = await sendRequest(req, signal);
+    for (let guard = 0; guard < 6 && !resp.ok && resp.status === 400; guard++) {
+        const detail = await resp.clone().text().catch(() => '');
+        if (req.style === 'anthropic' && /max_tokens/i.test(detail) && ladderIdx < LADDER.length - 1) {
+            ladderIdx += 1;
+            stepped = true;
+            logger.info('anthropic rejected max_tokens=%d for %s; retrying with %d', req.body.max_tokens, req.model, LADDER[ladderIdx]);
+            req.body.max_tokens = LADDER[ladderIdx];
+        } else {
+            const dropped = ['stream_options', 'prompt_cache_key'].find((f) => f in req.body && new RegExp(f, 'i').test(detail));
+            if (!dropped) break;
+            logger.info('provider %s rejected the %s field; not sending it again', req.provider, dropped);
+            unsupportedFields.add(`${req.provider}:${dropped}`);
+            delete req.body[dropped];
+        }
+        resp = await sendRequest(req, signal);
+    }
+    if (stepped && resp.ok) acceptedMaxTokens.set(`${req.provider}:${req.model}`, req.body.max_tokens);
+    return resp;
+}
+
+/** Turn a provider-error status into the same wording the retry logic keys off. */
+async function throwProviderError(resp: Response, url: string): Promise<never> {
+    let detail = '';
+    try {
+        const t = await resp.text();
+        detail = t.slice(0, 300);
+    } catch (e) { /* ignore */ }
+    throw providerHttpError(resp.status, url, detail, retryAfterMs(resp));
+}
+
+/**
+ * Read a streamed reply. Both dialects are decoded to the same signals;
+ * text deltas go to the callbacks and are accumulated; usage is merged;
+ * there is no timer of ours anywhere: the read ends when the provider ends
+ * it (its completion signal, its error event, its connection) or when the
+ * caller cancels.
+ */
+async function readStream(
+    resp: Response, style: 'anthropic' | 'openai', opts: CallOptions, slot: AiSlot | undefined, signal: AbortSignal | undefined,
+): Promise<{ text: string, usage: AiUsage | null, stopReason: string, thinkingOnly: boolean, toolCalls: { id: string, name: string, args: string }[] }> {
+    const parser = new SseParser();
+    const decoder = new TextDecoder();
+    const decode = style === 'anthropic' ? decodeAnthropicEvent : decodeOpenAIEvent;
+    let text = '';
+    let usage: AiUsage | null = null;
+    let stopReason = '';
+    let sawThinking = false;
+    let done = false;
+    const tools = new Map<number, { id: string, name: string, args: string }>();
+    const body: any = resp.body;
+    if (!body) throw new Error('The AI provider sent no response body.');
+    const controller = new AbortController();
+    /*
+     * No timers here, by site policy (see sendRequest): the stream ends when
+     * the provider ends it. The one thing we do decide is COMPLETION after
+     * the provider's own stop reason — a gateway that omits `[DONE]` /
+     * `message_stop` sends nothing more once the reply is complete, so 1.5 s
+     * of silence after the stop reason closes the read (the usage chunk, if
+     * any, arrives within that window).
+     */
+    let stopSeen = false;
+    let completeTimer: any = null;
+    const armComplete = () => {
+        if (completeTimer) clearTimeout(completeTimer);
+        completeTimer = null;
+        if (stopSeen) completeTimer = setTimeout(() => controller.abort(new Error('complete')), 1500);
+    };
+    const onAbort = () => controller.abort(new AiAbortedError());
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const reader = typeof body.getReader === 'function' ? body.getReader() : null;
+    // One rejection for the whole read loop (a listener per chunk would leak).
+    const aborted = new Promise<never>((_, reject) => {
+        controller.signal.addEventListener('abort', () => reject(controller.signal.reason || new Error('aborted')), { once: true });
+    });
+    aborted.catch(() => { });
+    /*
+     * The loop ends when the PROTOCOL says the message is complete (OpenAI
+     * `[DONE]`, Anthropic `message_stop`) — not only when the connection
+     * closes. A provider or proxy that keeps the connection open after the
+     * last event would otherwise turn every finished reply into a timeout.
+     */
+    const iterate = async (fn: (chunk: string) => void) => {
+        if (reader) {
+            for (;;) {
+                const step = await Promise.race([reader.read(), aborted]) as { done: boolean, value?: Uint8Array };
+                if (step.done) break;
+                if (step.value) fn(decoder.decode(step.value, { stream: true }));
+                if (done) break;
+            }
+        } else {
+            for await (const chunk of body as AsyncIterable<Uint8Array>) {
+                if (controller.signal.aborted) throw controller.signal.reason || new Error('aborted');
+                fn(decoder.decode(chunk, { stream: true }));
+                if (done) break;
+            }
         }
     };
-    let resp: Response;
+    const handle = (sig: StreamSignal) => {
+        armComplete();
+        if (sig.kind === 'text') {
+            if (!text && slot) slot.markEmitted();
+            text += sig.text;
+            opts.onDelta?.(sig.text);
+        } else if (sig.kind === 'thinking') {
+            sawThinking = true;
+            opts.onThinking?.();
+        } else if (sig.kind === 'usage') {
+            usage = mergeStreamUsage(usage, normalizeUsage(sig.usage));
+        } else if (sig.kind === 'stop') {
+            stopReason = sig.reason;
+            stopSeen = true;
+            armComplete();
+        } else if (sig.kind === 'tool_start') {
+            if (!tools.size) opts.onToolStart?.(sig.name);
+            const cur = tools.get(sig.index);
+            if (cur) {
+                if (sig.id) cur.id = sig.id;
+                if (sig.name) cur.name = sig.name;
+            } else tools.set(sig.index, { id: sig.id, name: sig.name, args: '' });
+        } else if (sig.kind === 'tool_args') {
+            const cur = tools.get(sig.index) || { id: '', name: '', args: '' };
+            cur.args += sig.partial;
+            tools.set(sig.index, cur);
+        } else if (sig.kind === 'done') {
+            done = true;
+        } else if (sig.kind === 'error') {
+            throw new Error(`AI provider stream error: ${sig.message}`);
+        }
+    };
+    try {
+        await iterate((chunk) => {
+            for (const ev of parser.feed(chunk)) for (const sig of decode(ev)) handle(sig);
+        });
+        for (const ev of parser.end()) for (const sig of decode(ev)) handle(sig);
+    } catch (e) {
+        const reason = controller.signal.aborted ? controller.signal.reason : null;
+        if (reason instanceof AiAbortedError || signal?.aborted) throw new AiAbortedError();
+        if (reason && String(reason.message) === 'complete') {
+            // The reply is complete; only the connection lingered.
+        } else {
+            // The provider's connection failed mid-stream. Keep what it sent —
+            // it was generated and billed — unless there is nothing to keep.
+            if (!text.trim()) throw new Error(`The AI provider closed the connection before replying: ${String(e?.cause?.message || e?.message || e)}`);
+            logger.warn('provider stream ended abnormally after %d chars: %s', text.length, e?.message || e);
+        }
+    } finally {
+        if (completeTimer) clearTimeout(completeTimer);
+        signal?.removeEventListener('abort', onAbort);
+        // Release the connection even if the provider would keep it open.
+        try { await reader?.cancel?.(); } catch (e) { /* ignore */ }
+        try { reader?.releaseLock?.(); } catch (e) { /* ignore */ }
+    }
+    return {
+        text, usage, stopReason, thinkingOnly: !text.trim() && sawThinking, toolCalls: [...tools.values()],
+    };
+}
+
+/**
+ * ONE call to the configured provider. `systemPrompt` is a string or the
+ * prompt blocks of ai_prompt.buildPrompt (cached prefix). Outside a
+ * scheduler slot the call schedules itself with `opts.meta`; inside a
+ * slot it runs at once. With `onDelta` (or `stream`) the reply is streamed
+ * — deltas arrive as they are produced and the full text is still
+ * returned at the end, so every existing caller keeps working unchanged.
+ */
+export async function callProvider(
+    systemPrompt: string | PromptBlock[], messages: ChatMessage[],
+    opts: CallOptions = {},
+): Promise<string> {
+    const slot = currentSlot();
+    if (!slot) {
+        const meta: AiCallMeta = { feature: 'other', lane: 'background', ...(opts.meta || {}) } as AiCallMeta;
+        if (opts.signal) meta.signal = combineSignals(opts.signal, meta.signal);
+        return await aiScheduler.run(meta, (s) => callProvider(systemPrompt, messages, { ...opts, signal: combineSignals(opts.signal, s.signal) }));
+    }
+    const cfg = providerSettings(opts);
+    const { preset, model, url, temperature } = cfg;
+    const provider = cfg.provider;
+    const signal = combineSignals(opts.signal, slot.signal);
+    if (signal?.aborted) throw new AiAbortedError();
+    const stream = !!(opts.stream || opts.onDelta);
+    const msgs = mergeAlternating(messages);
+    const req: ProviderRequest = {
+        url, headers: cfg.headers, style: preset.style, provider, model, body: {},
+    };
     if (preset.style === 'anthropic') {
         // Site policy: never impose a token limit. Anthropic REQUIRES the
         // max_tokens field though, so "unlimited" means the model's own
-        // output ceiling — which differs per model. Walk a ladder of
-        // ceilings and fall back automatically when the API says the value
-        // exceeds this model's cap.
-        const LADDER = [64000, 32000, 8192, 4096];
-        resp = await doFetch({
-            model, max_tokens: LADDER[0], temperature, system: systemPrompt, messages: msgs,
-        });
-        for (let i = 1; i < LADDER.length && !resp.ok && resp.status === 400; i++) {
-            const detail = await resp.clone().text().catch(() => '');
-            if (!/max_tokens/i.test(detail)) break;
-            logger.info('anthropic rejected max_tokens=%d for %s; retrying with %d', LADDER[i - 1], model, LADDER[i]);
-            resp = await doFetch({
-                model, max_tokens: LADDER[i], temperature, system: systemPrompt, messages: msgs,
-            });
-        }
+        // output ceiling — sendWithFallbacks walks a ladder of ceilings.
+        req.body = {
+            model, max_tokens: startMaxTokens(provider, model), temperature, system: systemArgument('anthropic', systemPrompt, cfg.cacheTtl), messages: msgs, ...(stream ? { stream: true } : {}),
+        };
     } else {
         // OpenAI-compatible: omitting max_tokens imposes no limit — the
         // provider/model's own default ceiling applies.
-        resp = await doFetch({
+        req.body = {
             model,
             temperature,
-            messages: [{ role: 'system', content: systemPrompt }, ...msgs],
-        });
-    }
-    if (!resp.ok) {
-        let detail = '';
-        try {
-            const t = await resp.text();
-            detail = t.slice(0, 300);
-        } catch (e) { /* ignore */ }
-        throw new Error(`AI provider returned HTTP ${resp.status} from ${url}. ${detail}`);
-    }
-    const data: any = await resp.json();
-    // Robust text extraction: strings, arrays of parts, {type:'text'|'output_text'}.
-    const collectText = (v: any): string => {
-        if (v == null) return '';
-        if (typeof v === 'string') return v;
-        if (Array.isArray(v)) return v.map(collectText).filter((x) => x).join('\n');
-        if (typeof v === 'object') {
-            if (typeof v.text === 'string' && (!v.type || v.type === 'text' || v.type === 'output_text')) return v.text;
-            return '';
+            messages: [{ role: 'system', content: systemArgument('openai', systemPrompt, cfg.cacheTtl) }, ...msgs],
+        };
+        if (stream) {
+            req.body.stream = true;
+            if (provider !== 'ollama' && !unsupportedFields.has(`${provider}:stream_options`)) req.body.stream_options = { include_usage: true };
         }
-        return '';
-    };
+        if (opts.cacheKey && cacheEnabled() && provider !== 'ollama' && !unsupportedFields.has(`${provider}:prompt_cache_key`)) {
+            req.body.prompt_cache_key = opts.cacheKey.slice(0, 64);
+        }
+    }
+    const resp = await sendWithFallbacks(req, signal);
+    if (!resp.ok) await throwProviderError(resp, url);
+
     let text = '';
     let finishReason = '';
-    if (preset.style === 'anthropic') {
-        text = collectText(data.content);
-        finishReason = data.stop_reason || '';
-        if (!text.trim() && finishReason === 'max_tokens'
-            && Array.isArray(data.content) && data.content.some((c: any) => c?.type === 'thinking')) {
-            logger.warn('provider %s/%s spent the whole budget on thinking blocks (stop_reason=max_tokens)', provider, model);
-            throw new Error('The AI model spent its entire token budget "thinking" and produced no final answer. Please switch to a non-reasoning model, or ask the administrator to check the provider limits.');
-        }
+    let usage: AiUsage | null = null;
+    let thinkingOnly = false;
+    if (stream && /text\/event-stream/i.test(resp.headers.get('content-type') || '')) {
+        const out = await readStream(resp, preset.style, opts, slot, signal);
+        text = out.text;
+        finishReason = out.stopReason;
+        usage = out.usage;
+        thinkingOnly = out.thinkingOnly;
     } else {
-        const choice = data.choices?.[0] || {};
-        text = collectText(choice.message?.content) || collectText(choice.text);
-        finishReason = choice.finish_reason || '';
-        if (!text.trim() && typeof choice.message?.reasoning_content === 'string' && choice.message.reasoning_content.trim()) {
-            logger.warn('provider %s/%s returned only reasoning_content (finish_reason=%s)', provider, model, finishReason || 'n/a');
-            throw new Error(`The AI model spent its entire token budget "thinking" (finish reason: ${finishReason || 'unknown'}) and produced no final answer. Please switch to a non-reasoning model, or ask the administrator to check the provider limits.`);
+        const data: any = await resp.json();
+        // Robust text extraction: strings, arrays of parts, {type:'text'|'output_text'}.
+        const collectText = (v: any): string => {
+            if (v == null) return '';
+            if (typeof v === 'string') return v;
+            if (Array.isArray(v)) return v.map(collectText).filter((x) => x).join('\n');
+            if (typeof v === 'object') {
+                if (typeof v.text === 'string' && (!v.type || v.type === 'text' || v.type === 'output_text')) return v.text;
+                return '';
+            }
+            return '';
+        };
+        usage = normalizeUsage(data.usage);
+        if (preset.style === 'anthropic') {
+            text = collectText(data.content);
+            finishReason = data.stop_reason || '';
+            thinkingOnly = !text.trim() && finishReason === 'max_tokens'
+                && Array.isArray(data.content) && data.content.some((c: any) => c?.type === 'thinking');
+        } else {
+            const choice = data.choices?.[0] || {};
+            text = collectText(choice.message?.content) || collectText(choice.text);
+            finishReason = choice.finish_reason || '';
+            thinkingOnly = !text.trim() && typeof choice.message?.reasoning_content === 'string' && !!choice.message.reasoning_content.trim();
         }
+        if (!text.trim() && !thinkingOnly) {
+            logger.warn(
+                'empty AI response from %s/%s (finish/stop reason: %s), raw payload: %s',
+                provider, model, finishReason || 'n/a', JSON.stringify(data).slice(0, 600),
+            );
+        }
+        // A non-streamed reply that the caller wanted streamed: deliver it whole.
+        if (text.trim() && opts.onDelta) {
+            slot.markEmitted();
+            opts.onDelta(text);
+        }
+    }
+    if (usage) {
+        slot.setUsage(usage);
+        opts.onUsage?.(usage);
+    }
+    if (thinkingOnly) {
+        logger.warn('provider %s/%s spent the whole budget on thinking (finish reason=%s)', provider, model, finishReason || 'n/a');
+        throw new Error(`The AI model spent its entire token budget "thinking"${finishReason ? ` (finish reason: ${finishReason})` : ''} and produced no final answer. Please switch to a non-reasoning model, or ask the administrator to check the provider limits.`);
     }
     text = (text || '').trim();
     if (!text) {
-        logger.warn(
-            'empty AI response from %s/%s (finish/stop reason: %s), raw payload: %s',
-            provider, model, finishReason || 'n/a', JSON.stringify(data).slice(0, 600),
-        );
         throw new Error(`The AI provider returned an empty response${finishReason ? ` (finish reason: ${finishReason})` : ''}. The backend log has the raw payload.`);
     }
     return text;
@@ -376,7 +777,6 @@ function normalizeJudgeTexts(texts: any[]): string {
         .filter((t) => t)
         .join('\n');
 }
-
 
 /* ------------------------------------------------------------------ */
 /*  Objective statement markers (used by the AI Studio's objective      */
@@ -605,6 +1005,20 @@ export interface TutorTurnContext {
      * failed-verdict turns.
      */
     ownership?: { asked: number, min: number, max: number };
+    /** The student (fairness key of the scheduler); defaults to rdoc.uid. */
+    uid?: number;
+    /** The tutoring thread: its rolling summary and the code last sent (ai-speedup WP4). */
+    thread?: Pick<TutorThreadDoc, 'summary' | 'lastSentCode'> | null;
+}
+
+/** Per-call options shared by the tutor engines (ai-speedup WP2/WP4). */
+export interface TutorCallOptions {
+    /** Stream the reply text as it is written. */
+    onDelta?: (text: string) => void;
+    /** Caller gone → abort. */
+    signal?: AbortSignal;
+    /** The code that was sent in full or as a diff (so the caller can record `lastSentCode`). */
+    onCodeSent?: (code: string) => void;
 }
 
 /**
@@ -620,17 +1034,33 @@ export function problemKindOf(config: any): ProblemKind {
     return 'programming';
 }
 
-export function buildContextBlock(c: TutorTurnContext): string {
-    const statement = extractStatement(c.pdoc, c.uiLang);
-    const conf: any = (c.pdoc.config && typeof c.pdoc.config === 'object') ? c.pdoc.config : {};
+/**
+ * The TASK part of a tutor prompt — identical for every student on the
+ * task, so it lives in the cached prefix (ai_prompt.buildPrompt).
+ */
+export function tutorTaskContext(pdoc: ProblemDoc, uiLang: string) {
+    const conf: any = (pdoc.config && typeof pdoc.config === 'object') ? pdoc.config : {};
+    return {
+        domainId: pdoc.domainId,
+        pid: pdoc.docId,
+        title: String(pdoc.title || pdoc.pid || pdoc.docId),
+        label: pdoc.pid ? String(pdoc.pid) : '',
+        statement: extractStatement(pdoc, uiLang),
+        limits: { time: conf.timeMax || conf.time || '', memory: conf.memoryMax || conf.memory || '' },
+        knowledgePoints: stableList(Array.isArray(pdoc.tag) ? pdoc.tag : []),
+    };
+}
+
+/**
+ * The student's own material for a chat turn: attempt history, the latest
+ * code (in full, or as a diff against the code the tutor already saw —
+ * ai_prompt.codeDelta decides), the verdict briefing, the hint level.
+ * Statement and limits are NOT here any more — they are in the prefix.
+ */
+export function buildStudentBlock(c: TutorTurnContext, opts: TutorCallOptions = {}): string {
     const lines = [
         '[SESSION CONTEXT]',
-        `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
         'Problem kind: programming',
-        `Limits: time ${conf.timeMax || conf.time || '?'}ms, memory ${conf.memoryMax || conf.memory || '?'}MB`,
-        '--- Problem statement (may be truncated) ---',
-        statement || '(statement unavailable — rely on the student to describe it)',
-        '--- End of statement ---',
         `Attempt number for this student on this problem: ${c.attemptCount}`,
         `Student has ever solved this problem before: ${c.everAccepted ? 'yes' : 'no'}`,
     ];
@@ -646,19 +1076,46 @@ export function buildContextBlock(c: TutorTurnContext): string {
         lines.push('--- End of submission history ---');
     }
     if (c.rdoc) {
+        const code = String(c.rdoc.code || '');
+        const delta = code ? codeDelta(c.thread?.lastSentCode?.text ?? null, truncate(code, 8000)) : { mode: 'full' as const, text: '' };
         lines.push(
             `Submission language: ${c.rdoc.lang}`,
-            '--- Student code (may be truncated) ---',
-            truncate(c.rdoc.code || '(code stored as file, unavailable)', 8000),
+            delta.mode === 'diff' ? '--- Student code: CHANGES since the version you already saw ---' : '--- Student code (may be truncated) ---',
+            delta.text || '(code stored as file, unavailable)',
             '--- End of code ---',
             '--- Judge verdict briefing ---',
             buildVerdictBriefing(c.rdoc),
             '--- End of verdict ---',
         );
+        if (code) opts.onCodeSent?.(truncate(code, 8000));
     }
     const hintLevel = Math.min(4, Math.max(0, c.attemptCount - 1));
     lines.push(`Current hint level: L${hintLevel} (escalate per the ladder rules only).`);
     return lines.join('\n');
+}
+
+/**
+ * Legacy shape (statement included), kept for callers that build a single
+ * self-contained block. New code goes through tutorTaskContext + buildStudentBlock.
+ */
+export function buildContextBlock(c: TutorTurnContext): string {
+    const statement = extractStatement(c.pdoc, c.uiLang);
+    const conf: any = (c.pdoc.config && typeof c.pdoc.config === 'object') ? c.pdoc.config : {};
+    return [
+        `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
+        `Limits: time ${conf.timeMax || conf.time || '?'}ms, memory ${conf.memoryMax || conf.memory || '?'}MB`,
+        '--- Problem statement (may be truncated) ---',
+        statement || '(statement unavailable — rely on the student to describe it)',
+        '--- End of statement ---',
+        buildStudentBlock({ ...c, thread: null }),
+    ].join('\n');
+}
+
+/** The scheduler meta of a tutor-facing call. */
+export function tutorMeta(c: TutorTurnContext, feature: string, extra: Partial<AiCallMeta> = {}): AiCallMeta {
+    return {
+        feature, lane: 'interactive', uid: c.uid ?? c.rdoc?.uid ?? 0, ...extra,
+    };
 }
 
 /** Convert stored thread messages into provider messages, windowed. */
@@ -688,51 +1145,42 @@ export type AgentMessage =
  * assistant's text and any tool calls it wants made; the caller runs the
  * tools and calls again with `tool` messages appended. Kept beside
  * callProvider so both share settings, endpoint resolution, headers, the
- * timeout and the Anthropic max_tokens ladder.
+ * the Anthropic max_tokens ladder.
+ */
+export interface ToolCallOptions extends CallOptions {
+    /** Fired when the model starts a tool call in a streamed round (the UI shows a status line). */
+    onToolCall?: (name: string) => void;
+}
+
+/**
+ * Like callProvider, but with NATIVE tool calling on the providers this
+ * site runs (DeepSeek and OpenAI speak the OpenAI `tools` protocol;
+ * Anthropic speaks `tool_use` / `tool_result` blocks). Returns the
+ * assistant's text and any tool calls it wants made; the caller runs the
+ * tools and calls again with `tool` messages appended. Kept beside
+ * callProvider so both share settings, endpoint resolution, headers, the
+ * the Anthropic max_tokens ladder, the scheduler slot and the
+ * streaming reader. When streamed, text deltas are forwarded until the
+ * first tool call of the round appears (the assistant then reports a
+ * status instead of half a sentence).
  */
 export async function callProviderWithTools(
-    systemPrompt: string, messages: AgentMessage[], tools: ToolSpec[],
-    opts: { temperature?: number, timeoutMs?: number, model?: string } = {},
+    systemPrompt: string | PromptBlock[], messages: AgentMessage[], tools: ToolSpec[],
+    opts: ToolCallOptions = {},
 ): Promise<{ text: string, toolCalls: ToolCall[] }> {
-    if (!tutorEnabled()) throw new Error('The AI tutor is disabled by the administrator.');
-    const apiKey = sysStr('ai_tutor.api_key').trim();
-    const provider = sysStr('ai_tutor.provider', 'claude') || 'claude';
-    if (!apiKey && !KEYLESS_PROVIDERS.includes(provider)) throw new Error('The AI assistant is not configured yet (missing API key).');
-    const preset = PROVIDERS[provider] || PROVIDERS.claude;
-    const model = (String(opts?.model || '').trim() || sysStr('ai_tutor.model') || preset.defaultModel).trim();
-    const url = resolveEndpoint(preset.style, sysStr('ai_tutor.base_url'), preset.url);
-    const temperature = opts.temperature
-        ?? (Number.isFinite(+system.get('ai_tutor.temperature')) ? +system.get('ai_tutor.temperature') : 0.4);
-    const timeout = opts.timeoutMs ?? ((+system.get('ai_tutor.timeout') || 60) * 1000);
-
-    const doFetch = async (body: any): Promise<any> => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeout);
-        try {
-            const resp = await fetch(url, {
-                method: 'POST',
-                signal: controller.signal,
-                headers: preset.style === 'anthropic'
-                    ? { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-                    : { 'content-type': 'application/json', ...apiKey ? { authorization: `Bearer ${apiKey}` } : {} },
-                body: JSON.stringify(body),
-            });
-            const text = await resp.text();
-            let json: any = {};
-            try { json = JSON.parse(text); } catch { /* handled below */ }
-            if (!resp.ok) {
-                const detail = json?.error?.message || json?.message || text.slice(0, 300);
-                const err: any = new Error(`AI provider error (${resp.status}): ${detail}`);
-                err.status = resp.status; err.detail = detail;
-                throw err;
-            }
-            return json;
-        } catch (e: any) {
-            if (e.name === 'AbortError') throw new Error('The AI provider timed out. Please try again.');
-            throw e;
-        } finally {
-            clearTimeout(timer);
-        }
+    const slot = currentSlot();
+    if (!slot) {
+        const meta: AiCallMeta = { feature: 'assistant', lane: 'interactive', ...(opts.meta || {}) } as AiCallMeta;
+        if (opts.signal) meta.signal = combineSignals(opts.signal, meta.signal);
+        return await aiScheduler.run(meta, (s) => callProviderWithTools(systemPrompt, messages, tools, { ...opts, signal: combineSignals(opts.signal, s.signal) }));
+    }
+    const cfg = providerSettings(opts);
+    const { preset, model, url, temperature } = cfg;
+    const signal = combineSignals(opts.signal, slot.signal);
+    if (signal?.aborted) throw new AiAbortedError();
+    const stream = !!(opts.stream || opts.onDelta);
+    const req: ProviderRequest = {
+        url, headers: cfg.headers, style: preset.style, provider: cfg.provider, model, body: {},
     };
 
     if (preset.style === 'anthropic') {
@@ -752,51 +1200,96 @@ export async function callProviderWithTools(
                 else msgs.push({ role: 'user', content: [block] });
             }
         }
-        const body = {
-            model, temperature, system: systemPrompt, messages: msgs,
+        req.body = {
+            model, max_tokens: startMaxTokens(cfg.provider, model), temperature, system: systemArgument('anthropic', systemPrompt, cfg.cacheTtl), messages: msgs,
             tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+            ...(stream ? { stream: true } : {}),
         };
-        const LADDER = [64000, 32000, 16000, 8192, 4096];
-        let json: any = null;
-        for (let i = 0; i < LADDER.length; i++) {
-            try {
-                // eslint-disable-next-line no-await-in-loop
-                json = await doFetch({ ...body, max_tokens: LADDER[i] });
-                break;
-            } catch (e: any) {
-                if (!(e.status === 400 && /max_tokens/i.test(String(e.detail || ''))) || i === LADDER.length - 1) throw e;
-            }
+    } else {
+        const msgs: any[] = [{ role: 'system', content: systemArgument('openai', systemPrompt, cfg.cacheTtl) }];
+        for (const m of messages) {
+            if (m.role === 'user') msgs.push({ role: 'user', content: m.content });
+            else if (m.role === 'assistant') {
+                msgs.push({
+                    role: 'assistant',
+                    content: m.content || null,
+                    ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } })) } : {}),
+                });
+            } else msgs.push({ role: 'tool', tool_call_id: m.callId, content: m.content });
         }
-        const blocks: any[] = json?.content || [];
+        req.body = {
+            model, temperature, messages: msgs,
+            tools: tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+        };
+        if (stream) {
+            req.body.stream = true;
+            if (cfg.provider !== 'ollama' && !unsupportedFields.has(`${cfg.provider}:stream_options`)) req.body.stream_options = { include_usage: true };
+        }
+        if (opts.cacheKey && cacheEnabled() && cfg.provider !== 'ollama' && !unsupportedFields.has(`${cfg.provider}:prompt_cache_key`)) {
+            req.body.prompt_cache_key = opts.cacheKey.slice(0, 64);
+        }
+    }
+    const resp = await sendWithFallbacks(req, signal);
+    if (!resp.ok) await throwProviderError(resp, url);
+
+    const parseArgs = (raw: any): Record<string, any> => {
+        if (raw && typeof raw === 'object') return raw;
+        try {
+            const v = JSON.parse(String(raw || '{}'));
+            return v && typeof v === 'object' ? v : {};
+        } catch (e) {
+            return {};
+        }
+    };
+
+    if (stream && /text\/event-stream/i.test(resp.headers.get('content-type') || '')) {
+        let toolSeen = false;
+        const out = await readStream(resp, preset.style, {
+            ...opts,
+            onDelta: (t) => { if (!toolSeen) opts.onDelta?.(t); },
+            onToolStart: (name) => {
+                // From here on the round is a tool call: the status line takes over.
+                toolSeen = true;
+                opts.onToolCall?.(name);
+            },
+        }, slot, signal);
+        if (out.toolCalls.length && !toolSeen) opts.onToolCall?.(out.toolCalls[0].name);
+        if (out.usage) {
+            slot.setUsage(out.usage);
+            opts.onUsage?.(out.usage);
+        }
         return {
-            text: blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim(),
-            toolCalls: blocks.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, name: b.name, args: b.input || {} })),
+            text: out.text.trim(),
+            toolCalls: out.toolCalls.filter((c) => c.name).map((c) => ({ id: c.id || `call_${Math.random().toString(36).slice(2, 10)}`, name: c.name, args: parseArgs(c.args) })),
         };
     }
 
-    // OpenAI-compatible (DeepSeek, OpenAI).
-    const msgs: any[] = [{ role: 'system', content: systemPrompt }];
-    for (const m of messages) {
-        if (m.role === 'user') msgs.push({ role: 'user', content: m.content });
-        else if (m.role === 'assistant') {
-            msgs.push({
-                role: 'assistant',
-                content: m.content || null,
-                ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } })) } : {}),
-            });
-        } else msgs.push({ role: 'tool', tool_call_id: m.callId, content: m.content });
+    const json: any = await resp.json();
+    const usage = normalizeUsage(json?.usage);
+    if (usage) {
+        slot.setUsage(usage);
+        opts.onUsage?.(usage);
     }
-    const json = await doFetch({
-        model, temperature, messages: msgs,
-        tools: tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
-    });
+    if (preset.style === 'anthropic') {
+        const blocks: any[] = json?.content || [];
+        const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+        const toolCalls = blocks.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, name: b.name, args: b.input || {} }));
+        if (text && opts.onDelta && !toolCalls.length) {
+            slot.markEmitted();
+            opts.onDelta(text);
+        }
+        if (toolCalls.length) opts.onToolCall?.(toolCalls[0].name);
+        return { text, toolCalls };
+    }
     const choice = json?.choices?.[0]?.message || {};
-    const calls: ToolCall[] = (choice.tool_calls || []).map((c: any) => {
-        let args: any = {};
-        try { args = JSON.parse(c.function?.arguments || '{}'); } catch { args = {}; }
-        return { id: c.id, name: c.function?.name, args };
-    });
-    return { text: String(choice.content || '').trim(), toolCalls: calls };
+    const calls: ToolCall[] = (choice.tool_calls || []).map((c: any) => ({ id: c.id, name: c.function?.name, args: parseArgs(c.function?.arguments) }));
+    const text = String(choice.content || '').trim();
+    if (text && opts.onDelta && !calls.length) {
+        slot.markEmitted();
+        opts.onDelta(text);
+    }
+    if (calls.length) opts.onToolCall?.(calls[0].name);
+    return { text, toolCalls: calls };
 }
 
 export function historyToChat(messages: TutorMessage[], keep = 30): ChatMessage[] {
@@ -814,19 +1307,90 @@ export function historyToChat(messages: TutorMessage[], keep = 30): ChatMessage[
     });
 }
 
+/**
+ * The conversation window of a chat turn: the whole (windowed) history
+ * until a rolling summary exists, then the summary (in the prefix) plus
+ * the turns after it — never fewer than the last two exchanges verbatim.
+ */
+export function windowedHistory(history: TutorMessage[], summary?: TutorThreadDoc['summary'] | null): TutorMessage[] {
+    if (!summary?.text || !Number.isFinite(+summary.upToIndex)) return history.slice(-30);
+    const from = Math.min(Math.max(0, +summary.upToIndex), Math.max(0, history.length - 4));
+    return history.slice(from);
+}
+
 export async function runTutorTurn(
     ctx: TutorTurnContext,
     history: TutorMessage[],
     directive: string,
+    opts: TutorCallOptions = {},
 ): Promise<string> {
-    const systemPrompt = buildSocraticSystemPrompt(ctx.uiLang);
-    const messages: ChatMessage[] = [
-        { role: 'user', content: buildContextBlock(ctx) },
+    const rules = memoByVersion(`tutor.rules:${ctx.uiLang}`, 'v1', () => buildSocraticSystemPrompt(ctx.uiLang));
+    const summary = ctx.thread?.summary || null;
+    const variable: ChatMessage[] = [
+        { role: 'user', content: buildStudentBlock(ctx, opts) },
         { role: 'assistant', content: 'Understood. I have privately analyzed the context and I am ready to tutor Socratically under all the rules.' },
-        ...historyToChat(history),
+        ...historyToChat(windowedHistory(history, summary), 30),
     ];
-    if (directive) messages.push({ role: 'user', content: directive });
-    return await callProvider(systemPrompt, messages);
+    if (directive) variable.push({ role: 'user', content: directive });
+    const prompt = buildPrompt({
+        feature: 'tutor', rules, task: tutorTaskContext(ctx.pdoc, ctx.uiLang), summary: summary?.text || '', variable,
+    });
+    return await callProvider(prompt.prefix, prompt.variable, {
+        onDelta: opts.onDelta, signal: opts.signal, cacheKey: prompt.cacheKey, meta: tutorMeta(ctx, 'tutor'),
+    });
+}
+
+/* ------------------------------------------------------------------ */
+/*  WP4 — rolling thread summaries                                     */
+/* ------------------------------------------------------------------ */
+
+/** Student turns in a thread (what the summary cadence counts). */
+export function studentTurnsOf(messages: TutorMessage[]): number {
+    return messages.filter((m) => m.role === 'user' && (m.kind === 'chat' || m.kind === 'anno' || !m.kind)).length;
+}
+
+/**
+ * Whether the thread is due for a (new) summary: every `ai_tutor.summary_every`
+ * student turns once it holds at least six messages.
+ */
+export function threadSummaryDue(thread: Pick<TutorThreadDoc, 'messages' | 'summary'>): boolean {
+    const every = Math.max(1, numSetting('ai_tutor.summary_every', 4));
+    const msgs = thread.messages || [];
+    if (!summaryDue(studentTurnsOf(msgs), msgs.length, every)) return false;
+    // Nothing new since the last summary: nothing to fold in.
+    return !thread.summary || msgs.length - (thread.summary.upToIndex || 0) >= 2;
+}
+
+/**
+ * Build the updated five-line summary of a thread from the previous summary
+ * and the turns since it. Temperature 0; the cheap `summary_model` when
+ * set; the word budget enforced by a re-ask, then a sentence-boundary cut
+ * (of a SUMMARY, never of a tutor reply). Returns null when there is
+ * nothing to summarise.
+ */
+export async function summarizeThread(
+    thread: Pick<TutorThreadDoc, 'messages' | 'summary'>, uid = 0,
+): Promise<{ text: string, upToIndex: number } | null> {
+    const msgs = thread.messages || [];
+    const since = Math.max(0, thread.summary?.upToIndex || 0);
+    const fresh = msgs.slice(since);
+    if (!fresh.length) return null;
+    const transcript = historyToChat(fresh, 40)
+        .map((m) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${truncate(m.content, 700, '...')}`)
+        .join('\n');
+    const prev = thread.summary?.text ? `Previous summary:\n${thread.summary.text}\n\n` : '';
+    const model = sysStr('ai_tutor.summary_model').trim();
+    const meta: AiCallMeta = {
+        feature: 'summary', lane: 'background', priority: 1, uid,
+    };
+    const ask = async (extra = '') => callProvider(THREAD_SUMMARY_PROMPT, [{ role: 'user', content: `${prev}New turns:\n${transcript}${extra}` }], {
+        temperature: 0, meta, ...(model ? { model } : {}),
+    });
+    let text = await ask();
+    if (wordCount(text) > 120) text = await ask('\n\n(Your previous attempt was too long. Answer again in at most 120 words in total.)');
+    text = limitSummary(text);
+    if (!text) return null;
+    return { text, upToIndex: msgs.length };
 }
 
 /* ------------------------------------------------------------------ */
@@ -849,8 +1413,6 @@ export interface AnnotationDialogueResult {
      */
     level: number | null;
 }
-
-const logger = new Logger('ai-tutor');
 
 /*
  * ⚖️ Shared integrity clauses for EVERY LLM judge. Two rules, applied
@@ -1029,13 +1591,27 @@ function parseAnnotationObject(raw: string, codeLineCount: number, asked: string
     return { line, endLine, question };
 }
 
+/** The cached task prefix of the annotation engines (statement capped at 2500 chars, as before). */
+function annotationTaskContext(c: TutorTurnContext) {
+    const conf: any = (c.pdoc.config && typeof c.pdoc.config === 'object') ? c.pdoc.config : {};
+    return {
+        domainId: c.pdoc.domainId,
+        pid: c.pdoc.docId,
+        title: String(c.pdoc.title || c.pdoc.pid || c.pdoc.docId),
+        label: c.pdoc.pid ? String(c.pdoc.pid) : '',
+        statement: statementForPrompt(c.pdoc, c.uiLang, 2500),
+        limits: { time: conf.timeMax || conf.time || '', memory: conf.memoryMax || conf.memory || '' },
+        knowledgePoints: stableList(Array.isArray(c.pdoc.tag) ? c.pdoc.tag : []),
+    };
+}
+
 /**
  * One provider call that returns the SINGLE next line-anchored Socratic
  * question for the student's latest submission (or null when the tutor has
  * nothing more worth asking). Strictly validated; any failure degrades to
  * null — annotations are best-effort.
  */
-export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = []): Promise<TutorAnnotation | null> {
+export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = [], opts: TutorCallOptions = {}): Promise<TutorAnnotation | null> {
     if (!c.rdoc || (c.problemKind || 'programming') !== 'programming') return null;
     const submitted = String(c.rdoc.code || '');
     const live = String(c.liveCode || '');
@@ -1043,11 +1619,10 @@ export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = [
     // Anchors must match what the student SEES: the current editor code once
     // they start applying fixes mid-session.
     const codeLineCount = (liveDiffers ? live : submitted).split('\n').length;
+    // The statement is in the cached prefix (shared by everyone on the task);
+    // the variable part below carries only this student's material.
     const user = [
         `Write the question in ${annotationLanguage(c.uiLang)}.`,
-        `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
-        '--- Problem statement (may be truncated) ---',
-        statementForPrompt(c.pdoc, c.uiLang, 2500),
         c.attempts?.length
             ? `--- Prior attempt verdicts (oldest first) ---\n${c.attempts.map((a, i) => `#${i + 1}: ${a.statusText} (score ${a.score})`).join('\n')}`
             : '',
@@ -1066,8 +1641,23 @@ export async function runAnnotationTurn(c: TutorTurnContext, asked: string[] = [
     ].filter((x) => x).join('\n');
     let raw = '';
     try {
-        raw = await callProvider(ANNOTATION_SYSTEM_PROMPT, [{ role: 'user', content: user }]);
+        const prompt = buildPrompt({
+            feature: 'annotate', rules: ANNOTATION_SYSTEM_PROMPT, task: annotationTaskContext(c), variable: [{ role: 'user', content: user }],
+        });
+        // The question text streams word by word (ai_stream.JsonFieldStreamer)
+        // while the JSON object around it is still being written.
+        const fieldStream = opts.onDelta ? new JsonFieldStreamer('question', opts.onDelta) : null;
+        raw = await callProvider(prompt.prefix, prompt.variable, {
+            signal: opts.signal,
+            cacheKey: prompt.cacheKey,
+            // Class 0, like the reply: the student is waiting for this question
+            // exactly as they wait for a reply — a lower class would put them
+            // behind every other student's reply when slots are scarce.
+            meta: tutorMeta(c, 'annotate'),
+            ...(fieldStream ? { onDelta: (t: string) => fieldStream.feed(t) } : {}),
+        });
     } catch (e) {
+        if (e instanceof AiAbortedError || e instanceof AiBusyError) throw e;
         logger.warn('annotation provider call failed: %s', e.message);
         return null;
     }
@@ -1094,7 +1684,7 @@ export interface AnnotationDialogueInput {
  * short reply and whether the question is now resolved. Malformed model
  * output degrades to an unresolved plain-text reply.
  */
-export async function runAnnotationDialogue(c: TutorTurnContext, input: AnnotationDialogueInput): Promise<AnnotationDialogueResult> {
+export async function runAnnotationDialogue(c: TutorTurnContext, input: AnnotationDialogueInput, opts: TutorCallOptions = {}): Promise<AnnotationDialogueResult> {
     const code = c.liveCode || c.rdoc?.code || '';
     const codeLines = String(code).split('\n');
     const line = Math.min(Math.max(1, input.line), codeLines.length);
@@ -1103,13 +1693,16 @@ export async function runAnnotationDialogue(c: TutorTurnContext, input: Annotati
     const transcript = (input.history || []).slice(-12)
         .map((h) => `${h.role === 'student' ? 'Student' : 'Tutor'}: ${truncate(String(h.content || ''), 600, '...')}`)
         .join('\n');
+    // Long files the tutor already saw are sent as a diff (ai_prompt.codeDelta);
+    // the anchored lines are always quoted verbatim right below.
+    const delta = codeDelta(c.thread?.lastSentCode?.text ?? null, String(code));
+    if (code) opts.onCodeSent?.(String(code));
     const user = [
         `Write the reply in ${annotationLanguage(c.uiLang)}.`,
-        `Problem: ${c.pdoc.title || c.pdoc.pid || c.pdoc.docId}`,
         c.rdoc ? `Overall verdict: ${STATUS_TEXTS[c.rdoc.status] || c.rdoc.status} (score ${c.rdoc.score ?? 0})` : '',
         input.firstAttempt ? 'First-attempt acceptance: YES (apply the ownership leniency when grading).' : '',
-        '--- Student code (line-numbered) ---',
-        numberedCode(code),
+        delta.mode === 'diff' ? '--- Student code: CHANGES since the version you already saw (line numbers in the hunk headers) ---' : '--- Student code (line-numbered) ---',
+        delta.mode === 'diff' ? delta.text : numberedCode(code),
         `--- Anchored lines ${line}-${endLine} ---`,
         anchored,
         '--- Your question ---',
@@ -1119,7 +1712,18 @@ export async function runAnnotationDialogue(c: TutorTurnContext, input: Annotati
         truncate(String(input.answer || ''), 1000, '...'),
         'Respond with the JSON object only.',
     ].filter((x) => x).join('\n');
-    const raw = await callProvider(ANNOTATION_DIALOGUE_PROMPT, [{ role: 'user', content: user }]);
+    const prompt = buildPrompt({
+        feature: 'tutor', rules: ANNOTATION_DIALOGUE_PROMPT, task: annotationTaskContext(c), variable: [{ role: 'user', content: user }],
+    });
+    // The reply is JSON; the "reply" field is streamed word by word while
+    // the object is still being written (ai_stream.JsonFieldStreamer).
+    const fieldStream = opts.onDelta ? new JsonFieldStreamer('reply', opts.onDelta) : null;
+    const raw = await callProvider(prompt.prefix, prompt.variable, {
+        signal: opts.signal,
+        cacheKey: prompt.cacheKey,
+        meta: tutorMeta(c, 'tutor'),
+        ...(fieldStream ? { onDelta: (t: string) => fieldStream.feed(t) } : {}),
+    });
     const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
     try {
         const start = cleaned.indexOf('{');
@@ -1209,12 +1813,10 @@ COVER AT LEAST THESE SECTIONS (add more when genuinely useful):
 
 Target length: 600-1100 words plus code blocks. Be specific, kind, and honest.`;
 
-/** One comprehensive Markdown report over the full submission trajectory. */
-export async function runSuggestionsReport(c: SuggestionsContext): Promise<string> {
+/** One comprehensive Markdown report over the full submission trajectory (streams when onDelta is given). */
+export async function runSuggestionsReport(c: SuggestionsContext, opts: TutorCallOptions & { uid?: number } = {}): Promise<string> {
     const finalAccepted = c.attempts.map((a) => a.accepted).lastIndexOf(true);
     const lines: string[] = [
-        '--- Problem statement (may be truncated) ---',
-        statementForPrompt(c.pdoc, c.uiLang, 3000),
         `--- Submission history (${c.attempts.length} attempt(s), oldest first; timestamps are ISO-8601) ---`,
     ];
     c.attempts.forEach((a, i) => {
@@ -1225,11 +1827,24 @@ export async function runSuggestionsReport(c: SuggestionsContext): Promise<strin
         lines.push('```');
     });
     lines.push('--- End of context. Write the report now. ---');
-    return await callProvider(
-        SUGGESTIONS_SYSTEM_PROMPT,
-        [{ role: 'user', content: lines.join('\n') }],
-        { temperature: 0.4, timeoutMs: 180000 },
-    );
+    const prompt = buildPrompt({
+        feature: 'suggest',
+        rules: SUGGESTIONS_SYSTEM_PROMPT,
+        task: {
+            domainId: c.pdoc.domainId, pid: c.pdoc.docId, title: String(c.pdoc.title || c.pdoc.pid || c.pdoc.docId), label: c.pdoc.pid ? String(c.pdoc.pid) : '', statement: statementForPrompt(c.pdoc, c.uiLang, 3000),
+        },
+        variable: [{ role: 'user', content: lines.join('\n') }],
+    });
+    return await callProvider(prompt.prefix, prompt.variable, {
+        temperature: 0.4,
+        timeoutMs: 180000,
+        onDelta: opts.onDelta,
+        signal: opts.signal,
+        cacheKey: prompt.cacheKey,
+        meta: {
+            feature: 'suggest', lane: 'interactive', priority: 1, uid: opts.uid || 0,
+        },
+    });
 }
 
 /* ----------------------- teacher-facing class report ----------------------- */
@@ -1287,13 +1902,17 @@ export async function runClassMapBatch(contextBlock: string): Promise<string> {
     return await callProvider(
         CLASS_MAP_SYSTEM_PROMPT,
         [{ role: 'user', content: contextBlock }],
-        { temperature: 0.2, timeoutMs: 180000 },
+        { temperature: 0.2, timeoutMs: 180000, meta: { feature: 'report_map', lane: 'background' } },
     );
 }
 
 /* ------------------------------------------------------------------ */
 /*  🎓 Batch ownership grading (retroactive, no tutor reply)        */
 /* ------------------------------------------------------------------ */
+/** Every LLM grader runs in the background lane under the `grade` cap (ai-speedup WP5). */
+const GRADE_META: AiCallMeta = { feature: 'grade', lane: 'background', priority: 2 };
+/** A grader call: waits for capacity instead of failing the grade when the scheduler refuses. */
+const gradeCall = (systemPrompt: string, user: string) => aiScheduler.runWhenCapacity(GRADE_META, () => callProvider(systemPrompt, [{ role: 'user', content: user }]));
 const OWNERSHIP_GRADING_PROMPT = `You are a strict grader of CODE OWNERSHIP: given a student's ACCEPTED solution, one tutor question about it, the dialogue so far, and ONE student answer, judge how well that answer shows the student truly owns (understands) their own code.
 Levels:
 - 0 = no answer, "I don't know", or evasion;
@@ -1347,7 +1966,7 @@ export async function runOwnershipGrading(input: OwnershipGradingInput): Promise
         String(input.answer || '').slice(0, 1000),
     ].filter(Boolean).join('\n\n');
     try {
-        const raw = await callProvider(OWNERSHIP_GRADING_PROMPT, [{ role: 'user', content: user }]);
+        const raw = await gradeCall(OWNERSHIP_GRADING_PROMPT, user);
         const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
@@ -1411,7 +2030,7 @@ export async function runFixConversionGrading(input: FixConvGradingInput): Promi
         numberedCode(input.afterCode || '', 6000),
     ].filter(Boolean).join('\n\n');
     try {
-        const raw = await callProvider(FIXCONV_GRADING_PROMPT, [{ role: 'user', content: user }]);
+        const raw = await gradeCall(FIXCONV_GRADING_PROMPT, user);
         const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
@@ -1453,7 +2072,7 @@ export async function runConceptSurfacing(input: ConceptSurfacingInput): Promise
         dialogue || '(none)',
     ].join('\n\n');
     try {
-        const raw = await callProvider(CONCEPT_SURFACING_PROMPT, [{ role: 'user', content: user }]);
+        const raw = await gradeCall(CONCEPT_SURFACING_PROMPT, user);
         const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
@@ -1528,7 +2147,7 @@ export async function runConceptTransferGrading(input: TransferGradingInput): Pr
         dlg(input.reDialogue) || '(none \u2014 the student needed no help here)',
     ].join('\n\n');
     try {
-        const raw = await callProvider(TRANSFER_GRADING_PROMPT, [{ role: 'user', content: user }]);
+        const raw = await gradeCall(TRANSFER_GRADING_PROMPT, user);
         const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
@@ -1590,7 +2209,7 @@ export async function runReasoningGrading(input: ReasoningGradingInput): Promise
         String(input.answer || '').slice(0, 1000),
     ].filter(Boolean).join('\n\n');
     try {
-        const raw = await callProvider(REASONING_GRADING_PROMPT, [{ role: 'user', content: user }]);
+        const raw = await gradeCall(REASONING_GRADING_PROMPT, user);
         const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
@@ -1660,7 +2279,7 @@ export async function runTrajectoryGrading(input: TrajectoryGradingInput): Promi
         lines.join('\n\n') || '(no tasks)',
     ].join('\n');
     try {
-        const raw = await callProvider(TRAJECTORY_GRADING_PROMPT, [{ role: 'user', content: user }]);
+        const raw = await gradeCall(TRAJECTORY_GRADING_PROMPT, user);
         const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
@@ -1717,7 +2336,7 @@ export async function runInitiativeGrading(input: InitiativeGradingInput): Promi
         dialogue || '(none)',
     ].join('\n\n');
     try {
-        const raw = await callProvider(INITIATIVE_GRADING_PROMPT, [{ role: 'user', content: user }]);
+        const raw = await gradeCall(INITIATIVE_GRADING_PROMPT, user);
         const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
         const start = cleaned.indexOf('{');
         const end = cleaned.lastIndexOf('}');
@@ -1791,7 +2410,7 @@ export async function runSessionMapBatch(contextBlock: string): Promise<string> 
     return await callProvider(
         SESSION_MAP_SYSTEM_PROMPT,
         [{ role: 'user', content: contextBlock }],
-        { temperature: 0.2, timeoutMs: 300000 },
+        { temperature: 0.2, timeoutMs: 300000, meta: { feature: 'report_map', lane: 'background' } },
     );
 }
 
@@ -1799,7 +2418,7 @@ export async function runSessionReport(contextBlock: string): Promise<string> {
     return await callProvider(
         SESSION_REPORT_SYSTEM_PROMPT,
         [{ role: 'user', content: contextBlock }],
-        { temperature: 0.3, timeoutMs: 420000 },
+        { temperature: 0.3, timeoutMs: 420000, meta: { feature: 'report_reduce', lane: 'background', priority: 1 } },
     );
 }
 
@@ -1865,7 +2484,9 @@ export async function runQuickDiagnosis(digestText: string): Promise<string> {
     return await callProvider(
         QUICK_DIAGNOSIS_SYSTEM_PROMPT,
         [{ role: 'user', content: digestText }],
-        { temperature: 0.3, timeoutMs: 90000, ...(model ? { model } : {}) },
+        {
+            temperature: 0.3, timeoutMs: 90000, ...(model ? { model } : {}), meta: { feature: 'qr_diagnose', lane: 'background', priority: 1 },
+        },
     );
 }
 
@@ -1912,7 +2533,7 @@ export async function runFailureLabeling(input: { taskLabel: string, taskTitle: 
         ].join('\n')),
         'Respond with the JSON object only.',
     ].filter((x) => x).join('\n');
-    const raw = await callProvider(FAILURE_LABEL_SYSTEM_PROMPT, [{ role: 'user', content: user }], { temperature: 0, timeoutMs: 90000 });
+    const raw = await callProvider(FAILURE_LABEL_SYSTEM_PROMPT, [{ role: 'user', content: user }], { temperature: 0, timeoutMs: 90000, meta: { feature: 'qr_label', lane: 'background' } });
     const cleaned = raw.trim().replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/```\s*$/, '').trim();
     const start = cleaned.indexOf('{');
     const end = cleaned.lastIndexOf('}');
@@ -1956,7 +2577,7 @@ export async function inferQuestionPoints(input: {
         ].join('\n')),
         'Respond with the JSON object only.',
     ].join('\n');
-    const raw = await callProvider(QUESTION_POINTS_SYSTEM_PROMPT, [{ role: 'user', content: user }], { temperature: 0, timeoutMs: 60000 });
+    const raw = await callProvider(QUESTION_POINTS_SYSTEM_PROMPT, [{ role: 'user', content: user }], { temperature: 0, timeoutMs: 60000, meta: { feature: 'qr_points', lane: 'background' } });
     const cleaned = raw.trim().replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/```\s*$/, '').trim();
     const start = cleaned.indexOf('{');
     const end = cleaned.lastIndexOf('}');
@@ -1973,12 +2594,45 @@ export async function inferQuestionPoints(input: {
     return out;
 }
 
-export async function runObjectiveFeedback(contextBlock: string): Promise<string> {
-    return await callProvider(
-        OBJECTIVE_FEEDBACK_SYSTEM_PROMPT,
-        [{ role: 'user', content: contextBlock }],
-        { temperature: 0.4, timeoutMs: 240000 },
-    );
+export interface ObjectiveFeedbackInput {
+    /** Stable (cached) part: the task, its knowledge points, every question with options and KEY. */
+    task: { domainId: string, pid: number, title: string, label?: string, block: string };
+    /** This student's answers, marked against the key. */
+    answers: string;
+}
+
+/**
+ * Explain a student's objective answers. Accepts the split shape (task in
+ * the cached prefix, answers in the variable part) or, for older callers,
+ * one self-contained context block. `priority` 3 = pre-warm (idle capacity only).
+ */
+export async function runObjectiveFeedback(
+    input: string | ObjectiveFeedbackInput,
+    opts: { priority?: 0 | 1 | 2 | 3, uid?: number, signal?: AbortSignal, onDelta?: (text: string) => void } = {},
+): Promise<string> {
+    const meta: AiCallMeta = {
+        feature: 'explain', lane: 'background', priority: opts.priority ?? 2, uid: opts.uid || 0,
+    };
+    if (typeof input === 'string') {
+        return await callProvider(
+            OBJECTIVE_FEEDBACK_SYSTEM_PROMPT,
+            [{ role: 'user', content: input }],
+            {
+                temperature: 0.4, timeoutMs: 240000, meta, signal: opts.signal, onDelta: opts.onDelta,
+            },
+        );
+    }
+    const prompt = buildPrompt({
+        feature: 'explain',
+        rules: OBJECTIVE_FEEDBACK_SYSTEM_PROMPT,
+        task: {
+            domainId: input.task.domainId, pid: input.task.pid, title: input.task.title, label: input.task.label, statement: input.task.block,
+        },
+        variable: [{ role: 'user', content: input.answers }],
+    });
+    return await callProvider(prompt.prefix, prompt.variable, {
+        temperature: 0.4, timeoutMs: 240000, meta, signal: opts.signal, cacheKey: prompt.cacheKey, onDelta: opts.onDelta,
+    });
 }
 
 /* ---------------- resilience for the long report jobs ---------------- */
@@ -1987,43 +2641,38 @@ export async function runObjectiveFeedback(contextBlock: string): Promise<string
 export function isTransientProviderError(e: any): boolean {
     const msg = String(e?.message || e || '');
     if (/HTTP (?:408|409|425|429|5\d\d)\b/.test(msg)) return true;
-    if (/timed out|Cannot reach the AI provider|ECONNRESET|EAI_AGAIN|socket hang up|fetch failed|overloaded/i.test(msg)) return true;
+    if (/timed out|Cannot reach the AI provider|closed the connection before replying|ECONNRESET|EAI_AGAIN|socket hang up|fetch failed|overloaded/i.test(msg)) return true;
     return false;
 }
 
 /**
- * ⏳ A class-wide cooldown: when any call is rate-limited (HTTP 429), every
- * caller in this process waits it out before the next attempt — three
- * workers each backing off on their own would keep hammering the limit.
+ * ⏳ The class-wide 429 cool-down now lives in the scheduler
+ * (aiScheduler.noteRateLimit); this helper is kept for code that sleeps
+ * between its own steps.
  */
-let cooldownUntil = 0;
 const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+export { sleep as aiSleep };
 
 /**
- * Run `fn` with retries on transient provider errors (exponential backoff
- * with jitter, honouring the shared cooldown). Non-transient errors — a
- * malformed reply, an oversized request — surface at once so the caller
- * can shrink the batch instead of repeating it.
+ * Run `fn` with retries on transient provider errors. Since ai-speedup WP1
+ * the retry policy is the SCHEDULER's: outside a slot this schedules `fn`
+ * in the background lane (with `opts.meta` if given) and the scheduler
+ * re-enqueues it on transient errors — releasing the slot for the backoff
+ * instead of sleeping inside it. Inside a slot (a call site that already
+ * holds one), `fn` runs once: the surrounding run() retries the whole
+ * unit. Non-transient errors — a malformed reply, an oversized request —
+ * surface at once so the caller can shrink the batch instead of
+ * repeating it.
  */
-export async function callWithRetry<T>(fn: () => Promise<T>, opts: { attempts?: number, baseMs?: number, label?: string } = {}): Promise<T> {
-    const attempts = Math.max(1, opts.attempts ?? 4);
-    const baseMs = opts.baseMs ?? 4000;
-    let lastErr: any;
-    for (let i = 0; i < attempts; i++) {
-        const wait = cooldownUntil - Date.now();
-        if (wait > 0) await sleep(wait);
-        try {
-            return await fn();
-        } catch (e) {
-            lastErr = e;
-            if (!isTransientProviderError(e) || i === attempts - 1) throw e;
-            const backoff = Math.round(baseMs * 2 ** i * (0.75 + Math.random() * 0.5));
-            if (/HTTP 429/.test(String(e?.message || ''))) cooldownUntil = Math.max(cooldownUntil, Date.now() + Math.min(60000, backoff));
-            logger.warn('%s: transient provider error (attempt %d/%d, retrying in %d ms): %s', opts.label || 'ai call', i + 1, attempts, backoff, String(e?.message || e).slice(0, 160));
-            await sleep(backoff);
-        }
-    }
-    throw lastErr;
+export async function callWithRetry<T>(
+    fn: () => Promise<T>,
+    opts: { attempts?: number, baseMs?: number, label?: string, meta?: Partial<AiCallMeta> } = {},
+): Promise<T> {
+    if (currentSlot()) return await fn();
+    const meta: AiCallMeta = {
+        feature: 'other', lane: 'background', ...(opts.meta || {}), label: opts.label, retry: { attempts: opts.attempts ?? 4, baseMs: opts.baseMs ?? 4000 },
+    } as AiCallMeta;
+    return await aiScheduler.run(meta, () => fn());
 }
 
 /* ---------------- homework / test ACTIVITY report (map → reduce) ---------------- */
@@ -2088,7 +2737,7 @@ export async function runActivityMapBatch(contextBlock: string): Promise<string>
     return await callProvider(
         ACTIVITY_MAP_SYSTEM_PROMPT,
         [{ role: 'user', content: contextBlock }],
-        { temperature: 0.2, timeoutMs: 300000 },
+        { temperature: 0.2, timeoutMs: 300000, meta: { feature: 'report_map', lane: 'background' } },
     );
 }
 
@@ -2096,7 +2745,7 @@ export async function runActivityReport(contextBlock: string): Promise<string> {
     return await callProvider(
         ACTIVITY_REPORT_SYSTEM_PROMPT,
         [{ role: 'user', content: contextBlock }],
-        { temperature: 0.3, timeoutMs: 420000 },
+        { temperature: 0.3, timeoutMs: 420000, meta: { feature: 'report_reduce', lane: 'background', priority: 1 } },
     );
 }
 
@@ -2104,6 +2753,6 @@ export async function runClassReport(contextBlock: string): Promise<string> {
     return await callProvider(
         CLASS_REPORT_SYSTEM_PROMPT,
         [{ role: 'user', content: contextBlock }],
-        { temperature: 0.3, timeoutMs: 300000 },
+        { temperature: 0.3, timeoutMs: 300000, meta: { feature: 'report_reduce', lane: 'background', priority: 1 } },
     );
 }

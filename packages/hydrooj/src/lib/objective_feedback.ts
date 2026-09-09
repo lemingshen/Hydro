@@ -147,39 +147,93 @@ export async function collectObjectiveReview(domainId: string, tdoc: any, uid: n
     return { tasks, snapshot: counts };
 }
 
-/** The context block the model reads: ONE task's questions with their keys and the student's answers. */
-export function objectiveReviewContext(tdoc: any, review: Awaited<ReturnType<typeof collectObjectiveReview>>): string {
-    const L: string[] = [];
+/**
+ * The context the model reads, in TWO parts (ai-speedup WP3): the task with
+ * its questions, options and answer keys — identical for every student, so
+ * it sits in the provider-cached prefix — and the student's own answers
+ * marked against the key.
+ */
+export function objectiveReviewContext(tdoc: any, review: Awaited<ReturnType<typeof collectObjectiveReview>>): { task: string, answers: string } {
+    const T: string[] = [];
+    const A: string[] = [];
     for (const t of review.tasks) {
-        L.push(`=== TASK "${t.title}" (${t.label}) of the homework "${tdoc.title}" — knowledge points: ${t.pointPaths.length ? t.pointPaths.join('; ') : '(unlabeled)'}${typeof t.score === 'number' ? ` — the student scored ${t.score}/100 on it` : ''} ===`);
+        T.push(`=== TASK "${t.title}" (${t.label}) of the homework "${tdoc.title}" — knowledge points: ${t.pointPaths.length ? t.pointPaths.join('; ') : '(unlabeled)'} ===`);
+        A.push(`=== The student's answers on task ${t.label}${typeof t.score === 'number' ? ` (the student scored ${t.score}/100 on it)` : ''} ===`);
         for (const q of t.questions as ReviewQuestion[]) {
             const optText = (letters: string[]) => letters.map((l) => {
                 const o = q.options.find((x) => x.letter === l);
                 return o ? `${l} (${o.text})` : l;
             }).join(', ');
-            L.push('', `Q${q.key} [${q.kind}]: ${q.prompt || '(see the statement)'}`);
-            if (q.options.length) L.push(`  options: ${q.options.map((o) => `${o.letter}) ${o.text}`).join(' | ')}`);
-            L.push(`  correct answer: ${q.answer.length ? optText(q.answer) : '(none set)'}`);
-            L.push(`  student's answer: ${q.given.length ? optText(q.given) : '(unanswered)'} → ${q.outcome.toUpperCase()}`);
+            T.push('', `Q${q.key} [${q.kind}]: ${q.prompt || '(see the statement)'}`);
+            if (q.options.length) T.push(`  options: ${q.options.map((o) => `${o.letter}) ${o.text}`).join(' | ')}`);
+            T.push(`  correct answer: ${q.answer.length ? optText(q.answer) : '(none set)'}`);
+            A.push(`Q${q.key}: student's answer: ${q.given.length ? optText(q.given) : '(unanswered)'} → ${q.outcome.toUpperCase()}`);
         }
     }
-    L.push('', '=== End. Write the explanation now, in English. ===');
-    return L.join('\n');
+    A.push('', '=== End. Write the explanation now, in English. ===');
+    return { task: T.join('\n'), answers: A.join('\n') };
 }
 
-export async function runObjectiveFeedbackJob(domainId: string, tdoc: any, uid: number, pid: number): Promise<void> {
+/**
+ * Generate one explanation. Two callers, two treatments:
+ *  • the Quick Review PRE-WARM: background lane, priority 3 (idle capacity
+ *    only), no stream — nobody is looking yet;
+ *  • a STUDENT'S OWN CLICK (`interactive: true`): the student is waiting,
+ *    so the call takes the interactive lane (class 1, behind the tutor)
+ *    and the explanation STREAMS into the page — the job carries the
+ *    stream id the page attaches to (ai-speedup WP2).
+ * Either way the call runs under the scheduler's `explain` cap; when the
+ * scheduler has no capacity the job stays `running` with `stage:
+ * 'waiting'` (the row shows "waiting for capacity · N ahead · ~T s") and
+ * resubmits itself.
+ */
+export async function runObjectiveFeedbackJob(
+    domainId: string, tdoc: any, uid: number, pid: number, opts: { priority?: 0 | 1 | 2 | 3, interactive?: boolean } = {},
+): Promise<void> {
     const tid = tdoc.docId.toHexString();
     const startedAt = new Date();
+    const stream = opts.interactive && aiTutor.streamingEnabled()
+        ? aiTutor.aiStreams.create(uid, { feature: 'explain', lane: 'interactive', abortWhenAbandoned: false })
+        : null;
+    const handle = stream ? aiTutor.aiStreams.handle(stream.id) : null;
     try {
-        await setObjectiveFeedbackJob(domainId, tid, uid, pid, { status: 'running', startedAt });
+        await setObjectiveFeedbackJob(domainId, tid, uid, pid, {
+            status: 'running', stage: 'running', startedAt, ...(stream ? { streamId: stream.id } : {}),
+        });
         const review = await collectObjectiveReview(domainId, tdoc, uid, pid);
         if (!review.snapshot.questions) throw new Error('This task has no objective question to explain.');
-        const raw = await aiTutor.callWithRetry(() => aiTutor.runObjectiveFeedback(objectiveReviewContext(tdoc, review)), { label: 'objective feedback' });
-        await setObjectiveFeedbackReport(domainId, tid, uid, pid, raw.trim(), review.snapshot);
+        const ctx = objectiveReviewContext(tdoc, review);
+        const task = review.tasks[0] || {};
+        const raw = await aiTutor.aiScheduler.runWhenCapacity({
+            feature: 'explain',
+            lane: opts.interactive ? 'interactive' : 'background',
+            priority: opts.priority ?? (opts.interactive ? 1 : 2),
+            uid,
+            label: 'objective feedback',
+            ...(handle ? { stream: true, onQueue: (q) => handle.queue(q) } : {}),
+        }, () => {
+            if (stream) aiTutor.aiStreams.started(stream.id);
+            return aiTutor.runObjectiveFeedback({
+                task: {
+                    domainId, pid, title: String(task.title || task.label || pid), label: task.label, block: ctx.task,
+                },
+                answers: ctx.answers,
+            }, { onDelta: handle?.delta, uid, priority: opts.priority ?? (opts.interactive ? 1 : 2) });
+        }, {
+            onWait: (e) => {
+                if (handle) handle.queue({ position: e.position, eta: e.eta });
+                setObjectiveFeedbackJob(domainId, tid, uid, pid, {
+                    status: 'running', stage: 'waiting', waiting: { ahead: e.position, eta: e.eta }, startedAt, ...(stream ? { streamId: stream.id } : {}),
+                }).catch(() => { /* cosmetic */ });
+            },
+        });
+        const generatedAt = await setObjectiveFeedbackReport(domainId, tid, uid, pid, raw.trim(), review.snapshot);
         await setObjectiveFeedbackJob(domainId, tid, uid, pid, { status: 'done', startedAt, finishedAt: new Date() });
+        if (stream) aiTutor.aiStreams.finish(stream.id, { report: raw.trim(), generatedAt });
         logger.info('[objective-feedback] %s/%s uid=%d pid=%d: %d question(s) explained', domainId, tid, uid, pid, review.snapshot.questions);
     } catch (e) {
         logger.warn('[objective-feedback] %s/%s uid=%d pid=%d failed: %s', domainId, tid, uid, pid, e.message);
+        if (stream) aiTutor.aiStreams.fail(stream.id, e);
         await setObjectiveFeedbackJob(domainId, tid, uid, pid, {
             status: 'failed', startedAt, finishedAt: new Date(), error: String(e.message || e).slice(0, 300),
         }).catch(() => {});
@@ -192,6 +246,8 @@ export async function objectiveFeedbackState(domainId: string, tdoc: any, uid: n
     const doc = await getObjectiveFeedback(domainId, tid, uid, pid);
     let job = doc?.job || null;
     if (objectiveFeedbackJobStale(job, JOB_SILENCE_MS)) job = { ...job!, status: 'failed', error: 'The explanation stopped (the server may have restarted). Try again.' };
+    // A stream id is only useful while this process still holds the stream.
+    if (job?.streamId && !aiTutor.aiStreams.get(job.streamId)) job = { ...job, streamId: undefined };
     const counts = withCounts ? (await collectObjectiveReview(domainId, tdoc, uid, pid)).snapshot : null;
     return {
         pid, report: doc?.report || null, generatedAt: doc?.generatedAt || null, snapshot: doc?.snapshot || null, counts, job,
@@ -239,8 +295,12 @@ export class HomeworkObjectiveFeedbackHandler extends Handler {
         await this.limitRate('ai_objective_feedback', 600, 10, '{{user}}');
         const job = { status: 'running' as const, startedAt: new Date() };
         await setObjectiveFeedbackJob(domainId, tid.toHexString(), this.user._id, pid, job);
-        runObjectiveFeedbackJob(domainId, this.tdoc, this.user._id, pid); // detached on purpose
-        this.response.body = { started: true, job };
+        // Detached on purpose; a student's own click streams (interactive lane).
+        runObjectiveFeedbackJob(domainId, this.tdoc, this.user._id, pid, { interactive: true });
+        // The job block is written synchronously at the start of the runner
+        // (with the stream id), so the page can attach right away.
+        const fresh = await getObjectiveFeedback(domainId, tid.toHexString(), this.user._id, pid);
+        this.response.body = { started: true, job: fresh?.job || job };
     }
 }
 

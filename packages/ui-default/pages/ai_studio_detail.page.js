@@ -1,4 +1,7 @@
 import $ from 'jquery';
+import {
+  busyCountdown, busyInfo, ensureAiStreamStyle, formatQueue, MarkdownStreamRenderer, openAiStream, streamField,
+} from 'vj/components/aistream';
 import KnowledgePointSelectAutoComplete from 'vj/components/autocomplete/KnowledgePointSelectAutoComplete';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
@@ -51,6 +54,9 @@ const DETAIL_STYLE = [
   '.aisd__step-line { flex: 0 0 18px; height: 1px; background: var(--pta-line); margin: 0 2px; }',
   '.aisd__pane { display: none; }',
   '.aisd__pane--on { display: block; animation: ptaFadeIn .18s ease; }',
+  '.aisd__live { margin: 0 0 14px; padding: 12px 14px; border: 1px dashed var(--pta-blue-line, #b6d4fe); border-radius: 12px; background: var(--pta-card-2, #f7f9fc); }',
+  '.aisd__live-body { max-height: 420px; overflow: auto; font-size: 13.5px; line-height: 1.55; }',
+  '.aisc__turn--error { color: #e03131; border: 1px dashed rgba(224, 49, 49, .45); background: rgba(224, 49, 49, .06); }',
   '.aisd__bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }',
   '.aisd__stage { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12.5px; }',
   '.aisd__dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(151, 117, 250, .45); background: transparent; box-sizing: border-box; flex: 0 0 auto; transition: background .3s ease, border-color .3s ease, transform .3s var(--pta-ease); position: relative; z-index: 1; }',
@@ -1380,8 +1386,52 @@ function collectPayload($root, target) {
   return { cases };
 }
 
+/*
+ * ai-speedup WP2: while the statement is being DRAFTED the pipeline carries
+ * the id of a live stream; the draft is shown word by word in the
+ * statement pane as the model writes it (a preview above the editor, or in
+ * place of "No statement yet"), and the finished draft replaces it through
+ * the normal re-render. One attachment per stream id.
+ */
+let liveDraftStream = null;
+function maybeAttachDraftStream($root) {
+  const p = state && state.pipeline;
+  const id = p && p.status === 'running' && p.stage === 'generate' && p.streamId;
+  if (!id || liveDraftStream === id) return;
+  liveDraftStream = id;
+  ensureAiStreamStyle();
+  let renderer = null;
+  const box = () => {
+    let $box = $root.find('.aisd__live');
+    if ($box.length) return $box;
+    const $pane = $root.find('.aisd__pane[data-pane="stmt"]');
+    if (!$pane.length) return $();
+    $pane.find('.ais__empty').remove();
+    $box = $(`<div class="aisd__live"><div class="ais__label">✨ ${esc(i18n('Drafting… (live)'))}</div><div class="aisd__live-body typo"></div></div>`).prependTo($pane);
+    if (activePane !== 'stmt') {
+      activePane = 'stmt';
+      $root.find('.aisd__tab').removeClass('aisd__tab--on').filter('[data-pane="stmt"]').addClass('aisd__tab--on');
+      $root.find('.aisd__pane').removeClass('aisd__pane--on').filter('[data-pane="stmt"]').addClass('aisd__pane--on');
+    }
+    return $box;
+  };
+  openAiStream(id, {
+    onQueue: (q) => { const $b = box(); if ($b.length) $b.find('.ais__label').text(`⏳ ${formatQueue(q)}`); },
+    onDelta: (delta) => {
+      const $b = box();
+      if (!$b.length) return;
+      $b.find('.ais__label').text(`✨ ${i18n('Drafting… (live)')}`);
+      if (!renderer) renderer = new MarkdownStreamRenderer($b.find('.aisd__live-body'), 100, aiMarkdown);
+      renderer.append(delta);
+    },
+    onDone: () => { liveDraftStream = null; }, // the poll's re-render shows the saved draft
+    onError: () => { liveDraftStream = null; },
+  });
+}
+
 function startPolling($root) {
   if (pollTimer) return;
+  maybeAttachDraftStream($root);
   pollTimer = setInterval(async () => {
     try {
       const data = await request.get(jsonUrl());
@@ -1390,6 +1440,7 @@ function startPolling($root) {
       if (!hadStmt && state?.artifacts?.statement && (!activePane || activePane === 'ctx')) activePane = 'stmt';
       if (artifactFp(state) !== lastFp) render($root); // new artifact — show it live
       else renderSide($root);
+      maybeAttachDraftStream($root);
       if (state.pipeline.status !== 'running') {
         clearInterval(pollTimer);
         pollTimer = null;
@@ -1659,11 +1710,51 @@ function wire($root) {
     // Echo the teacher's turn immediately: the round-trip can take a while
     // and an empty box with no trace of what was just asked reads as a bug.
     $chatLog.append(`<div class="aisc__turn aisc__turn--user">${esc(text)}</div>`)
-      .append(`<div class="aisc__turn aisc__turn--ai aisc__pending"><span class="aisc__typing"><i></i><i></i><i></i></span></div>`);
+      .append(`<div class="aisc__turn aisc__turn--ai aisc__pending"><span class="aisc__typing"><i></i><i></i><i></i></span><span class="aisc__wait ai-stream__queue" hidden></span><span class="aisc__live"></span></div>`);
     if ($chatLog.length) $chatLog.scrollTop($chatLog[0].scrollHeight);
     $chatInput.val('');
+    /*
+     * ai-speedup WP2: the reply STREAMS. The request returns { streamId }
+     * at once; the queue position shows next to the typing dots while the
+     * scheduler has no free slot, and the reply line appears word by word
+     * (the model may still be rewriting the statement after it — the
+     * `done` event carries the saved draft). A 503 "AI busy" refusal
+     * counts down and retries by itself; an older backend answers inline.
+     */
+    ensureAiStreamStyle();
+    const $pending = $chatLog.find('.aisc__pending').last();
+    const $wait = $pending.find('.aisc__wait');
+    const $live = $pending.find('.aisc__live');
+    const scroll = () => { if ($chatLog.length) $chatLog.scrollTop($chatLog[0].scrollHeight); };
+    const streamed = (streamId) => new Promise((resolve, reject) => {
+      openAiStream(streamId, {
+        onQueue: (q) => { $wait.prop('hidden', false).removeClass('ai-stream__queue--busy').text(formatQueue(q)); },
+        onStatus: () => { $wait.prop('hidden', true); },
+        onDelta: (delta, full) => {
+          $wait.prop('hidden', true);
+          $pending.find('.aisc__typing').remove();
+          $live.html(`${esc(full)}<span class="ai-stream__caret" aria-hidden="true"></span>`);
+          scroll();
+        },
+        onDone: (result) => resolve(result),
+        onError: (err) => reject(Object.assign(new Error(err.message), { retryAfter: err.retryAfter })),
+      });
+    });
     try {
-      const res = await request.post(base(), { operation: 'chat', text });
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          res = await request.post(base(), { operation: 'chat', text, ...streamField() });
+          break;
+        } catch (e) {
+          const info = busyInfo(e);
+          if (!info || attempt >= 3) throw e;
+          $wait.prop('hidden', false).addClass('ai-stream__queue--busy');
+          const ok = await busyCountdown($wait, info).promise;
+          if (!ok) throw e;
+        }
+      }
+      if (res && res.streamId) res = await streamed(res.streamId);
       state = res.draft;
       // Keep the teacher on the statement they are discussing.
       activePane = 'stmt';
@@ -1671,6 +1762,10 @@ function wire($root) {
       if (res.changed) Notification.success(i18n('The AI applied your change — check the text above.'));
     } catch (e) {
       $chatLog.find('.aisc__pending').remove();
+      // The reason stays in the chat (a toast alone is easy to miss) and the
+      // message goes back into the box so it can be sent again.
+      $chatLog.append(`<div class="aisc__turn aisc__turn--ai aisc__turn--error">⚠ ${esc(e.message || i18n('The AI request failed.'))}</div>`);
+      scroll();
       Notification.error(e.message);
       $chatInput.val(text); // don't lose what they typed
       setLocked($root, false);

@@ -1,5 +1,8 @@
 import $ from 'jquery';
 import MarkdownIt from 'markdown-it';
+import {
+  busyCountdown, busyInfo, ensureAiStreamStyle, formatQueue, MarkdownStreamRenderer, openAiStream, streamField,
+} from 'vj/components/aistream';
 import Notification from 'vj/components/notification';
 import { downloadAiReportPdf } from 'vj/components/ai-report/pdf';
 import { NamedPage } from 'vj/misc/Page';
@@ -963,11 +966,18 @@ export function showSubmitModal(data, onClose) {
   // database, the button flips to an instant, token-free "View" affordance.
   let aiSaved = null; // { report, updateAt }
   const aiUrl = () => trajectoryUrl().replace(/\/trajectory$/, '/ai-suggestions');
+  let aiRunning = null; // stream id of a generation still running server-side
   if (aiEligible) {
     request.get(aiUrl()).then((r) => {
       if (r && r.report) {
         aiSaved = { report: String(r.report), updateAt: r.updateAt };
         $modal.find('.slm__ai-btn').html(`📄 ${esc(i18n('View AI Suggestions'))}`);
+      }
+      // A generation started from another tab (or before a reload) is still
+      // writing: the button re-attaches to its stream instead of starting twice.
+      if (r && r.job && (r.job.status === 'queued' || r.job.status === 'running') && r.job.streamId) {
+        aiRunning = r.job.streamId;
+        $modal.find('.slm__ai-btn').html(`<span class="slm__btnspin"></span>${esc(i18n('Report in progress — click to watch'))}`);
       }
     }).catch(() => { /* no saved report — the button stays in generate mode */ });
   }
@@ -998,19 +1008,63 @@ export function showSubmitModal(data, onClose) {
     return $sect;
   }
 
-  /** Generate (or regenerate): spinner section -> LLM -> saved server-side. */
-  async function startGeneration($replaceEl, $btn) {
+  /**
+   * Generate (or regenerate): spinner section -> LLM -> saved server-side.
+   * ai-speedup WP2: the request returns { streamId } at once and the report
+   * STREAMS into the section as the model writes it (queue position shown
+   * while the scheduler has no free slot; a 503 "AI busy" refusal counts
+   * down and retries by itself). The saved report replaces the live text
+   * on done. An older backend answers inline — same rendering.
+   */
+  async function startGeneration($replaceEl, $btn, attachTo = null) {
+    ensureAiStreamStyle();
     if ($btn) $btn.prop('disabled', true).html(`<span class="slm__btnspin"></span>${esc(i18n('Generating suggestions...'))}`);
     const $gen = $('<div class="slm__sect slm__sect--ai">'
       + `<div class="slm__aihead">🤖 <span class="slm__aititle">${esc(i18n('AI Suggestions'))}</span></div>`
       + '<div class="slm__genwrap"><div class="slm__spinner"></div>'
       + `<div class="slm__gentext"><b>${esc(i18n('The AI is generating your report...'))}</b><br>`
-      + `${esc(i18n('This usually takes 10-30 seconds. Please keep this window open and do not quit.'))}</div></div></div>`);
+      + `<span class="slm__genwait">${esc(i18n('This usually takes 10-30 seconds. Please keep this window open and do not quit.'))}</span></div></div>`
+      + '<div class="slm__ai typo slm__ai--live" hidden></div></div>');
     if ($replaceEl) $replaceEl.replaceWith($gen);
     else $modal.find('.slm__body').append($gen);
     $gen[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const $wait = $gen.find('.slm__genwait');
+    const $liveBox = $gen.find('.slm__ai--live');
+    let renderer = null;
+    const streamed = (streamId) => new Promise((resolve, reject) => {
+      openAiStream(streamId, {
+        onQueue: (q) => $wait.text(formatQueue(q)),
+        onStatus: () => $wait.text(i18n('The AI is writing your report...')),
+        onDelta: (delta) => {
+          if (!renderer) {
+            $gen.find('.slm__genwrap').remove();
+            $liveBox.prop('hidden', false);
+            renderer = new MarkdownStreamRenderer($liveBox, 100, mdReport);
+          }
+          renderer.append(delta);
+        },
+        onDone: (result) => resolve(result),
+        onError: (err) => reject(Object.assign(new Error(err.message), { retryAfter: err.retryAfter })),
+      });
+    });
     try {
-      const res = await request.post(aiUrl(), {});
+      let res;
+      if (attachTo) res = await streamed(attachTo);
+      else {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            res = await request.post(aiUrl(), { ...streamField() });
+            break;
+          } catch (e) {
+            const info = busyInfo(e);
+            if (!info || attempt >= 3) throw e;
+            const ok = await busyCountdown($wait, info).promise;
+            if (!ok) throw e;
+          }
+        }
+        if (res && res.streamId) res = await streamed(res.streamId);
+      }
+      if (renderer) renderer.finish(String((res && res.report) || ''));
       aiSaved = { report: String((res && res.report) || ''), updateAt: res && res.updateAt };
       renderReportSection(aiSaved.report, aiSaved.updateAt, $gen);
       if ($btn) $btn.remove();
@@ -1023,6 +1077,12 @@ export function showSubmitModal(data, onClose) {
 
   $modal.find('.slm__ai-btn').on('click', function onAiClick() {
     const $btn = $(this);
+    if (aiRunning) {
+      const id = aiRunning;
+      aiRunning = null;
+      startGeneration(null, $btn, id);
+      return;
+    }
     if (aiSaved) {
       // Instant view straight from the database — no LLM call, no tokens.
       renderReportSection(aiSaved.report, aiSaved.updateAt, null);

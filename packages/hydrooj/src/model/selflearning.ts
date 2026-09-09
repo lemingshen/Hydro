@@ -224,6 +224,15 @@ export interface TutorThreadDoc {
     rid?: ObjectId;
     attemptCount: number;
     messages: TutorMessage[];
+    /**
+     * ai-speedup WP4: the rolling five-line summary of the thread (goal ·
+     * tried · blocker · hints given · next step), refreshed in the
+     * background every few student turns; the next tutor call sends it
+     * plus the last turns instead of the whole history.
+     */
+    summary?: { text: string, upToIndex: number, updatedAt: Date };
+    /** ai-speedup WP4: the code the tutor last saw in full — later turns send a diff against it. */
+    lastSentCode?: { hash: string, text: string, at: Date };
     /** Set once, when this student first gets this problem Accepted. */
     firstAcceptedAt?: Date;
     /** 🎓 Post-acceptance ownership walkthrough (absent until the first acceptance). */
@@ -703,6 +712,19 @@ export class SelfLearningModel {
         return collTutor.updateOne({ _id: tid }, { $set: { ...$set, updateAt: new Date() } });
     }
 
+    /** ai-speedup WP4: store the refreshed rolling summary (skipped when an even newer one landed meanwhile). */
+    static setThreadSummary(tid: ObjectId, summary: { text: string, upToIndex: number }) {
+        return collTutor.updateOne(
+            { _id: tid, $or: [{ summary: { $exists: false } }, { 'summary.upToIndex': { $lte: summary.upToIndex } }] },
+            { $set: { summary: { ...summary, updatedAt: new Date() } } },
+        );
+    }
+
+    /** ai-speedup WP4: remember the code the tutor has seen in full. */
+    static setLastSentCode(tid: ObjectId, code: string, hash: string) {
+        return collTutor.updateOne({ _id: tid }, { $set: { lastSentCode: { hash, text: code, at: new Date() } } });
+    }
+
     /* ------------------ 🎓 code-ownership walkthrough state ------------------ */
 
     /** Fix the walkthrough budget at the task's first acceptance (idempotent per thread). */
@@ -946,6 +968,17 @@ export class SelfLearningModel {
 
 /* ------------------ persisted AI Suggestions reports ------------------ */
 
+export interface AiSuggestionJob {
+    status: 'queued' | 'running' | 'done' | 'failed';
+    stage?: string;
+    startedAt: Date;
+    updatedAt: Date;
+    finishedAt?: Date;
+    /** The live stream a reopened modal can re-attach to (in-memory; gone after a restart). */
+    streamId?: string;
+    error?: string;
+}
+
 export interface AiSuggestionDoc {
     _id: string; // `${domainId}/${pid}/${uid}` — one latest report per user per problem
     domainId: string;
@@ -954,6 +987,8 @@ export interface AiSuggestionDoc {
     report: string;
     attempts: number;
     updateAt: Date;
+    /** ai-speedup WP2: the generation job (the report streams into the modal). */
+    job?: AiSuggestionJob;
 }
 
 const collSuggestion = db.collection('ai.suggestion' as any);
@@ -974,6 +1009,14 @@ export async function setSuggestionReport(domainId: string, pid: number, uid: nu
         { upsert: true },
     );
     return updateAt;
+}
+
+/** ai-speedup WP2: the job block of a suggestion report (created even before a report exists). */
+export async function setSuggestionJob(domainId: string, pid: number, uid: number, job: Partial<AiSuggestionJob>): Promise<void> {
+    const $set: any = { domainId, pid, uid };
+    for (const [k, v] of Object.entries(job)) $set[`job.${k}`] = v;
+    $set['job.updatedAt'] = new Date();
+    await collSuggestion.updateOne({ _id: `${domainId}/${pid}/${uid}` as any }, { $set, $setOnInsert: { report: '', attempts: 0 } }, { upsert: true });
 }
 
 export async function getSuggestionReportsIn(domainId: string, pids: number[], uids: number[]): Promise<AiSuggestionDoc[]> {
@@ -1105,6 +1148,8 @@ export interface AiClassReportDoc {
         analyzed?: number;
         cached?: number;
         unanalyzed?: number;
+        /** ai-speedup WP5: the scheduler had no capacity for the current call (queue position / ETA); null once granted. */
+        waiting?: { ahead: number, eta: number } | null;
     };
 }
 

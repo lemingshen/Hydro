@@ -1,5 +1,8 @@
 import $ from 'jquery';
 import { aiMarkdown } from 'vj/components/ai-report/pdf';
+import {
+  ensureAiStreamStyle, formatQueue, MarkdownStreamRenderer, openAiStream,
+} from 'vj/components/aistream';
 import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { i18n, request } from 'vj/utils';
@@ -64,6 +67,15 @@ export default new NamedPage(['homework_paper', 'contest_paper'], () => {
       try {
         const probe = await request.get(`${urlOf(pid)}&job=1`);
         if (probe.job && probe.job.status === 'running') {
+          // ai-speedup WP5: the scheduler had no free slot for this explanation yet.
+          const w = probe.job.stage === 'waiting' && probe.job.waiting ? probe.job.waiting : null;
+          const $meta = panelOf(pid).find('.hwof-wait .hwof-meta');
+          if (w && $meta.length) {
+            const secs = Math.max(1, Math.round((w.eta || 0) / 1000));
+            $meta.text(`⏳ ${i18n('waiting for capacity')} · ${i18n('{0} ahead').replace('{0}', String(Math.max(0, w.ahead || 0)))} · ~${secs} s`);
+          } else if (!w && $meta.length && $meta.text().startsWith('⏳')) {
+            $meta.text(i18n('This takes a few seconds. You can keep reading — the explanation appears here when it is ready, and is saved for next time.'));
+          }
           poll(pid, $btn);
           return;
         }
@@ -82,13 +94,45 @@ export default new NamedPage(['homework_paper', 'contest_paper'], () => {
       }
     }, 2000);
   };
+  /*
+   * ai-speedup WP2: a running job carries the id of its live stream; the
+   * explanation is rendered word by word into the panel as the model writes
+   * it, and the saved report replaces it on done. Polling stays as the
+   * fallback (pre-warmed reports and old backends have no stream).
+   */
+  const attach = (pid, streamId, $btn) => {
+    ensureAiStreamStyle();
+    const $p = panelOf(pid).removeClass('is-hidden');
+    const $meta = $p.find('.hwof-wait .hwof-meta');
+    let renderer = null;
+    openAiStream(streamId, {
+      onQueue: (q) => { if ($meta.length) $meta.text(`⏳ ${formatQueue(q)}`); },
+      onDelta: (delta) => {
+        if (!renderer) {
+          $p.html(`<div class="hwof-panel__head">🤖 ${esc(i18n('AI explanation'))}</div><div class="hwof-panel__body typo"></div>`);
+          renderer = new MarkdownStreamRenderer($p.find('.hwof-panel__body'), 100, aiMarkdown);
+        }
+        renderer.append(delta);
+      },
+      onDone: async () => {
+        clearTimeout(timers[pid]);
+        try {
+          show(pid, await request.get(urlOf(pid)), $btn); // the saved report, exactly as stored
+        } catch (e) {
+          poll(pid, $btn);
+        }
+      },
+      onError: () => { poll(pid, $btn); }, // the job's own state decides what happened
+    });
+  };
   async function generate(pid, $btn) {
     waiting(pid);
     $btn.prop('disabled', true);
     try {
       const res = await request.post(cfg.url, { pid });
       if (!res.started) Notification.info(i18n('An explanation is already being generated for this task.'));
-      poll(pid, $btn);
+      if (res.job && res.job.streamId) attach(pid, res.job.streamId, $btn);
+      else poll(pid, $btn);
     } catch (e) {
       const msg = e.message || i18n('Could not start the explanation.');
       Notification.error(msg);
@@ -115,6 +159,7 @@ export default new NamedPage(['homework_paper', 'contest_paper'], () => {
       const res = await request.get(urlOf(pid));
       const running = res.job && res.job.status === 'running';
       if (res.report && !running) show(pid, res, $btn);
+      else if (running && res.job.streamId) attach(pid, res.job.streamId, $btn);
       else if (running) poll(pid, $btn);
       else generate(pid, $btn);
     } catch (e) {
@@ -124,12 +169,16 @@ export default new NamedPage(['homework_paper', 'contest_paper'], () => {
     }
   });
 
-  // A job still running when the page was (re)loaded: watch it and fill the panel in place.
-  $('.hwof-btn[data-running="1"]').each(function attach() {
+  // A job still running when the page was (re)loaded: watch it and fill the
+  // panel in place — attaching to its live stream when this process still has one.
+  $('.hwof-btn[data-running="1"]').each(function watchRunning() {
     const $btn = $(this);
     const pid = +$btn.attr('data-pid');
     waiting(pid);
     $btn.prop('disabled', true);
-    poll(pid, $btn);
+    request.get(`${urlOf(pid)}&job=1`).then((probe) => {
+      if (probe.job && probe.job.status === 'running' && probe.job.streamId) attach(pid, probe.job.streamId, $btn);
+      else poll(pid, $btn);
+    }).catch(() => poll(pid, $btn));
   });
 });
