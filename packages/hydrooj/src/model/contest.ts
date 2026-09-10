@@ -20,6 +20,7 @@ import type { Handler } from '../service/server';
 import { Optional } from '../typeutils';
 import { PERM, PRIV, STATUS, STATUS_SHORT_TEXTS } from './builtin';
 import * as document from './document';
+import { effectiveScore100, listReleasedGrades, SubjectiveGradeDoc } from './subjective_grade';
 import MessageModel from './message';
 import problem, { ProblemModel } from './problem';
 import RecordModel from './record';
@@ -73,6 +74,18 @@ export function isDone(tdoc: Tdoc, tsdoc?: ContestStatusDoc): boolean {
     if (tsdoc?.endAt && tsdoc.endAt <= new Date()) return true;
     if (tsdoc && tdoc.duration && tsdoc.startAt <= new Date(Date.now() - Math.floor(tdoc.duration * Time.hour))) return true;
     return false;
+}
+
+/**
+ * PTA fork — are a container's results published to its students? For a
+ * homework with subjective tasks (`manualEval`) the answer is "when the
+ * teacher evaluated it", not "when the deadline passed": objective
+ * verdicts stay masked and "Your results" stays closed until then.
+ * Every other container is published by the clock (see isDone).
+ */
+export function resultsPublished(tdoc: Tdoc): boolean {
+    if (!tdoc || tdoc.rule !== 'homework' || !tdoc.manualEval) return true;
+    return !!tdoc.evaluatedAt;
 }
 
 export function isLocked(tdoc: Tdoc, time = new Date()) {
@@ -726,6 +739,78 @@ export function applyScoreOverride(tdoc: Tdoc, stats: any, override?: ScoreOverr
     return out;
 }
 
+/* ------------------------------------------------------------------ */
+/*  PTA fork — AI-graded subjective tasks: the COMPUTED score layer     */
+/* ------------------------------------------------------------------ */
+/**
+ * A subjective task (pid S…) produces no record. Its score on a homework
+ * comes from the AI grader (lib/subjective_grader.ts): once the teacher
+ * RELEASES a grade, this folds it into the student's status as the task's
+ * computed score — a detail row with the rubric score (0..100), weighted
+ * by the task's points and subject to the homework's late rule against
+ * the PDF's upload time, exactly like a judged task. It runs BEFORE
+ * applyScoreOverride, so a teacher's manual adjustment still wins and its
+ * dialog shows the AI score as "computed".
+ */
+export interface SubjectiveGradeLite {
+    pid: number;
+    uid: number;
+    score100: number;
+    fileAt?: Date;
+    gradedAt?: Date;
+    total?: number;
+    maxTotal?: number;
+}
+
+export function seedSubjectiveScores(tdoc: Tdoc, stats: any, grades: SubjectiveGradeLite[] | null | undefined) {
+    if (tdoc.rule !== 'homework' || !grades?.length) return stats;
+    const detail: Record<string, any> = { ...(stats.detail || {}) };
+    let changed = false;
+    for (const g of grades) {
+        if (!tdoc.pids.includes(g.pid) || typeof g.score100 !== 'number') continue;
+        const rate = (tdoc.score?.[g.pid] ?? 100) / 100;
+        const score = Math.min(100, Math.max(0, g.score100));
+        const coefficient = g.fileAt ? homeworkPenaltyCoefficient(tdoc, new Date(g.fileAt)) : 1;
+        detail[g.pid] = {
+            ...(detail[g.pid] || { pid: g.pid, time: 0 }),
+            status: score >= 100 ? STATUS.STATUS_ACCEPTED : STATUS.STATUS_WRONG_ANSWER,
+            score,
+            penaltyScore: rate * score * coefficient,
+            aiGrade: {
+                total: g.total, maxTotal: g.maxTotal, at: g.gradedAt || null,
+            },
+        };
+        changed = true;
+    }
+    if (!changed) return stats;
+    const rows = Object.values(detail);
+    return {
+        ...stats,
+        detail,
+        score: sumBy(rows, 'score'),
+        penaltyScore: sumBy(rows, 'penaltyScore'),
+    };
+}
+
+/** Released grades of the homework's tasks, grouped by student (one query). */
+export async function subjectiveGradesOf(domainId: string, tdoc: Tdoc, uids?: number[]): Promise<Map<number, SubjectiveGradeLite[]>> {
+    const out = new Map<number, SubjectiveGradeLite[]>();
+    if (tdoc.rule !== 'homework' || !tdoc.pids?.length) return out;
+    let docs: SubjectiveGradeDoc[] = [];
+    try {
+        docs = await listReleasedGrades(domainId, tdoc.pids, uids);
+    } catch (e) {
+        return out;
+    }
+    for (const d of docs) {
+        if (!out.has(d.uid)) out.set(d.uid, []);
+        out.get(d.uid)!.push({
+            pid: d.pid, uid: d.uid, score100: effectiveScore100(d), fileAt: d.fileAt, gradedAt: d.gradedAt, total: d.total, maxTotal: d.maxTotal,
+        });
+    }
+    return out;
+}
+
 const homework = buildContestRule({
     TEXT: 'Assignment',
     hidden: true,
@@ -931,6 +1016,19 @@ export const RULES: ContestRules = {
     acm, oi, homework, ioi, ledo, strictioi, test,
 };
 
+/**
+ * THE status derivation every recalculation goes through: the rule's own
+ * statistics, then the released AI grades of subjective tasks, then the
+ * teacher's adjustments. `grades` may be pre-fetched (recalcStatus loads
+ * them once for the whole homework).
+ */
+export async function statsOf(tdoc: Tdoc, journal: any[], tsdoc: any, grades?: SubjectiveGradeLite[] | null) {
+    let g = grades;
+    if (g === undefined && tsdoc?.uid) g = (await subjectiveGradesOf(tdoc.domainId, tdoc, [tsdoc.uid])).get(tsdoc.uid) || null;
+    const base = RULES[tdoc.rule].stat(tdoc, journal);
+    return applyScoreOverride(tdoc, seedSubjectiveScores(tdoc, base, g), tsdoc?.override);
+}
+
 const collBalloon = db.collection('contest.balloon');
 
 function _getStatusJournal(tsdoc: ContestStatusDoc): ContestJournalEntry[] {
@@ -1045,8 +1143,9 @@ export async function updateStatus(
         rid, pid, status, score, subtasks, lang,
     }, 'rid');
     const journal = _getStatusJournal(tsdoc);
-    // PTA fork: a teacher's adjustments survive every recalculation.
-    const stats = applyScoreOverride(tdoc, RULES[tdoc.rule].stat(tdoc, journal), (tsdoc as any).override);
+    // PTA fork: released AI grades of subjective tasks and a teacher's
+    // adjustments survive every recalculation (statsOf).
+    const stats = await statsOf(tdoc, journal, { ...tsdoc, uid });
     return await document.revSetStatus(tdoc.domainId, document.TYPE_CONTEST, tdoc.docId, uid, tsdoc.rev, { journal, ...stats });
 }
 
@@ -1060,7 +1159,7 @@ export async function recalcUserStatus(domainId: string, tid: ObjectId, uid: num
     const tdoc = await get(domainId, tid);
     const tsdoc: any = await document.getStatus(domainId, document.TYPE_CONTEST, tid, uid);
     const journal = tsdoc?.journal ? _getStatusJournal(tsdoc) : [];
-    const stats = applyScoreOverride(tdoc, RULES[tdoc.rule].stat(tdoc, journal), tsdoc?.override);
+    const stats = await statsOf(tdoc, journal, { ...(tsdoc || {}), uid });
     const $unset: any = {};
     if (!stats.totalOverride) $unset.totalOverride = '';
     if (stats.computedPenaltyScore === undefined) $unset.computedPenaltyScore = '';
@@ -1126,10 +1225,13 @@ export async function recalcStatus(domainId: string, tid: ObjectId) {
         document.getMultiStatus(domainId, document.TYPE_CONTEST, { docId: tid }).toArray(),
     ]);
     const tasks = [];
+    // PTA fork: released AI grades, loaded once for the whole homework.
+    const grades = await subjectiveGradesOf(domainId, tdoc as any);
     for (const tsdoc of tsdocs || []) {
-        if (tsdoc.journal || (tsdoc as any).override) {
+        if (tsdoc.journal || (tsdoc as any).override || grades.has(tsdoc.uid)) {
             const journal = tsdoc.journal ? _getStatusJournal(tsdoc) : [];
-            const stats = applyScoreOverride(tdoc, RULES[tdoc.rule].stat(tdoc, journal), (tsdoc as any).override);
+            // eslint-disable-next-line no-await-in-loop
+            const stats = await statsOf(tdoc as any, journal, tsdoc, grades.get(tsdoc.uid) || null);
             tasks.push(
                 document.revSetStatus(
                     domainId, document.TYPE_CONTEST, tid,
@@ -1240,7 +1342,9 @@ export function applyProjection(tdoc: Tdoc, rdoc: RecordDoc, udoc: User) {
      * end-of-contest batch job. Managers never reach this function: every
      * call site skips projection for owner / PERM_EDIT_CONTEST.
      */
-    if (rdoc.lang === '_' && !isDone(tdoc)) {
+    // PTA fork: a manual-evaluation homework keeps masking after the
+    // deadline until the teacher publishes the results (resultsPublished).
+    if (rdoc.lang === '_' && (!isDone(tdoc) || !resultsPublished(tdoc))) {
         rdoc.status = STATUS.STATUS_WAITING;
         delete rdoc.score;
         delete rdoc.time;
@@ -1349,6 +1453,9 @@ global.Hydro.model.contest = {
     recalcUserStatus,
     homeworkPenaltyCoefficient,
     applyScoreOverride,
+    seedSubjectiveScores,
+    subjectiveGradesOf,
+    statsOf,
     unlockScoreboard,
     getBalloon,
     addBalloon,
@@ -1368,6 +1475,7 @@ global.Hydro.model.contest = {
     isNotStarted,
     isOngoing,
     isDone,
+    resultsPublished,
     isLocked,
     isExtended,
     applyProjection,

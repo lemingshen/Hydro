@@ -45,9 +45,6 @@ import { createHash } from 'crypto';
 import { load as yamlLoad } from 'js-yaml';
 import { STATUS, STATUS_SHORT_TEXTS, STATUS_TEXTS } from '@hydrooj/common';
 import { Logger } from '../logger';
-import * as aiTutor from './ai_tutor';
-import { objectiveSubKindOf } from './objective_markdown';
-import { readRawProblemConfig } from './problem_config';
 import * as contest from '../model/contest';
 import KnowledgeModel from '../model/knowledge';
 import problem from '../model/problem';
@@ -56,8 +53,12 @@ import {
     getClassReportMapCache, listSubjective, setClassReport, setClassReportJob, setClassReportMapCache,
 } from '../model/selflearning';
 import * as setting from '../model/setting';
+import { effectivePoints, listGrades, SubjectiveGradeDoc } from '../model/subjective_grade';
 import system from '../model/system';
 import user from '../model/user';
+import * as aiTutor from './ai_tutor';
+import { objectiveSubKindOf } from './objective_markdown';
+import { readRawProblemConfig } from './problem_config';
 
 const logger = new Logger('activity-report');
 
@@ -336,7 +337,7 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
             });
         }
         const c = cells.get(k)!;
-        if (!c.firstAt) c.firstAt = at;
+        c.firstAt ||= at;
         c.attempts.push({
             status: r.status, score: r.score || 0, at, rid: r._id, lang: r.lang || '',
         });
@@ -426,6 +427,78 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
         }
     }
 
+    /*
+     * ---- AI grades of REPORT tasks (PTA fork, lib/subjective_grader.ts) ----
+     * A subjective task of type `report` carries one AI grade per student:
+     * points per rubric criterion, comments and an improvement list. The
+     * class report gets the deterministic part — per-criterion means, the
+     * share of low scores, the most frequent improvement bullets, the flags
+     * — and each student's own grade line in the per-student corpus.
+     */
+    const gradeOf = new Map<string, { total: number, maxTotal: number, criteria: { id: string, title: string, points: number, maxPoints: number }[], improvements: string[], strengths: string[], flags: string[] }>();
+    const reportOf = new Map<number, any>();
+    const normBullet = (t: string) => String(t || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    for (const t of tasks) {
+        if (t.kind !== 'subjective') continue;
+        const docs = (await listGrades(domainId, t.pid).catch(() => [])) as SubjectiveGradeDoc[];
+        const done = docs.filter((d) => d.status === 'done' && uidSet.has(d.uid) && d.criteria?.length);
+        if (!done.length) continue;
+        const critAgg = new Map<string, { id: string, title: string, maxPoints: number, sum: number, n: number, low: number }>();
+        const bullets = new Map<string, { text: string, count: number }>();
+        const strengths = new Map<string, { text: string, count: number }>();
+        const flags: Record<string, number> = {};
+        const totals: number[] = [];
+        let maxTotal = 0;
+        for (const d of done) {
+            const eff = effectivePoints(d);
+            totals.push(eff.total);
+            maxTotal = Math.max(maxTotal, d.maxTotal || 0);
+            const crit = (d.criteria || []).map((c) => ({ id: c.id, title: c.title, points: eff.perCriterion[c.id] ?? c.points, maxPoints: c.maxPoints }));
+            for (const c of crit) {
+                const a = critAgg.get(c.id) || { id: c.id, title: c.title, maxPoints: c.maxPoints, sum: 0, n: 0, low: 0 };
+                a.sum += c.points;
+                a.n += 1;
+                if (c.maxPoints > 0 && c.points < c.maxPoints * 0.5) a.low += 1;
+                critAgg.set(c.id, a);
+            }
+            const imp = (d.summary?.improvements || []).slice(0, 6);
+            for (const b of imp) {
+                const k = normBullet(b);
+                if (!k) continue;
+                const e = bullets.get(k) || { text: b, count: 0 };
+                e.count += 1;
+                bullets.set(k, e);
+            }
+            for (const b of (d.summary?.strengths || []).slice(0, 4)) {
+                const k = normBullet(b);
+                if (!k) continue;
+                const e = strengths.get(k) || { text: b, count: 0 };
+                e.count += 1;
+                strengths.set(k, e);
+            }
+            for (const f of d.flags || []) flags[f] = (flags[f] || 0) + 1;
+            gradeOf.set(cellKey(d.uid, t.pid), {
+                total: eff.total, maxTotal: d.maxTotal || 0, criteria: crit, improvements: imp, strengths: (d.summary?.strengths || []).slice(0, 3), flags: d.flags || [],
+            });
+        }
+        const byCount = (m: Map<string, { text: string, count: number }>, n: number) => [...m.values()].sort((a, b) => b.count - a.count).slice(0, n);
+        reportOf.set(t.pid, {
+            graded: done.length,
+            released: done.filter((d) => d.released).length,
+            maxTotal,
+            mean: mean1(totals),
+            median: median(totals),
+            min: totals.length ? Math.min(...totals) : 0,
+            max: totals.length ? Math.max(...totals) : 0,
+            criteria: [...critAgg.values()].map((a) => ({
+                id: a.id, title: a.title, maxPoints: a.maxPoints, mean: a.n ? Math.round((a.sum / a.n) * 10) / 10 : null, lowShare: a.n ? Math.round((a.low / a.n) * 100) : 0,
+            })),
+            improvements: byCount(bullets, 40),
+            strengths: byCount(strengths, 12),
+            flags,
+        });
+    }
+
     // ---- per-task statistics ----
     const perTask = tasks.map((t) => {
         const own = uids.map((uid) => cells.get(cellKey(uid, t.pid))).filter((c): c is Cell => !!c);
@@ -489,6 +562,7 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
             questions,
             accuracy: questions.length ? Math.round(questions.reduce((a, q) => a + q.accuracy, 0) / questions.length) : null,
             handedIn: handed,
+            report: reportOf.get(t.pid) || null,
         };
     });
 
@@ -554,6 +628,9 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
         problems: perTask.map((p) => ({
             label: p.label, title: p.title, kind: p.kind, sub: p.sub, weight: p.weight, attempted: p.attempted, solved: p.solved, meanScore: p.meanScore, medianAttempts: p.medianAttempts, maxAttempts: p.maxAttempts, thrashers: p.thrashers, verdicts: p.verdicts, firstFail: p.firstFail, accuracy: p.accuracy, handedIn: p.handedIn,
             questions: p.questions.map((qq) => ({ key: qq.key, accuracy: qq.accuracy, answered: qq.answered, answer: qq.answer, commonWrong: qq.commonWrong })),
+            report: p.report ? {
+                graded: p.report.graded, released: p.report.released, maxTotal: p.report.maxTotal, mean: p.report.mean, median: p.report.median, criteria: p.report.criteria, improvements: p.report.improvements.slice(0, 6), flags: p.report.flags,
+            } : null,
         })),
         scores: {
             students: scores.length, full: fullScore, mean: mean1(scores), median: median(scores), min: scores.length ? Math.min(...scores) : 0, max: scores.length ? Math.max(...scores) : 0, q1: q(0.25), q3: q(0.75), histogram,
@@ -576,7 +653,9 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
                 const c = cells.get(cellKey(uid, t.pid));
                 if (t.kind === 'subjective') {
                     const h = handIn.get(cellKey(uid, t.pid));
-                    st.tasks.push({ label: t.label, kind: t.kind, handedIn: !!h, files: h?.files || 0, words: h?.words || 0 });
+                    st.tasks.push({
+                        label: t.label, kind: t.kind, handedIn: !!h, files: h?.files || 0, words: h?.words || 0, grade: gradeOf.get(cellKey(uid, t.pid)) || null,
+                    });
                     continue;
                 }
                 if (!c) {
@@ -655,6 +734,10 @@ export function renderActivityStudent(st: any, level: number, taskLabels?: strin
         if (taskLabels && !taskLabels.includes(t.label)) continue;
         if (t.kind === 'subjective') {
             L.push(`${t.label} [subjective]: ${t.handedIn ? `handed in — ${t.files} file(s), ${t.words} words of report` : 'NOT handed in'}`);
+            if (t.grade) {
+                const g = t.grade;
+                L.push(`  AI report grade: ${g.total}/${g.maxTotal} — ${g.criteria.map((c: any) => `${c.title} ${c.points}/${c.maxPoints}`).join('; ')}${g.improvements.length ? ` — to improve: ${g.improvements.slice(0, lv.collapse ? 2 : 4).join(' | ')}` : ''}${g.flags.length ? ` — flags: ${g.flags.join(', ')}` : ''}`);
+            }
             continue;
         }
         if (!t.attempts.length) {
@@ -790,6 +873,15 @@ export function activityReportContext(corpus: any, findings: any): string {
     for (const p of corpus.perTask) {
         if (p.kind === 'subjective') {
             out.push(`${p.label} [subjective] "${p.title}": handed in by ${p.handedIn} of ${L.participants}`);
+            const r = p.report;
+            if (r) {
+                out.push(`  AI report grades (rubric-based, ${r.graded} graded${r.released < r.graded ? `, ${r.released} released to students` : ''}): mean ${r.mean ?? '-'}/${r.maxTotal}, median ${r.median}, min ${r.min}, max ${r.max}`);
+                out.push(`  per criterion (mean / max, share of students below half): ${r.criteria.map((c: any) => `${c.title} ${c.mean ?? '-'}/${c.maxPoints} (${c.lowShare}% low)`).join('; ')}`);
+                if (r.improvements.length) out.push(`  most frequent improvement notes (count): ${r.improvements.slice(0, 20).map((b: any) => `${b.text} (${b.count})`).join(' | ')}`);
+                if (r.strengths.length) out.push(`  most frequent strengths (count): ${r.strengths.slice(0, 8).map((b: any) => `${b.text} (${b.count})`).join(' | ')}`);
+                const fl = Object.entries(r.flags || {});
+                if (fl.length) out.push(`  grader flags: ${fl.map(([k, v]) => `${k}=${v}`).join(', ')}`);
+            }
             continue;
         }
         out.push(`${p.label} [${p.kind}] "${p.title}": attempted ${p.attempted}, solved ${p.solved}, mean best score ${p.meanScore ?? '-'}/100, median attempts ${p.medianAttempts}, max ${p.maxAttempts}${p.kind === 'programming' ? `, median minutes to accept ${p.medianMinutesToAc}, grader-thrash students ${p.thrashers}` : ''}`);

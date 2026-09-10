@@ -25,6 +25,7 @@ import {
 } from '../interface';
 import { objectiveSubKindOf } from '../lib/objective_markdown';
 import { readRawProblemConfig } from '../lib/problem_config';
+import { normalizeRubric, SUBJECTIVE_TYPES, subjectiveConfigOf } from '../lib/subjective_rubric';
 import { isObjectivePid, objectiveTitleOf } from '../lib/objective_title';
 import { activityOwners, activityPids, applyActivityPidsCache, entitledToActivityTask } from '../lib/activity_pids';
 import { PERM, PRIV, STATUS } from '../model/builtin';
@@ -1083,6 +1084,42 @@ async function applyFunctionConfig(pdoc: ProblemDoc, owner: number, raw: string)
     await problem.addTestdata(pdoc.domainId, pdoc.docId, 'config.yaml', Buffer.from(yamlDump(cfg)), owner);
 }
 
+/**
+ * PTA fork — SUBJECTIVE TASKS (pid S…). The create/edit form posts
+ * `subjectiveConfig` (JSON: {type: 'report' | 'project', rubric}). The type
+ * says what students hand in — ONE PDF report (graded by the AI against
+ * the rubric once the homework ends, lib/subjective_grader.ts) or a
+ * project zip — and the rubric is validated by lib/subjective_rubric.ts
+ * (points must be positive, criteria titled, levels within their maximum).
+ * Both land in config.yaml as `subjective` / `rubric`; everything else in
+ * the file is kept. Empty = leave the keys alone.
+ */
+const isSubjectivePid = (pid: any) => /^s/i.test(String(pid || ''));
+
+async function applySubjectiveConfig(pdoc: ProblemDoc, owner: number, raw: string) {
+    if (!raw || !raw.trim()) return;
+    let j: any;
+    try {
+        j = JSON.parse(raw);
+    } catch {
+        throw new ValidationError('subjectiveConfig');
+    }
+    const type = String(j?.type || 'project');
+    if (!SUBJECTIVE_TYPES.includes(type as any)) throw new ValidationError('subjectiveConfig', null, 'Unknown subjective task type.');
+    let rubric = null;
+    try {
+        rubric = normalizeRubric(j?.rubric);
+    } catch (e) {
+        throw new ValidationError('subjectiveConfig', null, `Rubric: ${e.message}`);
+    }
+    const cfg = await readRawProblemConfig(pdoc);
+    cfg.subjective = { type };
+    if (rubric) cfg.rubric = rubric;
+    else delete cfg.rubric;
+    if (!cfg.type) cfg.type = 'default';
+    await problem.addTestdata(pdoc.domainId, pdoc.docId, 'config.yaml', Buffer.from(yamlDump(cfg)), owner);
+}
+
 async function applyObjectiveConfig(pdoc: ProblemDoc, owner: number, raw: string) {
     if (!raw || !raw.trim()) return;
     let parsed: any;
@@ -1207,6 +1244,8 @@ export class ProblemEditHandler extends ProblemManageHandler {
         if (rawCfg.template && typeof rawCfg.template === 'object') {
             this.UiContext.functionConfig = { template: rawCfg.template, stub: (rawCfg.stub && typeof rawCfg.stub === 'object') ? rawCfg.stub : {} };
         }
+        // The subjective-task panel (type + rubric builder) prefills from here.
+        if (isSubjectivePid(this.pdoc.pid)) this.UiContext.subjectiveConfig = subjectiveConfigOf(rawCfg);
         this.response.body.knowledgePanel = await buildKnowledgePickPanel(this, this.args.domainId);
         this.response.template = 'problem_edit.html';
     }
@@ -1221,9 +1260,10 @@ export class ProblemEditHandler extends ProblemManageHandler {
     @post('allowLangs', Types.String, true)
     @post('objectiveConfig', Types.Content, true)
     @post('functionConfig', Types.Content, true)
+    @post('subjectiveConfig', Types.Content, true)
     async post(
         domainId: string, pid: string | number, title: string, content: string,
-        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0, allowLangs = '', objectiveConfig = '', functionConfig = '',
+        newPid: string | number = '', hidden = false, tag: string[] = [], difficulty = 0, allowLangs = '', objectiveConfig = '', functionConfig = '', subjectiveConfig = '',
     ) {
         if (typeof newPid !== 'string') newPid = `P${newPid}`;
         if (newPid !== this.pdoc.pid && await problem.get(domainId, newPid)) throw new ProblemAlreadyExistError(newPid);
@@ -1238,6 +1278,7 @@ export class ProblemEditHandler extends ProblemManageHandler {
         await applyAllowLangs(this.pdoc, this.user._id, allowLangs);
         if (isObjectivePid(newPid || this.pdoc.pid)) await applyObjectiveConfig(await problem.get(domainId, this.pdoc.docId), this.user._id, objectiveConfig);
         if (isFunctionPid(newPid || this.pdoc.pid)) await applyFunctionConfig(await problem.get(domainId, this.pdoc.docId), this.user._id, functionConfig);
+        if (isSubjectivePid(newPid || this.pdoc.pid)) await applySubjectiveConfig(await problem.get(domainId, this.pdoc.docId), this.user._id, subjectiveConfig);
         this.response.redirect = this.url('problem_detail', { pid: newPid || pdoc.docId });
     }
 }
@@ -1716,9 +1757,10 @@ export class ProblemCreateHandler extends Handler {
     @post('allowLangs', Types.String, true)
     @post('objectiveConfig', Types.Content, true)
     @post('functionConfig', Types.Content, true)
+    @post('subjectiveConfig', Types.Content, true)
     async post(
         domainId: string, title: string, content: string, pid: string | number = '',
-        hidden = false, difficulty = 0, tag: string[] = [], allowLangs = '', objectiveConfig = '', functionConfig = '',
+        hidden = false, difficulty = 0, tag: string[] = [], allowLangs = '', objectiveConfig = '', functionConfig = '', subjectiveConfig = '',
     ) {
         if (typeof pid !== 'string') pid = `P${pid}`;
         if (pid && await problem.get(domainId, pid)) throw new ProblemAlreadyExistError(pid);
@@ -1732,6 +1774,8 @@ export class ProblemCreateHandler extends Handler {
         if (isObjectivePid(pid)) await applyObjectiveConfig(await problem.get(domainId, docId), this.user._id, objectiveConfig);
         // The function-task editor's judge program + stub → config.yaml.
         if (isFunctionPid(pid)) await applyFunctionConfig(await problem.get(domainId, docId), this.user._id, functionConfig);
+        // The subjective-task panel's type + rubric → config.yaml.
+        if (isSubjectivePid(pid)) await applySubjectiveConfig(await problem.get(domainId, docId), this.user._id, subjectiveConfig);
         const files = new Set(Array.from(content.matchAll(/file:\/\/([\w-]+\.[a-zA-Z0-9]+)/g)).map((i) => i[1]));
         const tasks = [];
         for (const file of files) {

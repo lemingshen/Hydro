@@ -269,7 +269,7 @@ export class HomeworkObjectiveFeedbackHandler extends Handler {
             if (!studentFeedbackVisible(this.tdoc, await getQuick(domainId, String(tid)))) throw new NotFoundError(tid);
         }
         // Only once the homework has ended (the late window included).
-        if (!contest.isDone(this.tdoc)) throw new HomeworkNotLiveError(tid);
+        if (!contest.isDone(this.tdoc) || !contest.resultsPublished(this.tdoc)) throw new HomeworkNotLiveError(tid);
         const tsdoc = await contest.getStatus(domainId, tid, this.user._id);
         if (!tsdoc?.attend) throw new ForbiddenError('Only students who took part in this activity can ask for an explanation.');
     }

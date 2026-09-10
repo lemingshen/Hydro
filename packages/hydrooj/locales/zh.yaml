@@ -1080,3 +1080,13 @@ ai_tutor.sched_adaptive: "调度器 — 根据提供商自适应并发（跟得�
 ai_tutor.sched_slots_max: "调度器 — 自适应并发上限"
 ai_tutor.key_max_inflight: "每个 API 密钥的并发请求数"
 ai_tutor.key_rpm: "每个 API 密钥的每分钟请求数"
+# PTA fork — 主观题报告的 AI 评分（lib/subjective_grader.ts）
+ai_tutor.subjective_grade_enabled: "报告评分 — 启用 PDF 报告的 AI 评分"
+ai_tutor.subjective_grade_auto: "报告评分 — 教师评估作业时自动评分"
+ai_tutor.subjective_grade_release: "报告评分 — 学生何时看到分数与评语"
+ai_tutor.subjective_grade_concurrency: "报告评分 — 并行评分的报告数（1-8）"
+ai_tutor.subjective_grade_model: "报告评分 — 模型（留空 = 辅导模型）"
+ai_tutor.subjective_grade_max_chars: "报告评分 — 每次调用发送的报告文本字符上限"
+homework_subjective_review: "AI 报告评分"
+ai_tutor.subjective_grade_vision: "报告评分 — 同时把 PDF 原件发送给模型（Claude / OpenAI）"
+homework_report_review: "AI 报告评分"

@@ -56,5 +56,18 @@ export async function parseConfig(config: string | ProblemConfigFile = {}, files
     // ProblemDetailHandler filters by family instead (handler/problem.ts).
     if (template) result.template = template;
     if (stub) result.stub = stub;
+    /*
+     * PTA fork — subjective tasks. Same whitelist rule: the submission type
+     * and the rubric are read from pdoc.config by the task page, the
+     * homework paper and the AI grader, so they must be carried through
+     * here. The rubric is copied as written; lib/subjective_rubric.ts
+     * validates it (normalizeRubric) wherever it is consumed.
+     */
+    const subj = (cfg as any).subjective;
+    if (subj && typeof subj === 'object' && ['report', 'project'].includes(String(subj.type))) {
+        result.subjective = { type: subj.type };
+    }
+    const rubric = (cfg as any).rubric;
+    if (rubric && typeof rubric === 'object' && Array.isArray(rubric.criteria)) result.rubric = rubric;
     return result;
 }

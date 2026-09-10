@@ -160,3 +160,13 @@ ai_tutor.sched_adaptive: "Scheduler — Adapt the Limit to the Provider (grow wh
 ai_tutor.sched_slots_max: "Scheduler — Ceiling of the Adaptive Limit"
 ai_tutor.key_max_inflight: "Concurrent Requests per API Key"
 ai_tutor.key_rpm: "Requests per Minute per API Key"
+# PTA fork — AI grading of subjective report tasks (lib/subjective_grader.ts)
+ai_tutor.subjective_grade_enabled: "Report Grading — Enable the AI Grader for PDF Reports"
+ai_tutor.subjective_grade_auto: "Report Grading — Grade Automatically When the Teacher Evaluates the Homework"
+ai_tutor.subjective_grade_release: "Report Grading — When Students See Their Grade and Comments"
+ai_tutor.subjective_grade_concurrency: "Report Grading — Reports Graded in Parallel (1-8)"
+ai_tutor.subjective_grade_model: "Report Grading — Model (empty = the tutor model)"
+ai_tutor.subjective_grade_max_chars: "Report Grading — Max Characters of Report Text per Call"
+homework_subjective_review: "AI Report Grading"
+ai_tutor.subjective_grade_vision: "Report Grading — Also Send the PDF Itself to the Model (Claude / OpenAI)"
+homework_report_review: "AI Report Grading"

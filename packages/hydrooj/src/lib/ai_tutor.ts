@@ -1,10 +1,11 @@
 /* eslint-disable max-len */
-import { Logger } from '../logger';
 import { STATUS, STATUS_SHORT_TEXTS, STATUS_TEXTS } from '@hydrooj/common';
 import type { ProblemDoc, RecordDoc } from '../interface';
+import { Logger } from '../logger';
 import type { TutorMessage, TutorThreadDoc } from '../model/selflearning';
 import * as SettingModel from '../model/setting';
 import system from '../model/system';
+import { KeyLease, keyPool, parseKeySpecs } from './ai_keys';
 import { AiUsage, mergeStreamUsage, normalizeUsage } from './ai_metrics';
 import {
     buildPrompt, codeDelta, limitSummary, memoByVersion, prefixText, PromptBlock, stableList, summaryDue, THREAD_SUMMARY_PROMPT, wordCount,
@@ -12,7 +13,6 @@ import {
 import {
     AiAbortedError, AiBusyError, AiCallMeta, aiScheduler, AiSlot, currentSlot, DEFAULT_FEATURE_CAPS, parseFeatureCaps,
 } from './ai_scheduler';
-import { KeyLease, keyPool, parseKeySpecs } from './ai_keys';
 import {
     decodeAnthropicEvent, decodeOpenAIEvent, JsonFieldStreamer, SseParser, StreamSignal,
 } from './ai_stream';
@@ -90,6 +90,14 @@ registerSystemSettingsIdempotent(
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_top', 5, 'number', 'ai_tutor.quick_review_top', 'Quick Review: number of "re-teach now" items (3-10)'),
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_model', '', 'text', 'ai_tutor.quick_review_model', 'Quick Review: model for the diagnosis call (empty = the tutor model)'),
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_student_feedback', 'on_end', { on_end: 'At the end of the test', on_teacher: 'When the teacher releases it', off: 'Off' }, 'ai_tutor.quick_review_student_feedback', 'Quick Review: when students see their weak points and Explain'),
+    // 📄 Subjective REPORT tasks: the AI grader (lib/subjective_grader.ts).
+    Setting('setting_ai_tutor', 'ai_tutor.subjective_grade_enabled', true, 'boolean', 'ai_tutor.subjective_grade_enabled', 'Report grading: let the AI grade PDF reports of subjective tasks against their rubric'),
+    Setting('setting_ai_tutor', 'ai_tutor.subjective_grade_auto', true, 'boolean', 'ai_tutor.subjective_grade_auto', 'Report grading: grade automatically when the homework is evaluated by the teacher'),
+    Setting('setting_ai_tutor', 'ai_tutor.subjective_grade_release', 'manual', { manual: 'When the teacher releases them', auto: 'As soon as grading finishes' }, 'ai_tutor.subjective_grade_release', 'Report grading: when students see their grade and comments'),
+    Setting('setting_ai_tutor', 'ai_tutor.subjective_grade_concurrency', 2, 'number', 'ai_tutor.subjective_grade_concurrency', 'Report grading: reports graded in parallel (1-8)'),
+    Setting('setting_ai_tutor', 'ai_tutor.subjective_grade_model', '', 'text', 'ai_tutor.subjective_grade_model', 'Report grading: model for the grading call (empty = the tutor model)'),
+    Setting('setting_ai_tutor', 'ai_tutor.subjective_grade_max_chars', 60000, 'number', 'ai_tutor.subjective_grade_max_chars', 'Report grading: max characters of report text sent per report'),
+    Setting('setting_ai_tutor', 'ai_tutor.subjective_grade_vision', false, 'boolean', 'ai_tutor.subjective_grade_vision', 'Report grading: also send the PDF itself to the model (Claude / OpenAI read figures and tables; higher cost)'),
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_infer_points', true, 'boolean', 'ai_tutor.quick_review_infer_points', 'Quick Review: infer knowledge points per question from the catalog when none are set'),
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_prewarm', true, 'boolean', 'ai_tutor.quick_review_prewarm', 'Quick Review: pre-generate Explain reports for the most-missed questions'),
     Setting('setting_ai_tutor', 'ai_tutor.quick_review_prewarm_max', 150, 'number', 'ai_tutor.quick_review_prewarm_max', 'Quick Review: max pre-generated Explain reports per test'),
@@ -143,7 +151,7 @@ const KEYLESS_PROVIDERS = ['ollama'];
  * into storage for these keys. Arrays keep the last non-empty string (the
  * last form field wins); other objects reset to the fallback.
  */
-const GARBAGE_VALUE = /^\s*(\[object [A-Za-z]+\]\s*,?\s*)+$/;
+const GARBAGE_VALUE = /^\s*(\[object [A-Za-z]+\]\s*(?:,\s*)?)+$/;
 
 export function sysStr(key: string, fallback = ''): string {
     const v: any = system.get(key);
@@ -311,7 +319,30 @@ export function tutorProviderInfo() {
 /* ------------------------------------------------------------------ */
 /*  Low-level provider call (no extra npm dependencies: global fetch)  */
 /* ------------------------------------------------------------------ */
-export interface ChatMessage { role: 'user' | 'assistant'; content: string }
+/**
+ * PTA fork — a file the model reads alongside the text (the report grader's
+ * "native PDF" mode, lib/subjective_grader.ts). Sent as a document block to
+ * Anthropic and as a `file` content part to OpenAI; providers without
+ * document input (DeepSeek, Ollama) get the text only.
+ */
+export interface ChatAttachment { name: string, mediaType: string, data: string }
+export interface ChatMessage { role: 'user' | 'assistant', content: string, attachments?: ChatAttachment[] }
+
+/** Providers whose chat endpoint accepts a PDF document in a user message. */
+export function providerSupportsDocuments(provider: string): boolean {
+    return provider === 'claude' || provider === 'openai';
+}
+
+/** One message as the provider's wire format: a plain string, or content parts when it carries attachments. */
+function wireMessage(m: ChatMessage, style: 'anthropic' | 'openai', provider: string): { role: string, content: any } {
+    const files = (m.attachments || []).filter((a) => a && a.data);
+    if (!files.length || m.role !== 'user' || !providerSupportsDocuments(provider)) return { role: m.role, content: m.content };
+    const parts: any[] = style === 'anthropic'
+        ? files.map((a) => ({ type: 'document', source: { type: 'base64', media_type: a.mediaType, data: a.data }, title: String(a.name || 'document').slice(0, 200) }))
+        : files.map((a) => ({ type: 'file', file: { filename: String(a.name || 'document.pdf').slice(0, 200), file_data: `data:${a.mediaType};base64,${a.data}` } }));
+    parts.push({ type: 'text', text: m.content });
+    return { role: m.role, content: parts };
+}
 
 /**
  * Accept either a full endpoint or a base URL in ai_tutor.base_url.
@@ -340,8 +371,10 @@ function mergeAlternating(messages: ChatMessage[]): ChatMessage[] {
     for (const m of messages) {
         if (!m.content?.trim()) continue;
         const last = out[out.length - 1];
-        if (last && last.role === m.role) last.content += `\n\n${m.content}`;
-        else out.push({ ...m });
+        if (last && last.role === m.role) {
+            last.content += `\n\n${m.content}`;
+            if (m.attachments?.length) last.attachments = [...(last.attachments || []), ...m.attachments];
+        } else out.push({ ...m });
     }
     if (out.length && out[0].role !== 'user') out.unshift({ role: 'user', content: '(session begins)' });
     return out;
@@ -744,7 +777,9 @@ export async function callProvider(
     const signal = combineSignals(opts.signal, slot.signal);
     if (signal?.aborted) throw new AiAbortedError();
     const stream = !!(opts.stream || opts.onDelta);
-    const msgs = mergeAlternating(messages);
+    // Attachments (PTA fork): document parts for providers that read them,
+    // plain text everywhere else — a message without any is sent exactly as before.
+    const msgs = mergeAlternating(messages).map((m) => wireMessage(m, preset.style, provider)) as any as ChatMessage[];
     const req: ProviderRequest = {
         url, headers: {}, style: preset.style, provider, model, body: {},
     };
@@ -837,7 +872,7 @@ export async function callProvider(
             throw e;
         }
         lease?.done('ok');
-    break;
+        break;
     }
     if (usage) {
         slot.setUsage(usage);
@@ -944,9 +979,9 @@ const MARKER_KINDS: Record<string, string> = {
     dropdown: 'dropdown-choice',
 };
 
-export function extractQuestionMeta(statement: string): Record<string, { kind: string; options?: string[] }> {
+export function extractQuestionMeta(statement: string): Record<string, { kind: string, options?: string[] }> {
     const lines = (statement || '').split('\n');
-    const found: { id: string; marker: string; ddOptions?: string[]; line: number }[] = [];
+    const found: { id: string, marker: string, ddOptions?: string[], line: number }[] = [];
     let inFence = false;
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -964,7 +999,7 @@ export function extractQuestionMeta(statement: string): Record<string, { kind: s
             });
         }
     }
-    const result: Record<string, { kind: string; options?: string[] }> = {};
+    const result: Record<string, { kind: string, options?: string[] }> = {};
     for (const f of found) {
         let options: string[] | undefined;
         if (f.marker === 'select' || f.marker === 'multiselect') {
@@ -1283,7 +1318,7 @@ export interface ToolSpec {
     parameters: Record<string, any>;
 }
 
-export interface ToolCall { id: string; name: string; args: Record<string, any> }
+export interface ToolCall { id: string, name: string, args: Record<string, any> }
 
 /** One message in a tool-calling conversation, provider-neutral. */
 export type AgentMessage =

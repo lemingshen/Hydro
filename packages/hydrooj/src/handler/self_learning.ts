@@ -1,4 +1,5 @@
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
+import fs from 'fs-extra';
 import { createHash } from 'crypto';
 import { escapeRegExp } from 'lodash';
 import moment from 'moment-timezone';
@@ -27,7 +28,7 @@ import {
 } from '../lib/activity_report';
 import { objectiveSubKindOf } from '../lib/objective_markdown';
 import { objectiveTitleOf } from '../lib/objective_title';
-import { ContestDetailBaseHandler, paperOf } from './contest';
+import { ContestDetailBaseHandler, ensureManualEvalFlag, paperOf } from './contest';
 import { convertPenaltyRules, validatePenaltyRules } from './homework';
 import { PROBLEM_KIND_FILTERS } from './problem';
 // Bonus tasks reuse the AI Studio's draft + verification pipeline. (Cross-file
@@ -46,6 +47,9 @@ import problem from '../model/problem';
 import record, { harnessFor } from '../model/record';
 import storage from '../model/storage';
 import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, classReportJobStale, collProgress, collTutor, getClassReport, getClassReportMapCache, getSubjective, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionJob, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads, RemedialPrompt, addClassReportDrafts } from '../model/selflearning';
+import { registerSubjectiveGradingRoutes } from './subjective_grading';
+import { isPdfName, myGrade, subjectiveConfigOfPdoc } from '../lib/subjective_grader';
+import { effectiveScore100 as subjectiveEffectiveScore100, gradeMapOf as subjectiveGradeMapOf } from '../model/subjective_grade';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
@@ -6210,7 +6214,7 @@ async function activityKinds(domainId: string, pids: number[], uid?: number, tdo
             }
         } catch (e) { /* status decoration is optional */ }
     }
-    const withheld = !!tdoc && !contest.isDone(tdoc);
+    const withheld = !!tdoc && !(contest.isDone(tdoc) && contest.resultsPublished(tdoc));
     return pids.map((pid) => {
         const p: any = pdict[pid] || {};
         let conf: any = p.config;
@@ -7745,6 +7749,8 @@ class SubjectiveTaskHandler extends Handler {
     async get({ domainId }, uid?: number, list = false) {
         const pid = this.npid;
         const teacher = subjectiveTeacher(this, this.pdoc);
+        // PTA fork: the task's submission type and rubric (lib/subjective_rubric.ts).
+        const config = await subjectiveConfigOfPdoc(this.pdoc);
         if (list) {
             if (!teacher) throw new ForbiddenError('Only the problem owner or a domain root can list submissions.');
             const docs = await listSubjective(domainId, pid);
@@ -7752,25 +7758,57 @@ class SubjectiveTaskHandler extends Handler {
             try {
                 udict = await user.getList(domainId, docs.map((d) => d.uid));
             } catch (e) { /* uname fallback below */ }
+            // AI grades (report tasks): the teacher sees the state of each one at a glance.
+            let grades = new Map<number, any>();
+            try {
+                grades = await subjectiveGradeMapOf(domainId, pid);
+            } catch (e) { /* the list works without them */ }
+            // The homeworks this task belongs to: the teacher's way to the
+            // AI grading review page from the task itself.
+            let homeworks: { tid: string, title: string, url: string, ended: boolean }[] = [];
+            try {
+                const tdocs = await contest.getMulti(domainId, { rule: 'homework', pids: pid } as any)
+                    .project({ docId: 1, title: 1, endAt: 1 }).limit(20).toArray();
+                homeworks = (tdocs as any[]).map((t) => ({
+                    tid: t.docId.toHexString(), title: t.title, url: this.url('homework_subjective_review', { tid: t.docId, pid }), ended: !!t.endAt && t.endAt <= new Date(),
+                }));
+            } catch (e) { /* the list works without them */ }
             this.response.body = {
-                submissions: docs.map((d) => ({
-                    uid: d.uid,
-                    uname: udict[d.uid]?.uname || `user#${d.uid}`,
-                    files: (d.files || []).length,
-                    hasReport: !!(d.report || '').trim(),
-                    updateAt: d.updateAt,
-                })),
+                config,
+                homeworks,
+                submissions: docs.map((d) => {
+                    const g = grades.get(d.uid);
+                    return {
+                        uid: d.uid,
+                        uname: udict[d.uid]?.uname || `user#${d.uid}`,
+                        files: (d.files || []).length,
+                        hasReport: !!(d.report || '').trim(),
+                        updateAt: d.updateAt,
+                        grade: g ? {
+                            status: g.status, score100: g.status === 'done' ? subjectiveEffectiveScore100(g) : null, released: !!g.released, error: g.error || g.skipReason || null,
+                        } : null,
+                    };
+                }),
             };
             return;
         }
         const targetUid = (uid && uid !== this.user._id) ? uid : this.user._id;
         if (targetUid !== this.user._id && !teacher) throw new ForbiddenError('Not your submission.');
         const doc = await getSubjective(domainId, pid, targetUid);
+        // The student's own released grade (null until the teacher releases it).
+        let grade: any = null;
+        if (config.type === 'report') {
+            try {
+                grade = await myGrade(domainId, pid, targetUid);
+            } catch (e) { /* optional */ }
+        }
         this.response.body = {
+            config,
             report: doc?.report || '',
             files: (doc?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })),
             updateAt: doc?.updateAt || null,
             teacher,
+            grade,
         };
     }
 
@@ -7794,8 +7832,34 @@ class SubjectiveTaskHandler extends Handler {
         if (file.size > SUBJECTIVE_MAX_FILE) throw new BadRequestError('The file exceeds the 25 MB limit.');
         const doc = await getSubjective(domainId, pid, this.user._id);
         const name = cleanFileName(file.originalFilename || file.newFilename || 'file');
-        const existing = (doc?.files || []).filter((f) => f.name !== name);
-        if (existing.length >= SUBJECTIVE_MAX_FILES) throw new BadRequestError(`At most ${SUBJECTIVE_MAX_FILES} files.`);
+        const config = await subjectiveConfigOfPdoc(this.pdoc);
+        if (config.type === 'report') {
+            /*
+             * A REPORT task takes exactly ONE PDF: the file must be a PDF (by
+             * name and by its magic bytes), and it REPLACES whatever was
+             * handed in before — the AI grader reads "the PDF", never a set.
+             */
+            if (!isPdfName(name)) throw new BadRequestError('This task takes one PDF report — please upload a .pdf file.');
+            let head = '';
+            try {
+                const fd = await fs.open(file.filepath, 'r');
+                const buf = Buffer.alloc(5);
+                await fs.read(fd, buf, 0, 5, 0);
+                await fs.close(fd);
+                head = buf.toString('latin1');
+            } catch (e) { /* the check below fails closed */ }
+            if (!head.startsWith('%PDF')) throw new BadRequestError('The file is not a valid PDF.');
+            const previous = (doc?.files || []).filter((f) => f.name !== name);
+            for (const f of previous) {
+                try {
+                    await storage.del([f.target]);
+                } catch (e) { /* the entry removal is authoritative */ }
+                await removeSubjectiveFile(domainId, pid, this.user._id, f.name);
+            }
+        } else {
+            const existing = (doc?.files || []).filter((f) => f.name !== name);
+            if (existing.length >= SUBJECTIVE_MAX_FILES) throw new BadRequestError(`At most ${SUBJECTIVE_MAX_FILES} files.`);
+        }
         const target = `subjective/${domainId}/${pid}/${this.user._id}/${name}`;
         await storage.put(target, file.filepath, this.user._id);
         await upsertSubjectiveFile(domainId, pid, this.user._id, {
@@ -7878,6 +7942,8 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
             this.tsdoc.startAt = new Date();
         }
         const isHomework = tdoc.rule === 'homework';
+        // PTA fork: a homework with subjective tasks is published by the teacher's evaluation, not by the deadline.
+        if (isHomework) await ensureManualEvalFlag(domainId, tdoc);
         // Verdicts for objective tasks are withheld until the container
         // ends (contest.applyProjection masks the records); tell the paper
         // so it neither polls for results nor pre-colors chips from the
@@ -7886,7 +7952,7 @@ class ObjectivePaperHandler extends ContestDetailBaseHandler {
         // student's own window earlier, and revealing verdicts then would
         // show classmates who are still answering which options are right.
         // Answering still locks on the personal window (`locked` below).
-        const resultsWithheld = !canManage && !contest.isDone(tdoc);
+        const resultsWithheld = !canManage && !(contest.isDone(tdoc) && contest.resultsPublished(tdoc));
         // The countdown on the paper (pages/contest.page.ts) reads the same
         // fields the contest pages expose: the test's window and, for a
         // flexible-duration test, the student's own start / end.
@@ -8172,6 +8238,10 @@ async function respondObjectivePaper(h: Handler, domainId: string, opts: {
 }
 
 export async function apply(ctx: Context) {
+    // PTA fork: the subjective-report grading routes (handler/subjective_grading.ts).
+    // Registered from here too, so a dev-mode watcher that never discovered the
+    // new file still serves them (the global flag prevents double registration).
+    registerSubjectiveGradingRoutes(ctx);
     // ai-speedup: the stream transport lives in handler/ai_stream.ts; register it
     // from here as well when that new file was not picked up (see its header).
     registerAiStreamRoutes(ctx);

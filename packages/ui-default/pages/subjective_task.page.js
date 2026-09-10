@@ -1,6 +1,6 @@
 import $ from 'jquery';
-import Notification from 'vj/components/notification';
 import { aiMarkdown } from 'vj/components/ai-report/pdf';
+import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { getTheme, i18n, request } from 'vj/utils';
 
@@ -26,7 +26,7 @@ const STYLE = [
   '.sbt__title { font-weight: bold; font-size: 14.5px; letter-spacing: .02em; }',
   '.sbt__hint { margin-left: auto; font-size: 11.5px; opacity: .92; text-align: right; }',
   '.sbt__body { padding: 16px 18px 18px; font-size: 13px; }',
-  '.sbt__label { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: bold; letter-spacing: .08em; text-transform: uppercase; color: #8a80b3; margin: 20px 0 8px; }',
+  '.sbt__label { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: bold; letter-spacing: .08em; text-transform: uppercase; color: var(--pta-ink-faint); margin: 20px 0 8px; }',
   '.sbt__label:first-child { margin-top: 0; }',
   '.sbt__badge { background: var(--pta-violet-soft); color: var(--pta-violet-text); border-radius: 10px; padding: 1px 9px; font-size: 11px; letter-spacing: 0; text-transform: none; }',
   '.sbt__badge:empty { display: none; }',
@@ -41,7 +41,7 @@ const STYLE = [
   '.sbt__dirty { display: none; color: var(--pta-warn); font-size: 12px; animation: sbtPulse 1.6s ease-in-out infinite; }',
   '.sbt__ts { color: var(--pta-ink-faint); font-size: 11.5px; background: var(--pta-card-3); border: 1px solid var(--pta-line); padding: 3px 10px; border-radius: 999px; }',
   '.sbt__ts:empty { display: none; }',
-  '.sbt__deadline { color: #7a6fae; font-size: 12px; }',
+  '.sbt__deadline { color: var(--pta-ink-soft); font-size: 12px; }',
   '.sbt__deadline--past { color: var(--pta-warn); }',
   '.sbt__deadline:empty { display: none; }',
   /* -------------------------------- buttons ------------------------------- */
@@ -53,14 +53,14 @@ const STYLE = [
   '.sbt__btn--ghost:hover { background: var(--pta-violet-soft); filter: none; }',
   '.sbt__btn--sm { padding: 4px 14px; font-size: 12px; }',
   /* ------------------------------- drop zone ------------------------------ */
-  '.sbt__drop { border: 2px dashed var(--pta-violet-line); border-radius: 12px; padding: 20px 16px; text-align: center; color: #7a6fae; cursor: pointer; background: var(--pta-card-2); transition: background .15s, border-color .15s, box-shadow .15s, transform .2s var(--pta-ease); user-select: none; }',
+  '.sbt__drop { border: 2px dashed var(--pta-violet-line); border-radius: 12px; padding: 20px 16px; text-align: center; color: var(--pta-ink-soft); cursor: pointer; background: var(--pta-card-2); transition: background .15s, border-color .15s, box-shadow .15s, transform .2s var(--pta-ease); user-select: none; }',
   '.sbt__drop:hover, .sbt__drop--over { background: var(--pta-violet-soft); border-color: var(--pta-violet-2); box-shadow: inset 0 0 0 3px rgba(151,117,250,.12); }',
   '.sbt__drop--over { transform: scale(1.01); }',
   '.sbt__drop--busy { opacity: .65; pointer-events: none; }',
   '.sbt__drop-ic { font-size: 26px; display: block; margin-bottom: 6px; transition: transform .2s var(--pta-ease); }',
   '.sbt__drop--over .sbt__drop-ic { animation: ptaFloat .8s ease-in-out infinite; }',
   '.sbt__drop-main { font-weight: bold; font-size: 13px; }',
-  '.sbt__drop-sub { font-size: 11.5px; color: #a49ac9; margin-top: 4px; }',
+  '.sbt__drop-sub { font-size: 11.5px; color: var(--pta-ink-faint); margin-top: 4px; }',
   '.sbt__pick { display: none; }',
   /* ------------------------------- file rows ------------------------------ */
   '.sbt__list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }',
@@ -75,7 +75,7 @@ const STYLE = [
   '.sbt__empty { color: var(--pta-ink-faint); padding: 10px 2px; font-size: 12.5px; }',
   /* --------------------------- teacher list view -------------------------- */
   '.sbt__table { width: 100%; border-collapse: separate; border-spacing: 0; }',
-  '.sbt__table th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: #8a80b3; padding: 8px 10px; border-bottom: 1px solid var(--pta-violet-line); background: var(--pta-card-2); }',
+  '.sbt__table th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--pta-ink-faint); padding: 9px 10px; border-bottom: 1px solid var(--pta-line); background: var(--pta-card-2); }',
   '.sbt__table td { padding: 9px 10px; border-bottom: 1px solid var(--pta-line-soft); font-size: 12.5px; transition: background .12s ease; }',
   '.sbt__table tr:hover td { background: var(--pta-violet-soft); }',
   '.sbt__view { background: var(--pta-card-2); border: 1px solid var(--pta-violet-line); border-radius: 12px; margin: 10px 0 4px; padding: 12px 14px; animation: ptaFadeIn .2s ease; }',
@@ -90,10 +90,37 @@ const STYLE = [
   /* ------------------------- full-width student page ----------------------- */
   '.sbt-wide { width: 100% !important; }',
   '@media (max-width: 780px) { .sbt__hint { display: none; } }',
+  /* ----------------------- rubric card + AI feedback ----------------------- */
+  '.sbr__table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }',
+  '.sbr__table th { text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--pta-ink-faint); padding: 7px 10px; border-bottom: 1px solid var(--pta-line); }',
+  '.sbr__table td { padding: 9px 10px; border-bottom: 1px solid var(--pta-line-soft); vertical-align: top; color: var(--pta-ink-soft); }',
+  '.sbr__pts { white-space: nowrap; font-weight: 700; color: var(--pta-violet-text); font-variant-numeric: tabular-nums; }',
+  '.sbr__lvls { margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--pta-ink-soft); }',
+  '.sbr__lvls li { margin: 2px 0; }',
+  '.sbr__lvls b { color: var(--pta-ink); font-weight: 600; }',
+  '.sbr__notes { margin-top: 8px; font-size: 12px; color: var(--pta-ink-soft); }',
+  '.sbg__score { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }',
+  '.sbg__score b { font-size: 30px; font-weight: 700; color: var(--pta-violet-text); font-variant-numeric: tabular-nums; line-height: 1; }',
+  '.sbg__score small { color: var(--pta-ink-faint); }',
+  '.sbg__crit-pts { white-space: nowrap; font-weight: 600; }',
+  '.sbg__adj { color: var(--pta-warn-text); font-size: 11px; margin-left: 4px; }',
+  '.sbg__comments { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }',
+  '.sbg__c { display: grid; grid-template-columns: 26px 1fr; gap: 10px; padding: 9px 11px; border: 1px solid var(--pta-line-soft); border-radius: var(--pta-radius-sm); background: var(--pta-card-2); cursor: pointer; transition: all var(--pta-speed) var(--pta-ease); }',
+  '.sbg__c:hover { border-color: var(--pta-violet-line); background: var(--pta-violet-soft); transform: translateX(2px); }',
+  '.sbg__n { width: 22px; height: 22px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }',
+  '.sbg__n--issue { background: var(--pta-warn); }',
+  '.sbg__n--strength { background: var(--pta-success); }',
+  '.sbg__n--note { background: var(--pta-violet); }',
+  '.sbg__meta { font-size: 11.5px; color: var(--pta-ink-faint); }',
+  '.sbg__quote { font-size: 12px; line-height: 1.5; font-style: italic; color: var(--pta-ink-soft); border-left: 2px solid var(--pta-violet-line); padding-left: 9px; margin: 4px 0; }',
+  '.sbg__frame { width: 100%; height: 680px; border: 1px solid var(--pta-line); border-radius: var(--pta-radius-sm); margin-top: 10px; background: var(--pta-card); }',
+  '.sbg__summary { margin-top: 10px; font-size: 13px; line-height: 1.6; }',
+  '.sbg__summary ul { margin: 4px 0 6px 18px; }',
+  '.sbt__aicol { white-space: nowrap; font-weight: 600; }',
+  '.sbt__aicol--rel { color: var(--pta-ok-text); }',
+  '.sbt__aicol--hid { color: var(--pta-ink-faint); }',
+  '.sbt__aicol--bad { color: var(--pta-bad-text); }',
   /* ------------- dark: only the muted-violet accents need literals ---------- */
-  '.pta-dark .sbt__label, .pta-dark .sbt__table th { color: #9d93c9; }',
-  '.pta-dark .sbt__deadline { color: #a99ed0; }',
-  '.pta-dark .sbt__drop, .pta-dark .sbt__drop-sub { color: #a99ed0; }',
 ].join('\n');
 
 function esc(text) {
@@ -132,9 +159,71 @@ function fileRows(files, { deletable, uid } = {}) {
   return files.map((f) => '<div class="sbt__file">'
     + '<span class="sbt__fic">📄</span>'
     + `<a href="${baseUrl()}/file?name=${encodeURIComponent(f.name)}${uidQ}" target="_blank" rel="noopener">${esc(f.name)}</a>`
-    + `<span class="sbt__fmeta">${fmtSize(f.size)} · ${esc(fmtTs(f.uploadAt))}</span>`
-    + (deletable ? `<button type="button" class="sbt__del" data-name="${esc(f.name)}" title="${esc(i18n('Delete'))}">×</button>` : '')
-    + '</div>').join('');
+    + `<span class="sbt__fmeta">${fmtSize(f.size)} · ${esc(fmtTs(f.uploadAt))}</span>${
+      deletable ? `<button type="button" class="sbt__del" data-name="${esc(f.name)}" title="${esc(i18n('Delete'))}">×</button>` : ''
+    }</div>`).join('');
+}
+
+/**
+ * The rubric of the task, as a card everyone can read: criteria, points,
+ * levels. `type` = report | project (lib/subjective_rubric.ts).
+ */
+function rubricCardHtml(config) {
+  const rubric = config && config.rubric;
+  const isReport = config && config.type === 'report';
+  const head = `<div class="sbt__head">📋 <span class="sbt__title">${esc(i18n('Grading rubric'))}</span>`
+    + `<span class="sbt__hint">${esc(isReport ? i18n('One PDF report, graded against this rubric by the AI after the deadline; your teacher reviews every grade.') : i18n('Graded by your teacher against this rubric.'))}</span></div>`;
+  if (!rubric || !rubric.criteria || !rubric.criteria.length) {
+    return `<div class="sbt sbt--rubric">${head}<div class="sbt__body"><div class="sbt__empty">${esc(i18n('No rubric has been published for this task yet.'))}</div></div></div>`;
+  }
+  let rows = '';
+  for (const c of rubric.criteria) {
+    const lvls = (c.levels || []).map((l) => `<li><b>${esc(l.points)} ${esc(i18n('pts'))} · ${esc(l.label)}</b>${l.descriptor ? ` — ${esc(l.descriptor)}` : ''}</li>`).join('');
+    rows += `<tr><td><b>${esc(c.title)}</b>${c.description ? `<div class="sbg__meta">${esc(c.description)}</div>` : ''}${lvls ? `<ul class="sbr__lvls">${lvls}</ul>` : ''}</td>`
+      + `<td class="sbr__pts">${esc(c.maxPoints)} ${esc(i18n('pts'))}</td></tr>`;
+  }
+  return `<div class="sbt sbt--rubric">${head}<div class="sbt__body">`
+    + `<table class="sbr__table"><tr><th>${esc(i18n('Criterion'))}</th><th>${esc(i18n('Max'))}</th></tr>${rows}`
+    + `<tr><td><b>${esc(i18n('Total'))}</b></td><td class="sbr__pts">${esc(rubric.total)} ${esc(i18n('pts'))}</td></tr></table>${
+      rubric.maxPages ? `<div class="sbr__notes">${esc(i18n('Pages beyond {0} are not read by the grader.').replace('{0}', rubric.maxPages))}</div>` : ''
+    }</div></div>`;
+}
+
+/**
+ * The student's released AI grade: total, points and rationale per
+ * criterion, the numbered comments (click one to jump to its page in the
+ * annotated PDF below), the summary and the teacher's note.
+ */
+function feedbackCardHtml(grade) {
+  const critById = {};
+  for (const c of grade.criteria || []) critById[c.id] = c;
+  let crit = '';
+  for (const c of grade.criteria || []) {
+    crit += `<tr><td><b>${esc(c.title)}</b>${c.level ? ` <span class="sbg__meta">· ${esc(c.level)}</span>` : ''}<div class="sbg__meta">${esc(c.rationale)}</div></td>`
+      + `<td class="sbg__crit-pts">${esc(c.points)} / ${esc(c.maxPoints)}${c.adjusted ? `<span class="sbg__adj" title="${esc(i18n('Adjusted by your teacher'))}">✎</span>` : ''}</td></tr>`;
+  }
+  let comments = '';
+  for (const c of grade.comments || []) {
+    const kindText = c.kind === 'issue' ? i18n('Issue') : c.kind === 'strength' ? i18n('Strength') : i18n('Note');
+    comments += `<div class="sbg__c" data-page="${c.page}"><span class="sbg__n sbg__n--${esc(c.kind)}">${c.n}</span><div>`
+      + `<div class="sbg__meta">${esc(kindText)} · ${esc(i18n('Page {0}').replace('{0}', c.page))}${c.criterionId && critById[c.criterionId] ? ` · ${esc(critById[c.criterionId].title)}` : ''}${c.verified ? '' : ` · ${esc(i18n('quote not located in the PDF'))}`}</div>${
+        c.quote ? `<div class="sbg__quote">“${esc(c.quote)}”</div>` : ''
+      }<div>${esc(c.note)}</div></div></div>`;
+  }
+  const sm = grade.summary || {};
+  const li = (arr) => (arr && arr.length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '');
+  const annotatedUrl = grade.annotated ? `${baseUrl()}/annotated` : '';
+  return `<div class="sbt sbt--grade"><div class="sbt__head">🤖 <span class="sbt__title">${esc(i18n('AI feedback on your report'))}</span>`
+    + `<span class="sbt__hint">${esc(i18n('Graded'))} ${esc(fmtTs(grade.gradedAt))}${grade.fileName ? ` · ${esc(grade.fileName)}` : ''}</span></div>`
+    + '<div class="sbt__body">'
+    + `<div class="sbg__score"><b>${esc(grade.total)}</b><small>/ ${esc(grade.maxTotal)} ${esc(i18n('pts'))} · ${esc(i18n('task score'))} ${esc(grade.score100)} / 100</small>${
+      annotatedUrl ? `<a class="sbt__btn sbt__btn--ghost sbt__btn--sm" href="${annotatedUrl}" target="_blank" rel="noopener">⬇ ${esc(i18n('Download the annotated PDF'))}</a>` : ''}</div>${
+      grade.teacherNote ? `<div class="pta-note pta-note--blue">🧑‍🏫 ${esc(grade.teacherNote)}</div>` : ''
+    }<div class="sbt__label">📋 ${esc(i18n('Rubric'))}</div><table class="sbr__table"><tr><th>${esc(i18n('Criterion'))}</th><th>${esc(i18n('Points'))}</th></tr>${crit}</table>${
+      comments ? `<div class="sbt__label">💬 ${esc(i18n('Comments'))} <span class="sbt__badge">${(grade.comments || []).length}</span></div><div class="sbg__comments">${comments}</div>` : ''
+    }${annotatedUrl ? `<div class="sbt__label">📄 ${esc(i18n('Annotated report'))} <span class="sbt__badge">${esc(i18n('the numbers match the comments'))}</span></div><iframe class="sbg__frame" src="${annotatedUrl}?inline=1" title="${esc(i18n('Annotated report'))}"></iframe>` : ''
+    }<div class="sbg__summary">${sm.overall ? `<p>${esc(sm.overall)}</p>` : ''}${sm.strengths && sm.strengths.length ? `<b>${esc(i18n('Strengths'))}</b>${li(sm.strengths)}` : ''}${sm.improvements && sm.improvements.length ? `<b>${esc(i18n('What to improve'))}</b>${li(sm.improvements)}` : ''}</div>`
+    + '</div></div>';
 }
 
 /**
@@ -220,11 +309,11 @@ function openSubmissionModal() {
       return;
     }
     $modal.find('.sbtm__body').html(
-      `<div class="sbt__label">📝 ${esc(i18n('Report'))}</div>`
-      + (report.trim()
-        ? `<div class="typo">${aiMarkdown.render(report)}</div>`
-        : `<div class="sbt__empty">${esc(i18n('No report written.'))}</div>`)
-      + `<div class="sbt__label">📎 ${esc(i18n('Files'))} <span class="sbt__badge">${files.length || ''}</span></div>`
+      `<div class="sbt__label">📝 ${esc(i18n('Report'))}</div>${
+        report.trim()
+          ? `<div class="typo">${aiMarkdown.render(report)}</div>`
+          : `<div class="sbt__empty">${esc(i18n('No report written.'))}</div>`
+      }<div class="sbt__label">📎 ${esc(i18n('Files'))} <span class="sbt__badge">${files.length || ''}</span></div>`
       + `<div class="sbt__list">${fileRows(files)}</div>`,
     );
   }).catch((e) => {
@@ -250,7 +339,7 @@ function studentPanel($mount) {
     + '<span class="sbt__deadline"></span>'
     + `<span class="sbt__dirty">● ${esc(i18n('Unsaved changes'))}</span>`
     + '<span class="sbt__ts"></span></div>'
-    + `<div class="sbt__label">📎 ${esc(i18n('Files'))} <span class="sbt__badge sbt__count"></span></div>`
+    + `<div class="sbt__label">📎 <span class="sbt__files-label">${esc(i18n('Files'))}</span> <span class="sbt__badge sbt__count"></span></div>`
     + '<div class="sbt__drop">'
     + '<span class="sbt__drop-ic">⬆️</span>'
     + `<div class="sbt__drop-main">${esc(i18n('Drag & drop files here, or click to browse'))}</div>`
@@ -260,6 +349,11 @@ function studentPanel($mount) {
     + '<div class="sbt__list"></div>'
     + '</div></div>');
   $mount.after($panel);
+  // PTA fork: the rubric card sits between the statement and the submission;
+  // a released AI grade is shown above the submission card (report tasks).
+  const $rubric = $('<div class="sbt-rubric-host"></div>').insertBefore($panel);
+  const $feedback = $('<div class="sbt-feedback-host"></div>').insertBefore($panel);
+  let reportMode = false; // one PDF, replaced on every upload
   const $report = $panel.find('.sbt__report');
   const $ts = $panel.find('.sbt__ts');
   const $list = $panel.find('.sbt__list');
@@ -306,8 +400,21 @@ function studentPanel($mount) {
 
   const renderList = (files) => {
     fileCount = (files || []).length;
-    $panel.find('.sbt__count').text(fileCount ? `${fileCount} / ${MAX_FILES}` : '');
+    $panel.find('.sbt__count').text(reportMode ? '' : (fileCount ? `${fileCount} / ${MAX_FILES}` : ''));
     $list.html(fileRows(files, { deletable: true }));
+  };
+  /** Report task: single PDF wording, .pdf picker, no multi-select. */
+  const applyMode = (config) => {
+    reportMode = !!(config && config.type === 'report');
+    if (!reportMode) return;
+    $panel.find('.sbt__title').text(i18n('Report Submission'));
+    $panel.find('.sbt__hint').first().text(i18n('One PDF report — graded against the rubric by the AI after the deadline, reviewed by your teacher.'));
+    $panel.find('.sbt__files-label').text(i18n('Your PDF report'));
+    $panel.find('.sbt__label').first().html(`📝 ${esc(i18n('Cover note (optional)'))}`);
+    $panel.find('.sbt__report').attr('placeholder', i18n('Anything your teacher should know about your report (optional)…'));
+    $dropMain.text(i18n('Drag & drop your PDF here, or click to browse'));
+    $panel.find('.sbt__drop-sub').text(i18n('One PDF · 25 MB max · uploading again replaces the previous file'));
+    $pick.attr('accept', '.pdf,application/pdf').removeAttr('multiple');
   };
 
   // Delegated once: rows are re-rendered after every upload/delete.
@@ -340,6 +447,33 @@ function studentPanel($mount) {
   };
 
   request.get(baseUrl()).then((res) => {
+    applyMode(res.config);
+    $rubric.html(rubricCardHtml(res.config));
+    if (res.grade) {
+      $feedback.html(feedbackCardHtml(res.grade));
+      // The score counts up and the rubric rows / comments fade in one after another.
+      const $big = $feedback.find('.sbg__score b');
+      const target = Number(res.grade.total) || 0;
+      const t0 = performance.now();
+      const tick = (now) => {
+        const t = Math.min(1, (now - t0) / 1100);
+        const eased = 1 - (1 - t) ** 3;
+        $big.text(String(Math.round(target * eased * 10) / 10));
+        if (t < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      $feedback.find('.sbr__table tr, .sbg__c').each(function stagger(i) {
+        $(this).css({ animation: `ptaFadeUp .4s var(--pta-ease, ease) ${Math.min(i * 70, 900)}ms backwards` });
+      });
+      // A comment card jumps the annotated viewer to its page.
+      $feedback.on('click', '.sbg__c', function onJump() {
+        const $frame = $feedback.find('.sbg__frame');
+        if (!$frame.length) return;
+        const base = String($frame.attr('src') || '').split('#')[0];
+        $frame.attr('src', `${base}#page=${$(this).data('page')}`);
+        $frame[0].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    }
     $report.val(res.report || '');
     $ts.text(res.updateAt ? `${i18n('Saved')}: ${fmtTs(res.updateAt)}` : '');
     renderList(res.files);
@@ -362,7 +496,7 @@ function studentPanel($mount) {
   // Ctrl/Cmd+S anywhere inside the panel saves. Capture phase, so the
   // editor's own keymap cannot swallow it first.
   document.addEventListener('keydown', (ev) => {
-    if (!(ev.ctrlKey || ev.metaKey) || String(ev.key).toLowerCase() !== 's') return;
+    if ((!ev.ctrlKey && !ev.metaKey) || String(ev.key).toLowerCase() !== 's') return;
     if (!$panel[0].contains(ev.target)) return;
     ev.preventDefault();
     doSave();
@@ -371,15 +505,24 @@ function studentPanel($mount) {
   /* --------------------------- file uploads --------------------------- */
 
   const uploadMany = async (fileList) => {
-    const files = Array.from(fileList || []);
+    let files = Array.from(fileList || []);
     if (!files.length) return;
+    if (reportMode) {
+      // One PDF: the last one picked wins; anything else is refused up front.
+      files = files.filter((f) => /\.pdf$/i.test(f.name));
+      if (!files.length) {
+        Notification.error(i18n('This task takes one PDF report — please choose a .pdf file.'));
+        return;
+      }
+      files = files.slice(-1);
+    }
     const fit = [];
     for (const f of files) {
       if (f.size > MAX_FILE_MB * 1024 * 1024) {
         Notification.error(`${f.name}: ${i18n('The file exceeds the 25 MB limit.')}`);
       } else fit.push(f);
     }
-    if (fileCount + fit.length > MAX_FILES) {
+    if (!reportMode && fileCount + fit.length > MAX_FILES) {
       Notification.warn(i18n('At most 10 files.'));
       fit.length = Math.max(0, MAX_FILES - fileCount);
     }
@@ -390,7 +533,7 @@ function studentPanel($mount) {
       for (let k = 0; k < fit.length; k++) {
         $dropMain.text(`${i18n('Uploading')} ${k + 1}/${fit.length}: ${fit[k].name}`);
         try {
-          const res = await uploadFile(fit[k]); // eslint-disable-line no-await-in-loop
+          const res = await uploadFile(fit[k]);
           renderList(res.files); // each response returns the full list
           ok++;
         } catch (e) {
@@ -434,15 +577,41 @@ function teacherPanel($mount) {
   const $tbl = $panel.find('.sbt__tbl');
   request.get(`${baseUrl()}?list=1`).then((res) => {
     const subs = res.submissions || [];
+    const isReport = !!(res.config && res.config.type === 'report');
     $panel.find('.sbt__count').text(`${subs.length}`);
+    // Report task: the AI grading review page of every homework that
+    // contains this task (the server lists them), whichever page the
+    // teacher came from.
+    if (isReport) {
+      const links = res.homeworks || [];
+      const uc = window.UiContext || {};
+      const tid = uc.tdoc ? String(uc.tdoc.docId || uc.tdoc._id || '') : '';
+      if (tid && uc.tdoc.rule === 'homework' && !links.some((h) => h.tid === tid)) {
+        const domainPrefix = (window.location.pathname.match(/^\/d\/[^/]+/) || [''])[0];
+        links.push({ tid, title: uc.tdoc.title || i18n('this homework'), url: `${domainPrefix}/homework/${tid}/subjective/${uc.pdoc && uc.pdoc.docId}` });
+      }
+      if (links.length) {
+        const $bar = $('<div class="sbt__body" style="padding-top:0"></div>');
+        for (const h of links) $bar.append(`<a class="sbt__btn sbt__btn--sm" style="margin:0 8px 8px 0;color:#fff;display:inline-block" href="${esc(h.url)}">🤖 ${esc(i18n('AI grading'))}: ${esc(h.title)} →</a>`);
+        $panel.find('.sbt__head').after($bar);
+      } else {
+        $panel.find('.sbt__head').after(`<div class="sbt__body" style="padding-top:0"><span class="sbt__empty">${esc(i18n('Add this task to a homework to grade the reports with AI; the review page is linked from the homework.'))}</span></div>`);
+      }
+    }
     if (!subs.length) {
       $tbl.html(`<div class="sbt__empty">${esc(i18n('No submissions yet.'))}</div>`);
       return;
     }
     let html = `<table class="sbt__table"><tr><th>${esc(i18n('User'))}</th><th>${esc(i18n('Files'))}</th>`
-      + `<th>${esc(i18n('Report'))}</th><th>${esc(i18n('Updated'))}</th><th></th></tr>`;
+      + `<th>${esc(i18n('Report'))}</th>${isReport ? `<th>${esc(i18n('AI grade'))}</th>` : ''}<th>${esc(i18n('Updated'))}</th><th></th></tr>`;
+    const gradeCell = (g) => {
+      if (!g) return '<td class="sbt__aicol sbt__aicol--hid">—</td>';
+      if (g.status === 'done') return `<td class="sbt__aicol ${g.released ? 'sbt__aicol--rel' : 'sbt__aicol--hid'}" title="${esc(g.released ? i18n('Released to the student') : i18n('Not released yet'))}">${esc(g.score100)}${g.released ? ' ✓' : ' 🔒'}</td>`;
+      if (g.status === 'failed' || g.status === 'skipped') return `<td class="sbt__aicol sbt__aicol--bad" title="${esc(g.error || '')}">${esc(g.status === 'failed' ? i18n('failed') : i18n('skipped'))}</td>`;
+      return '<td class="sbt__aicol sbt__aicol--hid">⏳</td>';
+    };
     for (const sub of subs) {
-      html += `<tr><td>${esc(sub.uname)}</td><td>${sub.files}</td><td>${sub.hasReport ? '✓' : '—'}</td>`
+      html += `<tr><td>${esc(sub.uname)}</td><td>${sub.files}</td><td>${sub.hasReport ? '✓' : '—'}</td>${isReport ? gradeCell(sub.grade) : ''}`
         + `<td class="sbt__ts-cell">${esc(fmtTs(sub.updateAt))}</td>`
         + `<td><button type="button" class="sbt__btn sbt__btn--ghost sbt__btn--sm sbt__open" data-uid="${sub.uid}" data-uname="${esc(sub.uname)}">${esc(i18n('View'))}</button></td></tr>`;
     }

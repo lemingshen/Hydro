@@ -73,13 +73,23 @@
                   {%- else -%}<span class="pta-chip pta-chip--dim">{{ _('Not handed in') }}</span>
                   {%- endif -%}
                 </td>
-                <td class="col--pts">{% if t.graded %}<b>{{ t.graded.earned }}</b> / {{ t.points }}<div class="sld-myscore__note">✎ <b>{{ _('graded by the teacher') }}</b>: <q>{{ t.graded.reason }}</q></div>{% else %}<span class="pta-results__of">— / {{ t.points }}</span>{% endif %}</td>
+                <td class="col--pts">{% if t.graded %}<b>{{ t.graded.earned }}</b> / {{ t.points }}{#- PTA fork: an AI-graded report (released) links to its feedback on the task page; a teacher adjustment shows its reason. -#}{% if t.graded.source == 'ai' %}<div class="sld-myscore__note">🤖 <b>{{ _('graded by AI, reviewed by the teacher') }}</b>{% if t.graded.aiTotal is number %}: {{ t.graded.aiTotal }} / {{ t.graded.aiMax }} {{ _('pts') }}{% endif %} · <a href="{{ url('problem_detail', pid=t.docId, query={tid:tdoc.docId}) }}">{{ _('View feedback') }}</a></div>{% else %}<div class="sld-myscore__note">✎ <b>{{ _('graded by the teacher') }}</b>: <q>{{ t.graded.reason }}</q></div>{% endif %}{% else %}<span class="pta-results__of">— / {{ t.points }}</span>{% endif %}</td>
               </tr>
             {%- endfor -%}
             </tbody>
           </table>
         </div>
         {%- endif -%}
+      </div>
+    </div>
+    {%- elif resultsPending -%}
+    {#- PTA fork: a homework with subjective tasks is evaluated by the teacher, not by the deadline. -#}
+    <div class="section pta-results">
+      <div class="section__header">
+        <h1 class="section__title">📊 {{ _('Your results') }}</h1>
+      </div>
+      <div class="section__body typo">
+        <p>⏳ {{ _('The deadline has passed. This homework is evaluated by your teacher — your scores and the objective answers appear here once the evaluation has been published.') }}</p>
       </div>
     </div>
     {%- endif -%}
@@ -131,6 +141,104 @@
       </div>
     </div>
     {%- endif -%}
+    {%- if subjectiveOverview -%}
+    {#-
+      PTA fork: SUBJECTIVE TASKS of the homework (handler/subjective_grading.ts
+      injects `subjectiveOverview` for staff): every student's hand-in per
+      task — files, time, cover note — and, for report tasks, the AI grade
+      state and the link to the review page.
+    -#}
+    <style>
+      /* PTA fork — subjective tasks card. Theme tokens only (light + dark). */
+      .hw-subj__task { margin: 0 0 12px; border: 1px solid var(--pta-line-soft); border-radius: var(--pta-radius); overflow: hidden; transition: border-color var(--pta-speed) var(--pta-ease); }
+      .hw-subj__task[open] { border-color: var(--pta-violet-line); }
+      .hw-subj__task > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 15px; background: var(--pta-card-2); transition: background var(--pta-speed) var(--pta-ease); }
+      .hw-subj__task > summary:hover { background: var(--pta-violet-soft); }
+      .hw-subj__task > summary::-webkit-details-marker { display: none; }
+      .hw-subj__task > summary::before { content: '▸'; color: var(--pta-ink-faint); transition: transform .2s var(--pta-ease); }
+      .hw-subj__task[open] > summary::before { content: '▾'; }
+      .hw-subj__title { font-weight: 600; color: var(--pta-ink); }
+      .hw-subj__meta { color: var(--pta-ink-faint); font-size: 12.5px; }
+      .hw-subj__meta b { color: var(--pta-ink); font-variant-numeric: tabular-nums; }
+      .hw-subj__tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+      .hw-subj__tools form { margin: 0; }
+      .hw-subj__tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      .hw-subj__tbl th { text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--pta-ink-faint); padding: 9px 15px; border-bottom: 1px solid var(--pta-line); }
+      .hw-subj__tbl td { padding: 9px 15px; border-bottom: 1px solid var(--pta-line-soft); vertical-align: top; color: var(--pta-ink-soft); }
+      .hw-subj__tbl tr:last-child td { border-bottom: 0; }
+      .hw-subj__tbl tr:hover td { background: var(--pta-card-2); }
+      .hw-subj__tbl b { color: var(--pta-ink); font-variant-numeric: tabular-nums; }
+      .hw-subj__name { color: var(--pta-ink-faint); }
+      .hw-subj__file { display: block; word-break: break-all; color: var(--pta-ink-soft); text-decoration: none; }
+      .hw-subj__file:hover { color: var(--pta-violet-text); }
+      .hw-subj__empty { padding: 16px 15px; color: var(--pta-ink-faint); font-size: 12.5px; }
+      .hw-subj__tbl .pta-chip--blue { animation: hwSubjPulse 1.2s ease-in-out infinite; }
+      @keyframes hwSubjPulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+      .hw-subj__eval { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; padding: 11px 15px; border-radius: var(--pta-radius-sm); border: 1px solid var(--pta-line-soft); border-left: 3px solid var(--pta-violet); background: var(--pta-card-2); font-size: 12.5px; }
+      .hw-subj__eval form { margin: 0 0 0 auto; }
+    </style>
+    <div class="section" id="hw-subjective">
+      <div class="section__header">
+        <h1 class="section__title">📁 {{ _('Subjective tasks') }} <small class="text-gray">· {{ _('all students’ submissions') }}</small></h1>
+      </div>
+      <div class="section__body">
+        <p class="hw-subj__meta" style="margin:0 0 12px">{{ _('Every hand-in of every student, per task.') }}{% if subjectiveOverview.hasReportTasks %} {{ _('PDF reports are graded against their task’s rubric by the AI') }}{% if subjectiveOverview.auto %} {{ _('when the homework is evaluated') }}{% endif %}; {{ _('review, adjust and release the grades from each task’s review page.') }}{% endif %}
+        {%- if not subjectiveOverview.enabled and subjectiveOverview.hasReportTasks %} <span class="pta-chip pta-chip--warn">{{ _('The AI grader is disabled or no AI provider is configured.') }}</span>{%- endif -%}</p>
+        {#-
+          PTA fork: MANUAL EVALUATION. Because a subjective task is listed, the
+          deadline does not evaluate this homework; the teacher does, with the
+          button below (objective answers graded, statuses rebuilt, results
+          published to the students, AI report grading started).
+        -#}
+        {%- set _ev = subjectiveOverview.evaluation -%}
+        <div class="hw-subj__eval">
+          {%- if _ev.evaluatedAt -%}
+          <span class="pta-chip pta-chip--ok">✅ {{ _('Evaluated') }} {{ datetimeSpan(_ev.evaluatedAt, false, 'YYYY-M-D H:mm')|safe }}</span>
+          <span class="hw-subj__meta">{{ _('Students see their results.') }}</span>
+          <form method="post" action="{{ _ev.url }}" style="display:inline"><input type="hidden" name="operation" value="evaluate"><button type="submit" class="rounded button">↻ {{ _('Evaluate again') }}</button></form>
+          {%- elif subjectiveOverview.ended -%}
+          <span class="pta-chip pta-chip--warn">⏳ {{ _('Not evaluated yet') }}</span>
+          <span class="hw-subj__meta">{{ _('The deadline has passed. Results stay hidden from students until you evaluate.') }}</span>
+          <form method="post" action="{{ _ev.url }}" style="display:inline"><input type="hidden" name="operation" value="evaluate"><button type="submit" class="rounded primary button">▶ {{ _('Evaluate & review grades') }}</button></form>
+          {%- else -%}
+          <span class="pta-chip pta-chip--dim">🕒 {{ _('Evaluated by you, not by the deadline') }}</span>
+          <span class="hw-subj__meta">{{ _('Because this homework contains a subjective task, nothing is evaluated when the deadline passes — come back here and press Evaluate & review grades.') }}</span>
+          {%- endif -%}
+        </div>
+        {%- for t in subjectiveOverview.tasks -%}
+        <details class="hw-subj__task"{% if loop.first %} open{% endif %}>
+          <summary>
+            <span class="hw-subj__title"><a href="{{ t.taskUrl }}">{{ t.pid }} {{ t.title }}</a></span>
+            <span class="pta-chip {% if t.type == 'report' %}pta-chip--violet{% else %}pta-chip--dim{% endif %}">{% if t.type == 'report' %}{{ _('Single report (one PDF)') }}{% else %}{{ _('Project (zip file)') }}{% endif %}</span>
+            <span class="hw-subj__meta"><b>{{ t.handedIn }}</b> {{ _('handed in') }}{% if t.type == 'report' %} · <b>{{ t.pdfs }}</b> {{ _('PDFs') }} · <b>{{ t.graded }}</b> {{ _('graded') }} · <b>{{ t.released }}</b> {{ _('released') }}{% if t.failed %} · <span class="pta-chip pta-chip--bad">{{ t.failed }} {{ _('failed') }}</span>{% endif %}{% endif %}{% if t.latestAt %} · {{ _('latest') }} {{ datetimeSpan(t.latestAt, false, 'YYYY-M-D H:mm')|safe }}{% endif %}</span>
+            {%- if t.type == 'report' and not t.rubric %} <span class="pta-chip pta-chip--warn">{{ _('no rubric') }}</span>{%- endif -%}
+            <span class="hw-subj__tools">{% if t.url %}{% if subjectiveOverview.ended and not _ev.evaluatedAt %}<form method="post" action="{{ t.url }}" style="display:inline"><input type="hidden" name="operation" value="evaluate"><button type="submit" class="rounded primary button">▶ {{ _('Evaluate & review grades') }}</button></form>{% else %}<a class="rounded primary button" href="{{ t.url }}">🤖 {{ _('Review grades') }}</a>{% endif %}{% endif %}</span>
+          </summary>
+          {%- if t.submissions.length -%}
+          <table class="hw-subj__tbl">
+            <thead><tr><th>{{ _('Student') }}</th><th>{{ _('Files') }}</th><th>{{ _('Cover note') }}</th><th>{{ _('Updated') }}</th>{% if t.type == 'report' %}<th>{{ _('AI grade') }}</th>{% endif %}</tr></thead>
+            <tbody>
+            {%- for sub in t.submissions -%}
+            <tr>
+              <td><a href="{{ url('user_detail', uid=sub.uid) }}">{{ sub.uname }}</a>{% if sub.name %} <span class="hw-subj__name">{{ sub.name }}</span>{% endif %}</td>
+              <td>{% for f in sub.files %}<a class="hw-subj__file" href="{{ t.fileUrl }}?name={{ f.name|urlencode }}&uid={{ sub.uid }}">📄 {{ f.name }}</a>{% else %}<span class="hw-subj__name">—</span>{% endfor %}</td>
+              <td>{% if sub.hasReport %}✓{% else %}<span class="hw-subj__name">—</span>{% endif %}</td>
+              <td>{{ datetimeSpan(sub.updateAt, false, 'YYYY-M-D H:mm')|safe }}</td>
+              {%- if t.type == 'report' -%}
+              <td>{% if not sub.pdf %}<span class="pta-chip pta-chip--warn">{{ _('no PDF') }}</span>{% elif not sub.grade %}<span class="pta-chip pta-chip--dim">{{ _('not graded') }}</span>{% elif sub.grade.status == 'done' %}<b>{{ sub.grade.score100 }}</b> / 100 {% if sub.grade.released %}<span class="pta-chip pta-chip--ok">{{ _('released') }}</span>{% else %}<span class="pta-chip pta-chip--dim">🔒 {{ _('not released') }}</span>{% endif %}{% elif sub.grade.status == 'failed' %}<span class="pta-chip pta-chip--bad" title="{{ sub.grade.error }}">{{ _('failed') }}</span>{% elif sub.grade.status == 'skipped' %}<span class="pta-chip pta-chip--warn" title="{{ sub.grade.error }}">{{ _('manual') }}</span>{% else %}<span class="pta-chip pta-chip--blue">⏳ {{ _('grading') }}</span>{% endif %}</td>
+              {%- endif -%}
+            </tr>
+            {%- endfor -%}
+            </tbody>
+          </table>
+          {%- else -%}
+          <div class="hw-subj__empty">{{ _('No student has handed anything in yet.') }}</div>
+          {%- endif -%}
+        </details>
+        {%- endfor -%}
+      </div>
+    </div>
+    {%- endif -%}
     {%- if pdict and not _hwManager -%}
     {#- PTA: students work on the one-page paper (objective sections inline,
         programming tasks in its rail); the tabular list stays for managers. -#}
@@ -173,7 +281,12 @@
           {%- for pid in tdoc.pids -%}
             <tr>
               {% if handler.user.hasPriv(PRIV.PRIV_USER_PROFILE) %}
-                {% if psdict[pid] and psdict[pid].rid %}
+                {% if subjectiveOverview and subjectiveOverview.byPid[pid] %}
+                  {#- PTA fork: a subjective task has no records — the manager's row shows the class's hand-ins instead of the viewer's own status. -#}
+                  {% set _st = subjectiveOverview.byPid[pid] %}
+                  <td class="col--status record-status--border"><a href="#hw-subjective">{{ _st.handedIn }} {{ _('handed in') }}{% if _st.type == 'report' %} · {{ _st.graded }} {{ _('graded') }}{% endif %}</a></td>
+                  <td class="col--submit-at">{% if _st.latestAt %}{{ datetimeSpan(_st.latestAt)|safe }}{% else %}-{% endif %}</td>
+                {% elif psdict[pid] and psdict[pid].rid %}
                   {% set rdoc = rdict[psdict[pid].rid] %}
                   {% if model.contest.canShowSelfRecord.call(handler, tdoc) %}
                     {{ record.render_status_td(rdoc) }}

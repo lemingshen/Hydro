@@ -9,6 +9,7 @@ import {
     Counter, diffArray, getAlphabeticId, randomstring, sortFiles, Time, yaml,
 } from '@hydrooj/utils/lib/utils';
 import { Context, Service } from '../context';
+import { Logger } from '../logger';
 import {
     BadRequestError, ContestAlreadyStartedError, ContestNotAttendedError, ContestNotEndedError, ContestNotFoundError,
     ContestNotLiveError, ContestScoreboardHiddenError, FileLimitExceededError, FileUploadError,
@@ -23,6 +24,7 @@ import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import { getQuickForStudent, studentFeedbackVisible } from '../model/quick_review';
 import { startQuickReview, studentWeakPoints } from '../lib/quick_review';
+import { autoGradeHomework } from '../lib/subjective_grader';
 import * as discussion from '../model/discussion';
 import * as document from '../model/document';
 import { getSubjective } from '../model/selflearning';
@@ -111,6 +113,7 @@ export async function syncObjectiveStatus(domainId: string, tdoc: Tdoc) {
     }
 }
 
+const logger = new Logger('contest');
 const PENDING_STATUSES = [STATUS.STATUS_WAITING, STATUS.STATUS_JUDGING, STATUS.STATUS_COMPILING, STATUS.STATUS_FETCHED];
 
 /**
@@ -126,8 +129,46 @@ const PENDING_STATUSES = [STATUS.STATUS_WAITING, STATUS.STATUS_JUDGING, STATUS.S
  *   3. the objective problem-set statuses are synced (syncObjectiveStatus).
  * Idempotent: re-running only refreshes.
  */
-export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
+/** True when any of the tasks is a subjective one (pid S…). */
+export function hasSubjectiveTask(pids: number[], pdict: Record<number, any>): boolean {
+    return (pids || []).some((pid) => /^s/i.test(String(pdict?.[pid]?.pid || '')));
+}
+
+/**
+ * PTA fork — whether the homework is evaluated BY THE TEACHER rather than
+ * by the clock (it contains a subjective task). Stored on the tdoc as
+ * `manualEval` when the homework is saved; derived once here for a
+ * homework saved before the flag existed.
+ */
+export async function ensureManualEvalFlag(domainId: string, tdoc: Tdoc): Promise<boolean> {
+    if (!tdoc || tdoc.rule !== 'homework') return false;
+    if (typeof tdoc.manualEval === 'boolean') return tdoc.manualEval;
+    const pids = tdoc.pids || [];
+    const pdict = pids.length ? await problem.getList(domainId, pids, true, false, ['docId', 'pid'] as any, true) : {};
+    const manual = hasSubjectiveTask(pids, pdict);
+    tdoc.manualEval = manual;
+    await contest.edit(domainId, tdoc.docId, { manualEval: manual } as any).catch(() => { /* derived again next time */ });
+    return manual;
+}
+
+export interface EvaluateOptions {
+    /** The teacher's explicit "Evaluate" (the only way a manual-evaluation homework is evaluated). */
+    manual?: boolean;
+    by?: number;
+}
+
+export async function evaluateContainerResults(domainId: string, tdoc: Tdoc, opts: EvaluateOptions = {}) {
     if (!contest.isDone(tdoc)) return;
+    /*
+     * PTA fork — MANUAL EVALUATION. A homework that contains a subjective
+     * task is not evaluated when its deadline passes: the schedule task
+     * and every lazy page fallback land here and leave, and students see
+     * no results (model/contest.ts resultsPublished) until the teacher
+     * presses "Evaluate & review grades" (handler/subjective_grading.ts),
+     * which calls this with `manual` and stamps `evaluatedAt`.
+     */
+    const manualEval = await ensureManualEvalFlag(domainId, tdoc);
+    if (manualEval && !tdoc.evaluatedAt && !opts.manual) return;
     const pids = tdoc.pids || [];
     const rdocs = await record.getMulti(domainId, { contest: tdoc.docId, pid: { $in: pids } }, {
         projection: { _id: 1, uid: 1, pid: 1, status: 1, score: 1, lang: 1, subtasks: 1 },
@@ -160,7 +201,9 @@ export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
     const byUid: Record<number, typeof rdocs> = {};
     for (const r of rdocs) (byUid[r.uid] ||= []).push(r);
     const tsdocs = await document.getMultiStatus(domainId, document.TYPE_CONTEST, { docId: tdoc.docId }).toArray();
-    const uids = new Set<number>([...tsdocs.map((t) => t.uid), ...Object.keys(byUid).map(Number)]);
+    // PTA fork: released AI grades of subjective tasks, once for everyone.
+    const aiGrades = await contest.subjectiveGradesOf(domainId, tdoc);
+    const uids = new Set<number>([...tsdocs.map((t) => t.uid), ...Object.keys(byUid).map(Number), ...aiGrades.keys()]);
     for (const uid of uids) {
         const tsdoc = tsdocs.find((t) => t.uid === uid);
         const fromRecords = (byUid[uid] || [])
@@ -171,11 +214,29 @@ export async function evaluateContainerResults(domainId: string, tdoc: Tdoc) {
         const covered = new Set(fromRecords.map((j) => j.rid.toHexString()));
         const kept = (tsdoc?.journal || []).filter((j) => !covered.has(j.rid.toHexString()));
         const journal = [...kept, ...fromRecords].sort((a, b) => a.rid.getTimestamp().getTime() - b.rid.getTimestamp().getTime());
-        if (!journal.length && !tsdoc) continue;
-        const stats = contest.RULES[tdoc.rule].stat(tdoc, journal);
+        if (!journal.length && !tsdoc && !aiGrades.has(uid)) continue;
+        // PTA fork: the same derivation as every recalculation — the rule's
+        // statistics, released AI grades, then the teacher's adjustments
+        // (which an end-of-homework re-run must never wipe).
+        const stats = await contest.statsOf(tdoc, journal, { ...(tsdoc || {}), uid }, aiGrades.get(uid) || null);
         await document.setStatus(domainId, document.TYPE_CONTEST, tdoc.docId, uid, { journal, ...stats } as any);
     }
     await syncObjectiveStatus(domainId, tdoc);
+    // The teacher's evaluation is what publishes a manual-evaluation homework.
+    if (manualEval && opts.manual) {
+        const stamp = { evaluatedAt: new Date(), ...(opts.by ? { evaluatedBy: opts.by } : {}) };
+        await contest.edit(domainId, tdoc.docId, stamp as any);
+        Object.assign(tdoc, stamp);
+    }
+    /*
+     * 📄 HOMEWORK: the AI grader reads every subjective REPORT task's PDFs
+     * now (lib/subjective_grader.ts, ai_tutor.subjective_grade_auto) —
+     * detached, idempotent per file + rubric, and released to students
+     * only when the teacher says so (or ai_tutor.subjective_grade_release).
+     */
+    if (tdoc.rule === 'homework') {
+        autoGradeHomework(domainId, tdoc).catch((e) => logger.warn('[subjective-grader] auto grading for %s/%s failed: %s', domainId, tdoc.docId, e.message));
+    }
     /*
      * ⚡ Then the Quick Review of a TEST (lib/quick_review.ts), so it is
      * ready when the teacher opens it (ai_tutor.quick_review_auto). Done
@@ -399,10 +460,20 @@ export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<n
         }));
     }
     const subjective = subjPids.map((pid, i) => {
-        // PTA fork: the teacher grades a subjective task through a score
-        // adjustment on it (homework_score_override) — that is its grade.
+        // PTA fork: a subjective task is graded either by the AI grader (a
+        // RELEASED grade seeds detail[pid].aiGrade — model/contest.ts
+        // seedSubjectiveScores) or by the teacher's score adjustment
+        // (homework_score_override); the adjustment wins when both exist.
         const d = detail?.[pid];
-        const graded = d?.override ? { score: d.score || 0, earned: round2(typeof d.penaltyScore === 'number' ? d.penaltyScore : (weightOf(pid) * (d.score || 0)) / 100), reason: d.override.reason, at: d.override.at } : null;
+        const graded = (d?.override || d?.aiGrade) ? {
+            score: d.score || 0,
+            earned: round2(typeof d.penaltyScore === 'number' ? d.penaltyScore : (weightOf(pid) * (d.score || 0)) / 100),
+            reason: d.override?.reason || '',
+            at: d.override?.at || d.aiGrade?.at || null,
+            source: d.override ? 'teacher' : 'ai',
+            aiTotal: d.aiGrade?.total ?? null,
+            aiMax: d.aiGrade?.maxTotal ?? null,
+        } : null;
         return {
             docId: pid,
             pid: pdict[pid]?.pid,

@@ -1,6 +1,7 @@
 import $ from 'jquery';
 import Notification from 'vj/components/notification';
 import { objectiveTitleOf } from 'vj/components/problem/objectiveTitle';
+import { mountSubjectivePanel } from 'vj/components/problem/subjectiveRubricBuilder';
 import { NamedPage } from 'vj/misc/Page';
 import { getAvailableLangs, getTheme, i18n } from 'vj/utils';
 
@@ -151,16 +152,42 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
   $sel.after($fn);
   const $fnInput = $('<input type="hidden" name="functionConfig" value="">').appendTo($pid.closest('form'));
   const syncFn = () => {
-    if (String($sel.find('input[name="pts-type"]:checked').val()) !== 'F') { $fnInput.val(''); return; }
+    if (String($sel.find('input[name="pts-type"]:checked').val()) !== 'F') {
+      $fnInput.val('');
+      return;
+    }
     $fnInput.val(JSON.stringify({
       language: String($fn.find('.ptsf__lang').val() || ''),
       harness: String($fn.find('.ptsf__harness').val() || ''),
       stub: String($fn.find('.ptsf__stub').val() || ''),
     }));
   };
-  const applyFnPanel = (key) => { $fn.prop('hidden', key !== 'F'); syncFn(); };
+  const applyFnPanel = (key) => {
+    $fn.prop('hidden', key !== 'F');
+    syncFn();
+  };
   applyFnPanel(init);
   $fn.on('input change', syncFn);
+
+  /* ---------------- subjective task: type + rubric builder ---------------- */
+  // PTA fork: while 'S' is selected a panel takes what students hand in
+  // (one PDF report / a project zip) and the grading rubric; both post as
+  // `subjectiveConfig` (handler/problem.ts applySubjectiveConfig → config.yaml).
+  const subj = mountSubjectivePanel($fn, (window.UiContext && window.UiContext.subjectiveConfig) || null);
+  const $subjInput = $('<input type="hidden" name="subjectiveConfig" value="">').appendTo($pid.closest('form'));
+  const syncSubj = () => {
+    if (String($sel.find('input[name="pts-type"]:checked').val()) !== 'S') {
+      $subjInput.val('');
+      return;
+    }
+    $subjInput.val(subj.json());
+  };
+  const applySubjPanel = (key) => {
+    subj.setVisible(key === 'S');
+    syncSubj();
+  };
+  applySubjPanel(init);
+  subj.$panel.on('input change', syncSubj);
 
   const applyPrefix = (key) => {
     const v = String($pid.val() || '');
@@ -177,6 +204,7 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
   $sel.find('input[name="pts-type"]').on('change', function onPick() {
     applyPrefix(String($(this).val()));
     applyFnPanel(String($(this).val()));
+    applySubjPanel(String($(this).val()));
   });
 
   $pid.on('input blur', () => {
@@ -184,6 +212,7 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
     if (k) {
       $sel.find(`input[value="${k}"]`).prop('checked', true);
       applyFnPanel(k);
+      applySubjPanel(k);
     }
   });
 
@@ -257,6 +286,18 @@ export default new NamedPage(['problem_create', 'problem_edit'], () => {
         Notification.error(i18n('A function task needs its judge program — paste the complete program the student’s function is inserted into.'));
         return;
       }
+    }
+    if (picked === 'S') {
+      syncSubj();
+      const problem = subj.validate();
+      if (problem) {
+        ev.preventDefault();
+        Notification.error(problem);
+        return;
+      }
+      // A report task without a rubric cannot be graded: allowed (the rubric
+      // can be added later on the edit page), but say so.
+      if (subj.type() === 'report' && !subj.hasRubric()) Notification.warn(i18n('This report task has no rubric yet — the AI cannot grade it until you add one on the edit page.'));
     }
     if (derivedMode) {
       syncTitle();

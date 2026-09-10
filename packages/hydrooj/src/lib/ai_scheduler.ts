@@ -96,7 +96,7 @@ export interface SchedulerConfig {
     retryBaseMs: number;
 }
 
-export const DEFAULT_FEATURE_CAPS = 'explain:3,qr_label:3,report_map:3,attrib:2,summary:2,grade:2,report_reduce:1,qr_points:1,author:2';
+export const DEFAULT_FEATURE_CAPS = 'explain:3,qr_label:3,report_map:3,attrib:2,summary:2,grade:2,report_reduce:1,qr_points:1,author:2,sub_grade:2';
 
 /** "explain:3,qr_label:3" → { explain: 3, qr_label: 3 } (bad pairs skipped). */
 export function parseFeatureCaps(text: string | undefined | null): Record<string, number> {

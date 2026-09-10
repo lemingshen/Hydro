@@ -1,6 +1,6 @@
 import $ from 'jquery';
-import Notification from 'vj/components/notification';
 import { aiMarkdown, downloadAiReportPdf } from 'vj/components/ai-report/pdf';
+import Notification from 'vj/components/notification';
 import { NamedPage } from 'vj/misc/Page';
 import { getTheme, i18n, request } from 'vj/utils';
 
@@ -149,7 +149,6 @@ const STYLE = [
   '.pta-dark .acr__report td, .pta-dark .acr__report th { border-color: #3a3350; }',
 ].join('\n');
 
-
 /* ------------------------------ figure engine ------------------------------ */
 
 const VERDICT_COLORS = {
@@ -177,7 +176,7 @@ function drawBars(canvas, cfg) {
   const axis = dark ? '#4a525b' : '#c5cddb';
   const FONT = '11px -apple-system, "Segoe UI", Arial, sans-serif';
   // Wrapped bottom legend (for long knowledge-point names): pre-measure rows.
-  let legendRows = [];
+  const legendRows = [];
   let extra = 0;
   const plotWGuess = cssW - 52;
   if (cfg.legendBottom) {
@@ -502,8 +501,16 @@ function statsStrip(stats) {
   if (stats.late && stats.late.submissions) html += `<span class="acr__stat" title="${esc(i18n('Late submissions / students who submitted late'))}">⏱ ${esc(String(stats.late.submissions))} · ${esc(String(stats.late.students))}</span>`;
   for (const p of stats.problems || []) {
     if (p.kind === 'objective') html += `<span class="acr__stat" title="${esc(p.title || '')}">${esc(p.label)}: <b>${esc(String(p.accuracy ?? '-'))}%</b> ${esc(i18n('correct'))}</span>`;
-    else if (p.kind === 'subjective') html += `<span class="acr__stat" title="${esc(p.title || '')}">${esc(p.label)}: <b>${esc(String(p.handedIn || 0))}</b> ${esc(i18n('handed in'))}</span>`;
-    else html += `<span class="acr__stat" title="${esc(p.title || '')}">${esc(p.label)}: <b>${esc(String(p.solved))}</b>/${esc(String(p.attempted))} ${esc(i18n('solved'))}</span>`;
+    else if (p.kind === 'subjective') {
+      html += `<span class="acr__stat" title="${esc(p.title || '')}">${esc(p.label)}: <b>${esc(String(p.handedIn || 0))}</b> ${esc(i18n('handed in'))}</span>`;
+      // PTA fork: AI-graded report tasks — mean rubric total and the weakest criterion.
+      const r = p.report;
+      if (r && r.graded) {
+        const weakest = (r.criteria || []).filter((c) => typeof c.mean === 'number' && c.maxPoints > 0)
+          .sort((a, b) => (a.mean / a.maxPoints) - (b.mean / b.maxPoints))[0];
+        html += `<span class="acr__stat" title="${esc(i18n('AI report grades: mean / max ({0} graded)').replace('{0}', r.graded))}">🤖 ${esc(p.label)}: <b>${esc(String(r.mean ?? '-'))}</b>/${esc(String(r.maxTotal))}${weakest ? ` · ${esc(i18n('weakest'))}: ${esc(weakest.title)} ${esc(String(weakest.mean))}/${esc(String(weakest.maxPoints))}` : ''}</span>`;
+      }
+    } else html += `<span class="acr__stat" title="${esc(p.title || '')}">${esc(p.label)}: <b>${esc(String(p.solved))}</b>/${esc(String(p.attempted))} ${esc(i18n('solved'))}</span>`;
   }
   if (stats.engagement) {
     const en = stats.engagement;
@@ -646,15 +653,15 @@ function openModal() {
     const feedHtml = feed.length
       ? `<ul class="acr__feed">${feed.map((f, i) => `<li class="${i === feed.length - 1 ? 'is-live' : ''}" style="animation-delay:${Math.min(i, 8) * 0.03}s"><time>${esc(f.at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))}</time><span>${esc(f.text)}</span></li>`).join('')}</ul>`
       : '';
-    return statsStrip(stats)
-      + '<div class="acr__job"><div class="acr__orb"><span>' + (JOB_STEPS[idx] || JOB_STEPS[0])[1] + '</span></div>'
+    return `${statsStrip(stats)
+    }<div class="acr__job"><div class="acr__orb"><span>${(JOB_STEPS[idx] || JOB_STEPS[0])[1]}</span></div>`
       + '<div class="acr__job-body">'
       + `<div class="acr__job-title">🤖 ${esc(title)} (${total} ${esc(i18n('students'))})${eta ? `<span class="acr__eta">${esc(eta)}</span>` : ''}</div>`
       + `<div class="acr__job-stage"><span class="acr__dots">${esc(stageText)}</span>${esc(coverage)}</div>`
       + `<div class="acr__job-track"><span class="acr__pct">${Math.round(frac * 100)}%</span><i style="width:${Math.round(frac * 100)}%"></i></div>`
-      + `<div class="acr__job-steps">${JOB_STEPS.map(([, ico, label], i) => `<span class="${i < idx ? 'is-done' : i === idx ? 'is-active' : ''}">${i < idx ? '✓' : ico} ${esc(label)}</span>`).join('')}</div>`
-      + feedHtml
-      + `<div class="acr__job-meta">${esc(hint + bigClass)} · ${mm}:${ss}${esc(beatText)}</div>`
+      + `<div class="acr__job-steps">${JOB_STEPS.map(([, ico, label], i) => `<span class="${i < idx ? 'is-done' : i === idx ? 'is-active' : ''}">${i < idx ? '✓' : ico} ${esc(label)}</span>`).join('')}</div>${
+        feedHtml
+      }<div class="acr__job-meta">${esc(hint + bigClass)} · ${mm}:${ss}${esc(beatText)}</div>`
       + '</div></div>';
   }
   function showJob(job) {
@@ -740,7 +747,7 @@ function openModal() {
       const st = d.status || 'idle';
       const pid = (d.pids || [])[0];
       const go = d.gone ? '' : (st.startsWith('published') && d.problemUrl
-        ? `<a class="acr-rem__go" href="${esc(d.problemUrl)}" target="_blank" rel="noopener">${esc(pid ? `${pid} ↗` : i18n('Open task') + ' ↗')}</a>`
+        ? `<a class="acr-rem__go" href="${esc(d.problemUrl)}" target="_blank" rel="noopener">${esc(pid ? `${pid} ↗` : `${i18n('Open task')} ↗`)}</a>`
         : `<a class="acr-rem__go" href="${esc(d.url)}" target="_blank" rel="noopener">${esc(i18n('Open in Studio'))} ↗</a>`);
       return `<div class="acr-rem__madecard${d.gone ? ' is-gone' : ''}">
         <span class="acr-rem__st acr-rem__st--${esc(st)}">${esc(i18n(STATUS_LABEL[st] || st))}</span>
@@ -771,7 +778,7 @@ function openModal() {
         <input type="checkbox" class="acr-rem__pick" checked>
         <span class="acr-rem__concept">${esc(r.canonical || r.concept)}</span>
         ${r.catalog ? `<span class="acr-rem__badge">${esc(i18n('{0} students').replace('{0}', (r.students || []).length))}</span>`
-    : `<span class="acr-rem__badge acr-rem__badge--warn" title="${esc(i18n('Not a knowledge point in this domain yet — creating will add it to the catalog.'))}">⚠ ${esc(i18n('new point'))}</span>`}
+          : `<span class="acr-rem__badge acr-rem__badge--warn" title="${esc(i18n('Not a knowledge point in this domain yet — creating will add it to the catalog.'))}">⚠ ${esc(i18n('new point'))}</span>`}
       </div>
       ${(r.existing || []).length ? `<div class="acr-rem__reuse"><b>♻ ${esc(i18n('Already in the problem set'))}</b> — ${esc(i18n('the knowledge map will recommend these to the affected students as they are:'))}<br>${r.existing.map((t) => `<a href="${domainPrefix()}/p/${esc(t.docId)}" target="_blank" rel="noopener" title="${esc(t.title)}">${esc(t.pid)} · ${esc(i18n('{0} unsolved').replace('{0}', t.unsolvedBy))}</a>`).join('')}</div>` : ''}
       <div><span class="acr-rem__lbl">${esc(i18n('Working title'))}</span><input type="text" class="acr-rem__title-in textbox" value="${esc(r.title || '')}"></div>
@@ -849,9 +856,9 @@ function openModal() {
         const rows = created.map((c, i) => `<span class="acr-rem__row-open">${tabs[i] ? '✅' : '↗'} <a href="${esc(c.url)}" target="_blank" rel="noopener" class="acr-rem__open">${esc(c.title)}</a></span>`).join('');
         $rem.find('.acr-rem__done').html(`✅ ${esc(i18n('{0} draft(s) created — statements being written now.').replace('{0}', created.length))}`
           + ` <a href="${esc(overviewUrl)}" target="_blank" rel="noopener"><b>${esc(i18n('Overview of all {0} in AI Studio').replace('{0}', created.length))} →</b></a>`
-          + `<div class="acr-rem__opens">${rows}</div>`
-          + (blocked.length ? `<div class="acr-rem__tip">⚠ ${esc(i18n('Your browser allowed only one new tab per click and blocked {0} — the overview tab is open, and each draft above opens with a click of its own. To get all tabs at once next time, allow pop-ups for this site (the blocked-pop-up icon in the address bar).').replace('{0}', blocked.length))}
-              <button type="button" class="acr-rem__openall">↗ ${esc(i18n('Open the remaining {0} now').replace('{0}', blocked.length))}</button></div>` : ` ${esc(i18n('Each draft is open in its own tab. In each, press Continue to generate tests and verify, or Discard.'))}`));
+          + `<div class="acr-rem__opens">${rows}</div>${
+            blocked.length ? `<div class="acr-rem__tip">⚠ ${esc(i18n('Your browser allowed only one new tab per click and blocked {0} — the overview tab is open, and each draft above opens with a click of its own. To get all tabs at once next time, allow pop-ups for this site (the blocked-pop-up icon in the address bar).').replace('{0}', blocked.length))}
+              <button type="button" class="acr-rem__openall">↗ ${esc(i18n('Open the remaining {0} now').replace('{0}', blocked.length))}</button></div>` : ` ${esc(i18n('Each draft is open in its own tab. In each, press Continue to generate tests and verify, or Discard.'))}`}`);
         $rem.find('.acr-rem__openall').on('click', () => {
           // One gesture: works in full once pop-ups are allowed; otherwise
           // opens one more and the rest stay as links.
@@ -884,7 +891,7 @@ function openModal() {
   function showReport(reportMd, generatedAt) {
     currentMd = String(reportMd || '');
     const html = aiMarkdown.render(currentMd);
-    $body.html(statsStrip(stats) + '<div class="acr__charts"></div>' + `<div class="acr__report typo">${html}</div>` + remedialHtml(remedial, remedialDrafts));
+    $body.html(`${statsStrip(stats)}<div class="acr__charts"></div>` + `<div class="acr__report typo">${html}</div>${remedialHtml(remedial, remedialDrafts)}`);
     renderCharts($body.find('.acr__charts'), stats, concepts);
     wireRemedial();
     import('vj/components/highlighter/prismjs')
@@ -899,8 +906,8 @@ function openModal() {
   function showGeneratePrompt() {
     const n = (stats && stats.participants) || 0;
     const m = (stats && (stats.problems || []).length) || 0;
-    $body.html(statsStrip(stats)
-      + '<div class="acr__charts"></div>'
+    $body.html(`${statsStrip(stats)
+    }<div class="acr__charts"></div>`
       + `<div class="acr__empty">${esc(i18n('No report generated yet.'))}<br><small>${esc(i18n('The AI reads every task with its knowledge points and answer key, every student\u2019s every submission and answer, and the scoreboard — in the background, so you can leave this page.'))}</small></div>`
       + `<button type="button" class="acr__gen">🤖 ${esc(i18n('Generate Class Report'))} (${n} ${esc(i18n('students'))} × ${m} ${esc(i18n('tasks'))})</button>`);
     renderCharts($body.find('.acr__charts'), stats, concepts);

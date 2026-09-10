@@ -21,7 +21,7 @@ import {
     Handler, param, post, Types,
 } from '../service/server';
 import {
-    ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, evaluateContainerResults, hasObjectiveTask, myResultsOf, paperOf, parsePaper, resolveAllowedLangs,
+    ContestCodeHandler, ContestFileDownloadHandler, ContestScoreboardHandler, ensureManualEvalFlag, evaluateContainerResults, hasObjectiveTask, hasSubjectiveTask, myResultsOf, paperOf, parsePaper, resolveAllowedLangs,
 } from './contest';
 import { applyObjectiveFeedback } from '../lib/objective_feedback';
 import { scheduleSimilarityCheck } from './similarity';
@@ -89,6 +89,8 @@ class HomeworkDetailHandler extends Handler {
     async prepare(domainId: string, tid: ObjectId) {
         this.tdoc = await contest.get(domainId, tid);
         if (this.tdoc.rule !== 'homework') throw new ContestNotFoundError(domainId, tid);
+        // PTA fork: a homework with subjective tasks is evaluated by the teacher (manualEval).
+        await ensureManualEvalFlag(domainId, this.tdoc);
         if (this.tdoc.assign?.length && !this.user.own(this.tdoc) && !this.user.hasPerm(PERM.PERM_VIEW_HIDDEN_HOMEWORK)) {
             if (!new Set(this.tdoc.assign).intersection(new Set(this.user.group)).size) {
                 throw new NotAssignedError('homework', this.tdoc.docId);
@@ -146,12 +148,18 @@ class HomeworkDetailHandler extends Handler {
         // (homework_detail.html "Your results"), evaluating first if the
         // end-of-container task has not run yet.
         if (tsdoc?.attend && contest.isDone(this.tdoc, tsdoc)) {
-            let mine = tsdoc;
-            if (!(this.tdoc as any).objectiveSynced) {
-                await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
-                mine = await contest.getStatus(domainId, tid, this.user._id) || tsdoc;
+            if (contest.resultsPublished(this.tdoc)) {
+                let mine = tsdoc;
+                if (!(this.tdoc as any).objectiveSynced) {
+                    await evaluateContainerResults(domainId, this.tdoc).catch(() => { /* retried on the next visit */ });
+                    mine = await contest.getStatus(domainId, tid, this.user._id) || tsdoc;
+                }
+                this.response.body.myResults = await myResultsOf(domainId, this.tdoc, mine.detail || {}, this.user._id);
+            } else {
+                // PTA fork: manual evaluation — the deadline passed, the
+                // teacher has not evaluated yet; the results stay closed.
+                this.response.body.resultsPending = true;
             }
-            this.response.body.myResults = await myResultsOf(domainId, this.tdoc, mine.detail || {}, this.user._id);
         }
     }
 
@@ -248,8 +256,8 @@ class HomeworkEditHandler extends Handler {
             tid = await contest.add(domainId, title, content, this.user._id,
                 'homework', beginAt.toDate(), endAt.toDate(), pids, rated,
                 {
-                    penaltySince: penaltySince.toDate(), penaltyRules, assign, maintainer, langs, checkSimilarity,
-                });
+                    penaltySince: penaltySince.toDate(), penaltyRules, assign, maintainer, langs, checkSimilarity, manualEval: hasSubjectiveTask(pids, pdict),
+                } as any);
         } else {
             await contest.edit(domainId, tid, {
                 title,
@@ -260,6 +268,11 @@ class HomeworkEditHandler extends Handler {
                 penaltySince: penaltySince.toDate(),
                 penaltyRules,
                 rated,
+                // PTA fork: evaluated by the teacher when a subjective task is
+                // listed; a deadline moved into the future waits for the next
+                // "Evaluate" (an earlier evaluation no longer counts).
+                manualEval: hasSubjectiveTask(pids, pdict),
+                ...(Date.now() <= endAt.toDate().getTime() ? { evaluatedAt: null, evaluatedBy: null } : {}),
                 maintainer,
                 assign,
                 langs,

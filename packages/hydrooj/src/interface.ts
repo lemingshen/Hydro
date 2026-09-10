@@ -5,7 +5,7 @@ import type fs from 'fs';
 import type { Dictionary, NumericDictionary } from 'lodash';
 import type { Binary, FindCursor, ObjectId } from 'mongodb';
 import type {
-    FileInfo, RecordJudgeInfo, RecordPayload, SubtaskResult,
+    FileInfo, RecordJudgeInfo, RecordPayload, SubjectiveRubric, SubjectiveTaskConfig, SubtaskResult,
 } from '@hydrooj/common/types';
 import type { Context } from './context';
 import type { PrintTaskStatus } from './model/contest';
@@ -154,6 +154,10 @@ export interface ProblemConfig {
     template?: Record<string, string>;
     /** PTA fork — function-task stub per language family. */
     stub?: Record<string, string>;
+    /** PTA fork — subjective task: what the student hands in (see common/types.ts). */
+    subjective?: SubjectiveTaskConfig;
+    /** PTA fork — subjective task: the grading rubric. */
+    rubric?: SubjectiveRubric;
 }
 
 export type Content = string | Record<string, string>;
@@ -299,6 +303,19 @@ export interface Tdoc extends Document {
      * comparison itself is a separate feature that keys off it.
      */
     checkSimilarity?: boolean;
+    /**
+     * PTA fork — MANUAL EVALUATION. A homework that contains a subjective
+     * task is not evaluated by the clock: the deadline passes, but the
+     * end-of-homework evaluation (objective grading, statuses, the AI
+     * report grading) runs only when the teacher presses "Evaluate &
+     * review grades", and until then students see no results. Set on
+     * save (HomeworkEditHandler), derived on first use for older
+     * homeworks (handler/contest.ts ensureManualEvalFlag).
+     */
+    manualEval?: boolean;
+    /** When the teacher evaluated a manual-evaluation homework (cleared when its deadline moves into the future). */
+    evaluatedAt?: Date;
+    evaluatedBy?: number;
 
     // For training
     description?: string;

@@ -1075,3 +1075,13 @@ ai_tutor.sched_adaptive: "排程器 — 依提供商自適應並發（跟得上�
 ai_tutor.sched_slots_max: "排程器 — 自適應並發上限"
 ai_tutor.key_max_inflight: "每個 API 金鑰的並發請求數"
 ai_tutor.key_rpm: "每個 API 金鑰的每分鐘請求數"
+# PTA fork — 主觀題報告的 AI 評分（lib/subjective_grader.ts）
+ai_tutor.subjective_grade_enabled: "報告評分 — 啟用 PDF 報告的 AI 評分"
+ai_tutor.subjective_grade_auto: "報告評分 — 教師評估作業時自動評分"
+ai_tutor.subjective_grade_release: "報告評分 — 學生何時看到分數與評語"
+ai_tutor.subjective_grade_concurrency: "報告評分 — 並行評分的報告數（1-8）"
+ai_tutor.subjective_grade_model: "報告評分 — 模型（留空 = 輔導模型）"
+ai_tutor.subjective_grade_max_chars: "報告評分 — 每次呼叫傳送的報告文字字元上限"
+homework_subjective_review: "AI 報告評分"
+ai_tutor.subjective_grade_vision: "報告評分 — 同時把 PDF 原檔傳送給模型（Claude / OpenAI）"
+homework_report_review: "AI 報告評分"
