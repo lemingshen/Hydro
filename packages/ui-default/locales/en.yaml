@@ -1541,3 +1541,7 @@ ai_tutor.key_rpm: "Requests per Minute per API Key"
 "limit": "limit"
 "{0} key(s) for {1}": "{0} key(s) for {1}"
 "No keys saved for {0} yet": "No keys saved for {0} yet"
+# PTA fork — every remaining "Contest" phrase reads "Test".
+# PTA fork — remaining UI phrases that still said "contest".
+"Contest resumed.": "Test resumed."
+"You cannot submit for this problem because the contest is ended. You can click ": "You cannot submit for this problem because the test is ended. You can click "

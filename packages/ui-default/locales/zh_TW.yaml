@@ -179,7 +179,7 @@ contest_manage: 測驗管理
 contest_print: 列印
 contest_problemlist: 題目列表
 contest_scoreboard: 測驗成績表
-contest_user: 參賽者管理
+contest_user: 參加者管理
 contest: 測驗
 Contest: 測驗
 Contests per page: 每頁展示的測驗數量
@@ -273,7 +273,7 @@ Discussions: 討論
 Display name {1} you want to set is used by others.: 您想要設定的顯示名 {1} 已經被其他人使用了。
 Display Name: 顯示名
 display_name: 顯示名
-Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 請勿討論解法，否則以作弊論處並且將失去參賽資格。
+Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 請勿討論解法，否則以作弊論處並且將失去參加測驗資格。
 Document {2} not found.: 檔案 {2} 不存在。
 Domain {0} already exists.: 域 {0} 已經存在。
 Domain {0} is bulit-in and cannot be modified.: 域 {0} 為內建，不可修改。
@@ -551,7 +551,7 @@ Oh, there is no clarification!: 喔，目前沒有答疑！
 Oh, there is no task in the queue!: 喔，佇列中目前沒有任務。
 Ok: 確定
 Only A-Z, a-z, 0-9 and _ are accepted: 只接受 A-Z, a-z, 0-9 和 _
-Only Partic.: 僅參賽者
+Only Partic.: 僅參加者
 Oops, there are no results.: 呀，沒有結果。
 Oops!: Oops!
 Open in Problem Set: 在題庫中開啟
@@ -575,7 +575,7 @@ pager_last: 末頁 »
 pager_next: 下一頁 ›
 pager_previous: ‹ 前一頁
 Params: 引數
-Partic.: 參賽人數
+Partic.: 參加測驗人數
 Password reset mail has been sent to your email.: 密碼重置郵件已傳送到您的電子郵箱。
 Password: 密碼
 Passwords don't match.: 驗證密碼不匹配。
@@ -976,7 +976,7 @@ Visible to registered users: 對註冊使用者可見
 Visit: 檢視
 Vote problem solutions: 為題解投票
 Vote: 投票
-We will check code similarity after this contest.: 我們會在賽後檢查程式碼相似度。
+We will check code similarity after this contest.: 我們會在測驗後檢查程式碼相似度。
 WeChat Visibility: 微信可見性
 WeChat: 微信
 Week: 周
@@ -999,7 +999,7 @@ Year: 年
 You are banned by the domain moderator.: 您被該域的管理員封禁。
 You are not allowed to join domain {0}. {1}: 您無法加入 {0}。{1}
 You can create your own training plans and share them with others.: 您可以建立您自己的訓練計劃並且與他人分享。
-You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 該比賽已結束，您無法在比賽模式下遞交該題目。您可以點選“在題庫中開啟”以普通模式檢視和遞交本題。
+You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 該測驗已結束，您無法在測驗模式下遞交該題目。您可以點選“在題庫中開啟”以普通模式檢視和遞交本題。
 You cannot submit for this problem because the homework's deadline is due.: 功課已到達截止時間，您無法遞交了。
 You cannot visit this domain.: 您不能訪問此域。
 You don't have the required permission ({0}) in this domain.: 您在該域中無相應許可權 ({0})。
@@ -3103,3 +3103,15 @@ ai_tutor.key_rpm: "每個 API 金鑰的每分鐘請求數"
 "this step for": "此步驟已進行"
 "click a column to sort": "點擊欄標題排序"
 "automatic": "自動"
+"Set your own password": "設定你自己的密碼"
+"Welcome, {0}.": "{0}，歡迎。"
+"Your account was created for you, and the password you just used is known to whoever prepared the class list. Please choose a password of your own before you continue — you will be asked to sign in again with it.": "你的帳號是由老師批次建立的，你剛才使用的密碼為準備名單的人所知。請先設定一個只有你知道的密碼——設定後需要用新密碼重新登入。"
+"At least 6 characters, and not the password you were given.": "至少 6 個字元，且不能與發給你的初始密碼相同。"
+"Set password": "設定密碼"
+"Sign out instead": "改為登出"
+"Please choose a password different from the one you were given.": "請選擇與初始密碼不同的密碼。"
+"Please set your own password before using the site.": "使用本站前，請先設定你自己的密碼。"
+"Your password does not need changing.": "你的密碼無需修改。"
+"This task does not accept hand-ins right now.": "本題目前不接收繳交。"
+"for": "屬於"
+"due": "截止"

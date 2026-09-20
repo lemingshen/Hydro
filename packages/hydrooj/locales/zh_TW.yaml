@@ -72,8 +72,8 @@ Add: 新增
 Additional File: 附加檔案
 Admin {0} delete your discussion "{1}".: 管理員 {0} 刪除了你的討論 "{1}"。
 Admin {0} delete your discussion tail reply {1} in "{2}"({3}).: 管理員 {0} 從討論 {2}({3}) 中刪除了你的討論串回覆 {1}。
-All {0} Contests: 所有 {0} 比賽
-All Contests: 所有比賽
+All {0} Contests: 所有 {0} 測驗
+All Contests: 所有測驗
 All Homeworks: 所有功課
 All Submissions: 所有遞交
 All Training Plans: 所有訓練計劃
@@ -92,15 +92,15 @@ Argument {0} is invalid.: 非法的引數 {0} 。
 Arguments: 引數
 astyle formatting options: Astyle 格式化選項
 At least 4 characters: 至少 4 個字元
-Attend Contest: 參加比賽
-Attend contests: 參加比賽
+Attend Contest: 參加測驗
+Attend contests: 參加測驗
 Attended: 已參加
 author: 作者
 Auto adjust the format of line breaks and remove unnecessary whitespace characters.: 自動調整換行符格式，並移除不必要的空白字元。
 Auto format code: 自動格式化程式碼
 Auto organize input: 自動整理輸入
 Avatar: 頭像
-Back to contest list: 返回比賽列表
+Back to contest list: 返回測驗列表
 Background: 背景
 Be Copied: 被複制
 Begin at: 開始於
@@ -115,7 +115,7 @@ Browser: 瀏覽器
 Built-in: 內建
 Bulletin: 公告
 By clicking the button, you will become a member of the domain {0}.: 點選按鈕，您將成為域 {0} 的成員。
-By Contest: 由比賽
+By Contest: 由測驗
 By Problem: 由題目
 By Username / UID: 由使用者名稱或 UID
 Calculate rp of a domain, or all domains: 計算使用者的 RP
@@ -160,28 +160,28 @@ Contact Us: 聯絡我們
 Contact: 聯絡
 content: 內容
 Content: 內容
-Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 比賽 {0} 有一條關於 {1} 的新答疑，請前往比賽答疑頁面回覆。
-Contest {0} jury replied to your clarification, please go to contest page to view.: 比賽 {0} 的裁判回覆了您的答疑，請前往比賽頁面檢視。
+Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 測驗 {0} 有一條關於 {1} 的新答疑，請前往測驗答疑頁面回覆。
+Contest {0} jury replied to your clarification, please go to contest page to view.: 測驗 {0} 的裁判回覆了您的答疑，請前往測驗頁面檢視。
 Contest Clarifications: 賽時答疑
-Contest Management: 比賽管理
-Contest scoreboard is not visible.: 當前比賽成績表隱藏，暫不可顯示。
-Contest Scoreboard: 比賽成績表
+Contest Management: 測驗管理
+Contest scoreboard is not visible.: 當前測驗成績表隱藏，暫不可顯示。
+Contest Scoreboard: 測驗成績表
 contest_balloon: 氣球狀態
 contest_clarification: 賽時答疑
-contest_create: 建立比賽
-contest_detail_problem_submit: 遞交比賽程式碼
+contest_create: 建立測驗
+contest_detail_problem_submit: 遞交測驗程式碼
 contest_detail_problem: 題目詳情
-contest_detail: 比賽詳情
-contest_edit: 編輯比賽
-contest_main: 比賽
-contest_manage: 比賽管理
+contest_detail: 測驗詳情
+contest_edit: 編輯測驗
+contest_main: 測驗
+contest_manage: 測驗管理
 contest_print: 列印
 contest_problemlist: 題目列表
-contest_scoreboard: 比賽成績表
-contest_user: 參賽者管理
-contest: 比賽
-Contest: 比賽
-Contests per page: 每頁展示的比賽數量
+contest_scoreboard: 測驗成績表
+contest_user: 參加者管理
+contest: 測驗
+Contest: 測驗
+Contests per page: 每頁展示的測驗數量
 Continue: 繼續
 Contributed Problems: 貢獻的題目
 Contributions: 貢獻
@@ -193,11 +193,11 @@ Copy WeChat Account: 複製微訊號
 Copy: 複製
 Copyright Complaint: 版權申訴
 CPU Info: CPU資訊
-Create a contest: 建立一個比賽
+Create a contest: 建立一個測驗
 Create a Discussion: 建立一個討論
 Create a problem: 建立一個題目
-Create Contest: 建立比賽
-Create contests: 建立比賽
+Create Contest: 建立測驗
+Create contests: 建立測驗
 Create Discussion in {0}: 在 {0} 下建立討論
 Create Discussion: 建立討論
 Create discussions: 建立討論
@@ -272,7 +272,7 @@ Discussions: 討論
 Display name {1} you want to set is used by others.: 您想要設定的顯示名 {1} 已經被其他人使用了。
 Display Name: 顯示名
 display_name: 顯示名
-Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 請勿討論解法，否則以作弊論處並且將失去參賽資格。
+Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 請勿討論解法，否則以作弊論處並且將失去參加測驗資格。
 Document {2} not found.: 檔案 {2} 不存在。
 Domain {0} already exists.: 域 {0} 已經存在。
 Domain {0} is bulit-in and cannot be modified.: 域 {0} 為內建，不可修改。
@@ -302,9 +302,9 @@ Download: 下載
 Downvote: 差評
 Duration (hours): 持續時間 (小時)
 Duration: 持續時間
-Edit any contests: 修改任意的比賽
+Edit any contests: 修改任意的測驗
 Edit any homework: 修改任意功課
-Edit Contest: 編輯比賽
+Edit Contest: 編輯測驗
 Edit description of this domain: 修改此域描述
 Edit discussion replies of own discussion: 修改自己討論中的回覆
 Edit discussion replies: 修改討論的回覆
@@ -312,7 +312,7 @@ Edit discussions: 修改討論
 Edit domain settings: 編輯域設定
 Edit Domain: 編輯域
 Edit Homework: 編輯功課
-Edit own contests: 修改自己的比賽
+Edit own contests: 修改自己的測驗
 Edit own discussion replies: 修改討論中自己的回覆
 Edit own discussions: 修改自己的討論
 Edit own homework: 修改自己的功課
@@ -418,7 +418,7 @@ In 1 month: 一個月後
 In 1 week: 一週後
 In 3 days: 三天後
 In 3 hours: 三個小時後
-In following contests: 在下列比賽中
+In following contests: 在下列測驗中
 In following homework: 在以下功課中
 In following training plans: 在下列訓練計劃中
 In Progress: 進行中
@@ -468,7 +468,7 @@ Live...: 正在進行…
 Location: 位置
 Lock discussions: 鎖定討論
 Lock Topic: 鎖定主題
-Login to Attend Contest: 登入後參加比賽
+Login to Attend Contest: 登入後參加測驗
 Login to Claim Homework: 登入以認領功課
 Login to Create a Discussion: 登入後建立討論
 Login to join training plan: 登入以參加訓練計劃
@@ -524,7 +524,7 @@ New: 建立
 No comments so far...: 目前還沒有評論...
 No dataset at present.: 暫無測試資料。
 No discussion yet...: 目前沒有討論…
-No Permission to Attend Contest: 您沒有許可權參加比賽
+No Permission to Attend Contest: 您沒有許可權參加測驗
 No Permission to Claim Homework: 您沒有許可權認領功課
 No Permission to Create a Discussion: 您沒有許可權建立討論
 No Permission to Submit: 您沒有許可權遞交
@@ -550,7 +550,7 @@ Oh, there is no clarification!: 喔，目前沒有答疑！
 Oh, there is no task in the queue!: 喔，佇列中目前沒有任務。
 Ok: 確定
 Only A-Z, a-z, 0-9 and _ are accepted: 只接受 A-Z, a-z, 0-9 和 _
-Only Partic.: 僅參賽者
+Only Partic.: 僅參加者
 Oops, there are no results.: 呀，沒有結果。
 Oops!: Oops!
 Open in Problem Set: 在題庫中開啟
@@ -575,14 +575,14 @@ pager_last: 末頁 »
 pager_next: 下一頁 ›
 pager_previous: ‹ 前一頁
 Params: 引數
-Partic.: 參賽人數
+Partic.: 參加測驗人數
 Password reset mail has been sent to your email.: 密碼重置郵件已傳送到您的電子郵箱。
 Password: 密碼
 Passwords don't match.: 驗證密碼不匹配。
 Path {0} not found.: 路徑 {0} 不存在。
 Peak Memory: 峰值記憶體
 Penalty (Minutes): 罰時（分鐘）
-perm_contest: 比賽
+perm_contest: 測驗
 perm_discussion: 討論
 perm_general: 一般
 perm_homework: 作業
@@ -599,7 +599,7 @@ pid: 題目 ID
 Pin discussions: 置頂討論
 Pin training plans: 置頂訓練計劃
 Plan: 計劃
-Please attend contest to see the problems.: 請參加比賽來檢視題目。
+Please attend contest to see the problems.: 請參加測驗來檢視題目。
 Please claim the assignment to see the problems.: 認領功課後方可檢視題目。
 Please select at least one role to perform this operation.: 請選擇至少一個角色來進行操作。
 Please select at least one user to perform this operation.: 請選擇至少一個使用者來進行操作。
@@ -888,10 +888,10 @@ The uploaded file is too long.: 上傳的檔案太長。
 The user is already a member of the domain.: 該使用者已是域的成員。
 The user is too lazy to leave something here...: 該使用者太懶，這裡啥也沒寫 (´・ω・｀)
 theme: 主題
-There are no contests...: 沒有比賽…
+There are no contests...: 沒有測驗…
 There is no homework so far ╰(*°▽°*)╯: 目前沒有功課 ╰(*°▽°*)╯
-This contest is not live.: 比賽沒有開始。
-This contest has already started.: 比賽已開始。
+This contest is not live.: 測驗沒有開始。
+This contest has already started.: 測驗已開始。
 This email was sent by {0} automatically, and please do not reply directly.: 這封郵件由 {0} 自動傳送，請勿直接回復。
 This homework is not open and you cannot view problems.: 功課尚未開放，不能檢視題目。
 This homework is not open.: 功課尚未開放遞交。
@@ -973,15 +973,15 @@ Valid for registered users who are not members of the domain: 對域外註冊使
 Valid for visitors: 對未登入的遊客有效
 Verify register email: 註冊需郵件驗證
 Version: 版本
-View all contests: 檢視所有比賽
+View all contests: 檢視所有測驗
 View all homework: 檢視所有作業
-View contest scoreboard: 檢視比賽成績表
-View Contest: 檢視比賽
-View contests: 檢視比賽
+View contest scoreboard: 檢視測驗成績表
+View Contest: 檢視測驗
+View contests: 檢視測驗
 View Details: 檢視詳情
 View discussions: 檢視討論
 View domain user private info: 顯示域中使用者的私有資訊
-View hidden contest submission status and scoreboard: 檢視隱藏的比賽遞交狀態和成績表
+View hidden contest submission status and scoreboard: 檢視隱藏的測驗遞交狀態和成績表
 View hidden homework submission status and scoreboard: 翻閲隱藏的功課遞交狀態和成績表
 View hidden problems: 檢視隱藏的題目
 View homework scoreboard: 翻閲功課成績表
@@ -1003,7 +1003,7 @@ Visible to registered users: 對註冊使用者可見
 Visit: 檢視
 Vote problem solutions: 為題解投票
 Vote: 投票
-We will check code similarity after this contest.: 我們會在賽後檢查程式碼相似度。
+We will check code similarity after this contest.: 我們會在測驗後檢查程式碼相似度。
 WeChat Visibility: 微信可見性
 WeChat: 微信
 Week: 周
@@ -1026,7 +1026,7 @@ Year: 年
 You are banned by the domain moderator.: 您被該域的管理員封禁。
 You are not allowed to join domain {0}. {1}: 您無法加入 {0}。{1}
 You can create your own training plans and share them with others.: 您可以建立您自己的訓練計劃並且與他人分享。
-You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 該比賽已結束，您無法在比賽模式下遞交該題目。您可以點選“在題庫中開啟”以普通模式檢視和遞交本題。
+You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 該測驗已結束，您無法在測驗模式下遞交該題目。您可以點選“在題庫中開啟”以普通模式檢視和遞交本題。
 You cannot submit for this problem because the homework's deadline is due.: 功課已到達截止時間，您無法遞交了。
 You cannot visit this domain.: 您不能訪問此域。
 You don't have the required permission ({0}) in this domain.: 您在該域中無相應許可權 ({0})。
@@ -1036,11 +1036,11 @@ You have been kicked from domain {0} by {1}.: 您已被 {1} 從域 {0} 中移除
 You have not submitted any solutions for this problem: 您在該題下沒有遞交過任何解答
 You have permission to create problems for this domain.: 您有許可權為此域建立題目。
 You have uncompleted domain creation operation. You can click "Continue" to finish the creation.: 您有未完成的建立域操作。您可以點選“繼續”來完成建立。
-You haven't attended this contest yet.: 您還沒有參加本次比賽。
+You haven't attended this contest yet.: 您還沒有參加本次測驗。
 You haven't claimed this homework yet.: 您還未認領該功課。
 You need to enter the invitation code to join the domain.: 您需要輸入邀請碼來加入此域。
 You're not logged in.: 您沒有登入。
-You've already attended this contest.: 您已經參加本次比賽。
+You've already attended this contest.: 您已經參加本次測驗。
 You've already claimed this homework.: 您已認領該功課。
 You've already voted.: 您已經投過票。
 Your permission: 您的許可權
@@ -1085,3 +1085,7 @@ ai_tutor.subjective_grade_max_chars: "報告評分 — 每次呼叫傳送的報�
 homework_subjective_review: "AI 報告評分"
 ai_tutor.subjective_grade_vision: "報告評分 — 同時把 PDF 原檔傳送給模型（Claude / OpenAI）"
 homework_report_review: "AI 報告評分"
+user_first_login: "設定你自己的密碼"
+# PTA fork — page titles for the test pages that had none.
+contest_code: 下載測驗程式碼
+contest_paper: 測驗試卷

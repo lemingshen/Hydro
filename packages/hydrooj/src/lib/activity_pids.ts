@@ -56,13 +56,13 @@ const TTL = 15 * 1000;
  * ones that have NOT started (`pending`) actually hide the task.
  */
 export interface ActivityOwner {
-    kind: 'homework' | 'test' | 'session',
-    title: string,
-    id: string,
+    kind: 'homework' | 'test' | 'session';
+    title: string;
+    id: string;
     /** Has not begun yet — this is what locks the task. */
-    pending: boolean,
+    pending: boolean;
     /** Start time in epoch ms; 0 when the activity has no scheduled start. */
-    beginAt: number,
+    beginAt: number;
 }
 const cache = new Map<string, { at: number, owners: Map<number, ActivityOwner[]> }>();
 
@@ -132,20 +132,40 @@ export async function activityPids(domainId: string): Promise<Set<number>> {
 
 /**
  * May this student open an activity task from OUTSIDE its activity?
- * Only when they actually took part in an activity that owns it AND that
- * activity is over: this is the correction / practice path the fork opens
- * after a deadline (the in-activity page submits without a tid, so it
- * lands here). A student who never took the activity gets nothing.
+ *
+ * Only when they took part in an activity that owns it, that activity is
+ * over AND its results have been published — the correction / practice
+ * path the fork opens after a deadline (the in-activity page submits
+ * without a tid, so it lands here too).
+ *
+ * Two rules make this fail closed, and both used to be missing:
+ *
+ *   1. `isDone` is not enough. A homework containing a subjective task is
+ *      published by the teacher's "Evaluate" (contest.resultsPublished);
+ *      between the deadline and that click the answers are still secret,
+ *      so the task must stay out of the problem set.
+ *   2. Entitlement earned from ONE activity must not open a task that
+ *      ANOTHER activity is using right now. The same objective task can
+ *      sit in a finished homework and in a test that starts tomorrow —
+ *      answering it in the problem set would hand the student the answer
+ *      key to the live test. Any unpublished activity owning the pid
+ *      vetoes access, whatever else entitles them.
  */
 export async function entitledToActivityTask(domainId: string, uid: number, pid: number): Promise<boolean> {
     if (!uid || uid <= 1) return false;
     try {
-        const tsdocs = await contest.getMultiStatus(domainId, { uid, attend: 1 }).project({ docId: 1 }).limit(500).toArray();
-        for (const ts of tsdocs as any[]) {
+        const owners = await contest.getMulti(domainId, { pids: pid } as any)
+            .project({
+                docId: 1, owner: 1, maintainer: 1, rule: 1, beginAt: 1, endAt: 1, penaltySince: 1, extensionDays: 1, manualEval: 1, evaluatedAt: 1, pids: 1, assign: 1,
+            }).limit(200).toArray() as any[];
+        if (!owners.length) return false;
+        // (1) Veto: any owning activity that has not released its results.
+        if (owners.some((tdoc) => !contest.isDone(tdoc) || !contest.resultsPublished(tdoc))) return false;
+        // (2) Entitlement: they attended at least one of them.
+        for (const tdoc of owners) {
             // eslint-disable-next-line no-await-in-loop
-            const tdoc = await contest.get(domainId, ts.docId).catch(() => null);
-            if (!tdoc || !(tdoc.pids || []).includes(pid)) continue;
-            if (contest.isDone(tdoc)) return true;
+            const tsdoc = await contest.getStatus(domainId, tdoc.docId, uid).catch(() => null);
+            if (tsdoc?.attend) return true;
         }
     } catch (e) {
         logger.warn('entitlement check failed for uid=%d pid=%d: %s', uid, pid, e.message);

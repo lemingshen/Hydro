@@ -77,8 +77,8 @@ Add: 添加
 Additional File: 附加文件
 Admin {0} delete your discussion "{1}".: 管理员 {0} 删除了你的讨论 "{1}"。
 Admin {0} delete your discussion tail reply {1} in "{2}"({3}).: 管理员 {0} 从讨论 {2}({3}) 中删除了你的楼中楼回复 {1}。
-All {0} Contests: 所有 {0} 比赛
-All Contests: 所有比赛
+All {0} Contests: 所有 {0} 测验
+All Contests: 所有测验
 All Homeworks: 所有作业
 All Submissions: 所有递交
 All Training Plans: 所有训练计划
@@ -97,15 +97,15 @@ Argument {0} is invalid.: 非法的参数 {0} 。
 Arguments: 参数
 astyle formatting options: Astyle 格式化选项
 At least 4 characters: 至少 4 个字符
-Attend Contest: 参加比赛
-Attend contests: 参加比赛
+Attend Contest: 参加测验
+Attend contests: 参加测验
 Attended: 已参加
 author: 作者
 Auto adjust the format of line breaks and remove unnecessary whitespace characters.: 自动调整换行符格式，并移除不必要的空白字符。
 Auto format code: 自动格式化代码
 Auto organize input: 自动整理输入
 Avatar: 头像
-Back to contest list: 返回比赛列表
+Back to contest list: 返回测验列表
 Background: 背景
 Be Copied: 被复制
 Begin at: 开始于
@@ -120,7 +120,7 @@ Browser: 浏览器
 Built-in: 内置
 Bulletin: 公告
 By clicking the button, you will become a member of the domain {0}.: 点击按钮，您将成为域 {0} 的成员。
-By Contest: 由比赛
+By Contest: 由测验
 By Problem: 由题目
 By Username / UID: 由用户名或 UID
 Calculate rp of a domain, or all domains: 计算用户的 RP
@@ -165,28 +165,28 @@ Contact Us: 联系我们
 Contact: 联系
 content: 内容
 Content: 内容
-Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 比赛 {0} 有一条关于 {1} 的新答疑，请前往比赛答疑页面回复。
-Contest {0} jury replied to your clarification, please go to contest page to view.: 比赛 {0} 的裁判回复了您的答疑，请前往比赛页面查看。
+Contest {0} has a new clarification about {1}, please go to contest clarifications page to reply.: 测验 {0} 有一条关于 {1} 的新答疑，请前往测验答疑页面回复。
+Contest {0} jury replied to your clarification, please go to contest page to view.: 测验 {0} 的裁判回复了您的答疑，请前往测验页面查看。
 Contest Clarifications: 赛时答疑
-Contest Management: 比赛管理
-Contest scoreboard is not visible.: 当前比赛成绩表隐藏，暂不可显示。
-Contest Scoreboard: 比赛成绩表
+Contest Management: 测验管理
+Contest scoreboard is not visible.: 当前测验成绩表隐藏，暂不可显示。
+Contest Scoreboard: 测验成绩表
 contest_balloon: 气球状态
 contest_clarification: 赛时答疑
-contest_create: 创建比赛
-contest_detail_problem_submit: 递交比赛题目
+contest_create: 创建测验
+contest_detail_problem_submit: 递交测验题目
 contest_detail_problem: 题目详情
-contest_detail: 比赛详情
-contest_edit: 编辑比赛
-contest_main: 比赛
-contest_manage: 比赛管理
+contest_detail: 测验详情
+contest_edit: 编辑测验
+contest_main: 测验
+contest_manage: 测验管理
 contest_print: 打印
 contest_problemlist: 题目列表
-contest_scoreboard: 比赛成绩表
-contest_user: 参赛者管理
-contest: 比赛
-Contest: 比赛
-Contests per page: 每页展示的比赛数量
+contest_scoreboard: 测验成绩表
+contest_user: 参加者管理
+contest: 测验
+Contest: 测验
+Contests per page: 每页展示的测验数量
 Continue: 继续
 Contributed Problems: 贡献的题目
 Contributions: 贡献
@@ -198,11 +198,11 @@ Copy WeChat Account: 复制微信号
 Copy: 复制
 Copyright Complaint: 版权申诉
 CPU Info: CPU信息
-Create a contest: 创建一个比赛
+Create a contest: 创建一个测验
 Create a Discussion: 创建一个讨论
 Create a problem: 创建一个题目
-Create Contest: 创建比赛
-Create contests: 创建比赛
+Create Contest: 创建测验
+Create contests: 创建测验
 Create Discussion in {0}: 在 {0} 下创建讨论
 Create Discussion: 创建讨论
 Create discussions: 创建讨论
@@ -277,7 +277,7 @@ Discussions: 讨论
 Display name {1} you want to set is used by others.: 您想要设置的显示名 {1} 已经被其他人使用了。
 Display Name: 显示名
 display_name: 显示名
-Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 请勿讨论解法，否则以作弊论处并且将失去参赛资格。
+Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 请勿讨论解法，否则以作弊论处并且将失去参加测验资格。
 Document {2} not found.: 文档 {2} 不存在。
 Domain {0} already exists.: 域 {0} 已经存在。
 Domain {0} is bulit-in and cannot be modified.: 域 {0} 为内置，不可修改。
@@ -307,9 +307,9 @@ Download: 下载
 Downvote: 差评
 Duration (hours): 持续时间 (小时)
 Duration: 持续时间
-Edit any contests: 修改任意的比赛
+Edit any contests: 修改任意的测验
 Edit any homework: 修改任意的作业
-Edit Contest: 编辑比赛
+Edit Contest: 编辑测验
 Edit description of this domain: 修改此域描述
 Edit discussion replies of own discussion: 修改自己讨论中的回复
 Edit discussion replies: 修改讨论的回复
@@ -317,7 +317,7 @@ Edit discussions: 修改讨论
 Edit domain settings: 编辑域设置
 Edit Domain: 编辑域
 Edit Homework: 编辑作业
-Edit own contests: 修改自己的比赛
+Edit own contests: 修改自己的测验
 Edit own discussion replies: 修改讨论中自己的回复
 Edit own discussions: 修改自己的讨论
 Edit own homework: 修改自己的作业
@@ -422,7 +422,7 @@ In 1 month: 一个月后
 In 1 week: 一周后
 In 3 days: 三天后
 In 3 hours: 三个小时后
-In following contests: 在下列比赛中
+In following contests: 在下列测验中
 In following homework: 在以下作业中
 In following training plans: 在下列训练计划中
 In Progress: 进行中
@@ -471,7 +471,7 @@ Live...: 正在进行…
 Location: 位置
 Lock discussions: 锁定讨论
 Lock Topic: 锁定主题
-Login to Attend Contest: 登录后参加比赛
+Login to Attend Contest: 登录后参加测验
 Login to Claim Homework: 登录后认领作业
 Login to Create a Discussion: 登录后创建讨论
 Login to join training plan: 登录以参加训练计划
@@ -527,7 +527,7 @@ New: 创建
 No comments so far...: 目前还没有评论...
 No dataset at present.: 暂无测试数据。
 No discussion yet...: 目前没有讨论…
-No Permission to Attend Contest: 您没有权限参加比赛
+No Permission to Attend Contest: 您没有权限参加测验
 No Permission to Claim Homework: 您没有权限认领作业
 No Permission to Create a Discussion: 您没有权限创建讨论
 No Permission to Submit: 您没有权限递交
@@ -553,7 +553,7 @@ Oh, there is no clarification!: 喔，目前没有答疑！
 Oh, there is no task in the queue!: 喔，队列中目前没有任务。
 Ok: 确定
 Only A-Z, a-z, 0-9 and _ are accepted: 只接受 A-Z, a-z, 0-9 和 _
-Only Partic.: 仅参赛者
+Only Partic.: 仅参加者
 Oops, there are no results.: 呀，没有结果。
 Oops!: Oops!
 Open in Problem Set: 在题库中打开
@@ -578,14 +578,14 @@ pager_last: 末页 »
 pager_next: 下一页 ›
 pager_previous: ‹ 前一页
 Params: 参数
-Partic.: 参赛人数
+Partic.: 参加测验人数
 Password reset mail has been sent to your email.: 密码重置邮件已发送到您的电子邮箱。
 Password: 密码
 Passwords don't match.: 验证密码不匹配。
 Path {0} not found.: 路径 {0} 不存在。
 Peak Memory: 峰值内存
 Penalty (Minutes): 罚时（分钟）
-perm_contest: 比赛
+perm_contest: 测验
 perm_discussion: 讨论
 perm_general: 一般
 perm_homework: 作业
@@ -602,7 +602,7 @@ pid: 题目 ID
 Pin discussions: 置顶讨论
 Pin training plans: 置顶训练计划
 Plan: 计划
-Please attend contest to see the problems.: 请参加比赛来查看题目。
+Please attend contest to see the problems.: 请参加测验来查看题目。
 Please claim the assignment to see the problems.: 认领作业后才可以查看作业内容。
 Please select at least one role to perform this operation.: 请选择至少一个角色来进行操作。
 Please select at least one user to perform this operation.: 请选择至少一个用户来进行操作。
@@ -891,10 +891,10 @@ The uploaded file is too long.: 上传的文件太长。
 The user is already a member of the domain.: 该用户已是域的成员。
 The user is too lazy to leave something here...: 该用户太懒，这里啥也没写 (´・ω・｀)
 theme: 主题
-There are no contests...: 没有比赛…
+There are no contests...: 没有测验…
 There is no homework so far ╰(*°▽°*)╯: 目前还没有作业 ╰(*°▽°*)╯
-This contest is not live.: 比赛没有开始。
-This contest has already started.: 比赛已开始。
+This contest is not live.: 测验没有开始。
+This contest has already started.: 测验已开始。
 This email was sent by {0} automatically, and please do not reply directly.: 这封邮件由 {0} 自动发送，请勿直接回复。
 This homework is not open and you cannot view problems.: 该作业还未到开放时间，您无法查看作业题目。
 This homework is not open.: 该作业还未开放递交。
@@ -976,15 +976,15 @@ Valid for registered users who are not members of the domain: 对域外注册用
 Valid for visitors: 对未登录的游客有效
 Verify register email: 注册需邮件验证
 Version: 版本
-View all contests: 查看所有比赛
+View all contests: 查看所有测验
 View all homework: 查看所有作业
-View contest scoreboard: 查看比赛成绩表
-View Contest: 查看比赛
-View contests: 查看比赛
+View contest scoreboard: 查看测验成绩表
+View Contest: 查看测验
+View contests: 查看测验
 View Details: 查看详情
 View discussions: 查看讨论
 View domain user private info: 显示域中用户的私有信息
-View hidden contest submission status and scoreboard: 查看隐藏的比赛递交状态和成绩表
+View hidden contest submission status and scoreboard: 查看隐藏的测验递交状态和成绩表
 View hidden homework submission status and scoreboard: 查看隐藏的作业递交状态和成绩表
 View hidden problems: 查看隐藏的题目
 View homework scoreboard: 查看作业成绩表
@@ -1006,7 +1006,7 @@ Visible to registered users: 对注册用户可见
 Visit: 查看
 Vote problem solutions: 为题解投票
 Vote: 投票
-We will check code similarity after this contest.: 我们会在赛后检查代码相似度。
+We will check code similarity after this contest.: 我们会在测验后检查代码相似度。
 WeChat Visibility: 微信可见性
 WeChat: 微信
 Week: 周
@@ -1028,7 +1028,7 @@ Year: 年
 You are banned by the domain moderator.: 您被该域的管理员封禁。
 You are not allowed to join domain {0}. {1}: 您无法加入 {0}。{1}
 You can create your own training plans and share them with others.: 您可以创建您自己的训练计划并且与他人分享。
-You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 该比赛已结束，您无法在比赛模式下递交该题目。您可以点击“在题库中打开”以普通模式查看和递交本题。
+You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 该测验已结束，您无法在测验模式下递交该题目。您可以点击“在题库中打开”以普通模式查看和递交本题。
 You cannot submit for this problem because the homework's deadline is due.: 作业已超过截止时间，您无法递交本题目。
 You cannot visit this domain.: 您不能访问此域。
 You don't have the required permission ({0}) in this domain.: 您在该域中无相应权限 ({0})。
@@ -1038,11 +1038,11 @@ You have been kicked from domain {0} by {1}.: 您已被 {1} 从域 {0} 中移除
 You have not submitted any solutions for this problem: 您在该题下没有递交过任何解答
 You have permission to create problems for this domain.: 您有权限为此域创建题目。
 You have uncompleted domain creation operation. You can click "Continue" to finish the creation.: 您有未完成的创建域操作。您可以点击“继续”来完成创建。
-You haven't attended this contest yet.: 您还没有参加本次比赛。
+You haven't attended this contest yet.: 您还没有参加本次测验。
 You haven't claimed this homework yet.: 您还未认领过该作业。
 You need to enter the invitation code to join the domain.: 您需要输入邀请码来加入此域。
 You're not logged in.: 您没有登录。
-You've already attended this contest.: 您已经参加本次比赛。
+You've already attended this contest.: 您已经参加本次测验。
 You've already claimed this homework.: 您已认领过该作业。
 You've already voted.: 您已经投过票。
 Your permission: 您的权限
@@ -1090,3 +1090,7 @@ ai_tutor.subjective_grade_max_chars: "报告评分 — 每次调用发送的报�
 homework_subjective_review: "AI 报告评分"
 ai_tutor.subjective_grade_vision: "报告评分 — 同时把 PDF 原件发送给模型（Claude / OpenAI）"
 homework_report_review: "AI 报告评分"
+user_first_login: "设置你自己的密码"
+# PTA fork — page titles for the test pages that had none.
+contest_code: 下载测验代码
+contest_paper: 测验试卷

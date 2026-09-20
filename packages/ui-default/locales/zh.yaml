@@ -184,7 +184,7 @@ contest_manage: 测验管理
 contest_print: 打印
 contest_problemlist: 题目列表
 contest_scoreboard: 测验成绩表
-contest_user: 参赛者管理
+contest_user: 参加者管理
 contest: 测验
 Contest: 测验
 Contests per page: 每页展示的测验数量
@@ -278,7 +278,7 @@ Discussions: 讨论
 Display name {1} you want to set is used by others.: 您想要设置的显示名 {1} 已经被其他人使用了。
 Display Name: 显示名
 display_name: 显示名
-Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 请勿讨论解法，否则以作弊论处并且将失去参赛资格。
+Do not discuss solutions otherwise you will be regarded as cheating and then lose qualifications.: 请勿讨论解法，否则以作弊论处并且将失去参加测验资格。
 Document {2} not found.: 文档 {2} 不存在。
 Domain {0} already exists.: 域 {0} 已经存在。
 Domain {0} is bulit-in and cannot be modified.: 域 {0} 为内置，不可修改。
@@ -554,7 +554,7 @@ Oh, there is no clarification!: 喔，目前没有答疑！
 Oh, there is no task in the queue!: 喔，队列中目前没有任务。
 Ok: 确定
 Only A-Z, a-z, 0-9 and _ are accepted: 只接受 A-Z, a-z, 0-9 和 _
-Only Partic.: 仅参赛者
+Only Partic.: 仅参加者
 Oops, there are no results.: 呀，没有结果。
 Oops!: Oops!
 Open in Problem Set: 在题库中打开
@@ -578,7 +578,7 @@ pager_last: 末页 »
 pager_next: 下一页 ›
 pager_previous: ‹ 前一页
 Params: 参数
-Partic.: 参赛人数
+Partic.: 参加测验人数
 Password reset mail has been sent to your email.: 密码重置邮件已发送到您的电子邮箱。
 Password: 密码
 Passwords don't match.: 验证密码不匹配。
@@ -980,7 +980,7 @@ Visible to registered users: 对注册用户可见
 Visit: 查看
 Vote problem solutions: 为题解投票
 Vote: 投票
-We will check code similarity after this contest.: 我们会在赛后检查代码相似度。
+We will check code similarity after this contest.: 我们会在测验后检查代码相似度。
 WeChat Visibility: 微信可见性
 WeChat: 微信
 Week: 周
@@ -1002,7 +1002,7 @@ Year: 年
 You are banned by the domain moderator.: 您被该域的管理员封禁。
 You are not allowed to join domain {0}. {1}: 您无法加入 {0}。{1}
 You can create your own training plans and share them with others.: 您可以创建您自己的训练计划并且与他人分享。
-You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 该比赛已结束，您无法在比赛模式下递交该题目。您可以点击“在题库中打开”以普通模式查看和递交本题。
+You cannot submit for this problem because the contest is ended. You can click "Open in Problem Set" to view this problem in normal mode.: 该测验已结束，您无法在测验模式下递交该题目。您可以点击“在题库中打开”以普通模式查看和递交本题。
 You cannot submit for this problem because the homework's deadline is due.: 作业已超过截止时间，您无法递交本题目。
 You cannot visit this domain.: 您不能访问此域。
 You don't have the required permission ({0}) in this domain.: 您在该域中无相应权限 ({0})。
@@ -3200,3 +3200,15 @@ ai_tutor.key_rpm: "每个 API 密钥的每分钟请求数"
 "this step for": "此步骤已进行"
 "click a column to sort": "点击列标题排序"
 "automatic": "自动"
+"Set your own password": "设置你自己的密码"
+"Welcome, {0}.": "{0}，欢迎。"
+"Your account was created for you, and the password you just used is known to whoever prepared the class list. Please choose a password of your own before you continue — you will be asked to sign in again with it.": "你的账号是由老师批量创建的，你刚才使用的密码为准备名单的人所知。请先设置一个只有你知道的密码——设置后需要用新密码重新登录。"
+"At least 6 characters, and not the password you were given.": "至少 6 个字符，且不能与发给你的初始密码相同。"
+"Set password": "设置密码"
+"Sign out instead": "改为退出登录"
+"Please choose a password different from the one you were given.": "请选择与初始密码不同的密码。"
+"Please set your own password before using the site.": "使用本站前，请先设置你自己的密码。"
+"Your password does not need changing.": "你的密码无需修改。"
+"This task does not accept hand-ins right now.": "本题目前不接收提交。"
+"for": "属于"
+"due": "截止"

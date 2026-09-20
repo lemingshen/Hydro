@@ -48,7 +48,7 @@ inject('Nav', 'problem_main', { prefix: 'problem' }, PERM.PERM_VIEW_PROBLEM);
 // Training is disabled for this deployment — nav entry removed alongside
 // the routes in handler/training.ts. Re-enable both together.
 // inject('Nav', 'training_main', { prefix: 'training' }, PERM.PERM_VIEW_TRAINING);
-inject('Nav', 'contest_main', { prefix: 'contest' }, PERM.PERM_VIEW_CONTEST);
+inject('Nav', 'contest_main', { prefix: 'test' }, PERM.PERM_VIEW_CONTEST);
 inject('Nav', 'homework_main', { prefix: 'homework' }, PERM.PERM_VIEW_HOMEWORK);
 inject('Nav', 'self_learning', { prefix: 'self_learning' });
 /*

@@ -12,6 +12,7 @@ import { PermissionError,
     UserNotFoundError, ValidationError, VerifyPasswordError,
 } from '../error';
 import { TokenDoc, Udoc, User } from '../interface';
+import { isInitialImportPassword, requirePasswordChange } from './first_login';
 import avatar from '../lib/avatar';
 import { sendMail } from '../lib/mail';
 import { verifyTFA } from '../lib/verifyTFA';
@@ -104,6 +105,27 @@ class UserLoginHandler extends Handler {
         if (!udoc.hasPriv(PRIV.PRIV_USER_PROFILE)) throw new BlacklistedError(uname, udoc.banReason);
         await successfulAuth.call(this, udoc);
         this.session.save = rememberme;
+        /*
+         * PTA fork: an account that still carries the password it was
+         * created with (roster import) goes straight to the change-password
+         * page; the site-wide gate in handler/first_login.ts would redirect
+         * it anyway, but landing there directly explains itself.
+         */
+        /*
+         * Two ways an account qualifies: the importer flagged it, or the
+         * password just typed IS the one the roster implies — which covers
+         * accounts imported before the flag existed and accounts created by
+         * the built-in importer. The second case flags the account now, so
+         * the site-wide gate keeps it locked for the rest of the session.
+         */
+        if (!udoc.forcePasswordChange && isInitialImportPassword(udoc, password)) {
+            await requirePasswordChange(udoc._id);
+            (udoc as any).forcePasswordChange = true;
+        }
+        if (udoc.forcePasswordChange) {
+            this.response.redirect = this.url('user_first_login', { query: redirect ? { redirect } : {} });
+            return;
+        }
         this.response.redirect = redirect || ((this.request.referer || '/login').endsWith('/login')
             ? this.url('homepage') : this.request.referer);
     }

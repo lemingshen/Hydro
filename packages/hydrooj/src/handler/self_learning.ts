@@ -8,9 +8,9 @@ import { STATUS, STATUS_SHORT_TEXTS, STATUS_TEXTS } from '@hydrooj/common';
 import { Context } from '../context';
 import { registerAiStreamRoutes } from './ai_stream';
 import { Logger } from '../logger';
-import { ContestNotLiveError, ContestNotAttendedError,
+import { ContestNotLiveError, ContestNotAttendedError, NotAssignedError,
     BadRequestError, ForbiddenError, NotFoundError, PermissionError,
-    ProblemConfigError, ProblemNotAllowLanguageError, ValidationError,
+    ProblemConfigError, ProblemNotAllowLanguageError, ProblemNotFoundError, ValidationError,
 } from '../error';
 import type { PenaltyRules, ProblemDoc, RecordDoc } from '../interface';
 import * as aiTutor from '../lib/ai_tutor';
@@ -48,6 +48,8 @@ import record, { harnessFor } from '../model/record';
 import storage from '../model/storage';
 import SelfLearningModel, { computeGate, SessionGate, SelfLearningBonusEntry, SessionResultRow, SessionResults, TYPE_SELF_LEARNING, classReportJobStale, collProgress, collTutor, getClassReport, getClassReportMapCache, getSubjective, listSubjective, removeSubjectiveFile, setClassReport, setClassReportJob, setClassReportMapCache, setSubjectiveReport, upsertSubjectiveFile, getSuggestionReport, setSuggestionJob, setSuggestionReport, SelfLearningDoc, TutorMessage, TutorThreadDoc, OwnershipState, FixConvState, FixConvTransition, TransferAssessment, getOwnershipIn, getSessionThreads, RemedialPrompt, addClassReportDrafts } from '../model/selflearning';
 import { registerSubjectiveGradingRoutes } from './subjective_grading';
+import { registerFirstLoginRoutes, requirePasswordChange } from './first_login';
+import { maskOwnRecords, resultVisibleToOwner } from '../lib/record_visibility';
 import { isPdfName, myGrade, subjectiveConfigOfPdoc } from '../lib/subjective_grader';
 import { effectiveScore100 as subjectiveEffectiveScore100, gradeMapOf as subjectiveGradeMapOf } from '../model/subjective_grade';
 import * as setting from '../model/setting';
@@ -166,7 +168,12 @@ export function sessionCutoff(sdoc: SelfLearningDoc): number {
 /** Session threads with every post-cutoff message removed (grading input). */
 async function gradedSessionThreads(domainId: string, sdoc: SelfLearningDoc): Promise<TutorThreadDoc[]> {
     const cap = sessionCutoff(sdoc);
-    const threads = await gradedSessionThreads(domainId, sdoc);
+    // NOTE: this loads the threads from the MODEL. It called itself here
+    // until 2026-09; every caller is a retroactive grader, each wrapped in
+    // its own try/catch, so the resulting "Maximum call stack size
+    // exceeded" was swallowed as a warning and the six evaluation-time
+    // graders silently produced nothing.
+    const threads = await getSessionThreads(domainId, sdoc.docId);
     if (!Number.isFinite(cap)) return threads;
     return threads.map((t) => ({
         ...t,
@@ -6031,20 +6038,25 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             onDelta: stream?.delta, signal: stream?.signal, onCodeSent: (code) => { sentCode = code; },
         });
         /*
-         * 🎓 CODE-OWNERSHIP grading: runAnnotationDialogue returns a level
-         * (0..4) ONLY when the submission is Accepted — the rubric measures
-         * post-acceptance explanations exclusively. The level is stored on
-         * the walkthrough state and the user message, and — by request —
-         * returned to the student as immediate per-answer feedback (the
-         * response's `level` field; the SESSION total stays embargoed until
-         * release as before).
+         * PER-ANSWER GRADING. runAnnotationDialogue grades EVERY answer
+         * 0..4 (the dialogue prompt says "ALWAYS ... never null") and picks
+         * its rubric from the verdict: 🎓 CODE-OWNERSHIP after an accepted
+         * submission, 🧩 REASONING QUALITY while the submission is still
+         * failing. Both are stored — ownership on the walkthrough state,
+         * reasoning on the thread — and the level is returned to the
+         * student as immediate per-answer feedback (`level` + `levelKind`;
+         * the SESSION total stays embargoed until release).
+         *
+         * This used to read `accepted && typeof result.level === 'number'`,
+         * which made `level` null for every failing submission and so made
+         * the reasoning branch below unreachable: 🧩 was never graded live.
          */
         const accepted = rdoc.status === STATUS.STATUS_ACCEPTED;
-        const level = (accepted && typeof result.level === 'number') ? result.level : null;
+        const level = typeof result.level === 'number' ? result.level : null;
         // Persist the card exchange: this dialogue IS the tutoring history now.
         await SelfLearningModel.pushMessages(thread._id, [
             {
-                role: 'user', kind: 'anno', content: text.slice(0, 1000), line, endLine, ...(level === null ? {} : (rdoc.status === STATUS.STATUS_ACCEPTED ? { level } : { rlevel: level })),
+                role: 'user', kind: 'anno', content: text.slice(0, 1000), line, endLine, ...(level === null ? {} : (accepted ? { level } : { rlevel: level })),
             },
             {
                 role: 'assistant', kind: 'anno', content: result.reply, line, endLine, resolved: result.resolved,
@@ -6053,7 +6065,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
         // 🧩 Failure-phase answers now carry a REASONING level from the
         // same dialogue call: store it (dedup by normalized answer, capped
         // per task) — the flat mean across all exchanges is the rubric.
-        if (level !== null && rdoc.status !== STATUS.STATUS_ACCEPTED) {
+        if (level !== null && !accepted) {
             const rkey = normalizeAnswerKey(text);
             const rstate = thread.reasoning || { levels: [], answerKeys: [] };
             const rdup = !!rstate.answerKeys?.includes(rkey);
@@ -6061,7 +6073,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
                 if (!this.practice) await SelfLearningModel.pushReasoningLevel(thread._id, level, rkey);
             }
         }
-        if (level !== null && rdoc.status === STATUS.STATUS_ACCEPTED && thread.ownership) {
+        if (level !== null && accepted && thread.ownership) {
             /*
              * Anti-inflation: a level lands in the rubric only when (a) the
              * question was genuinely asked (pushOwnershipLevel matches the
@@ -6092,7 +6104,7 @@ class SelfLearningTutorHandler extends SelfLearningProblemBaseHandler {
             // Per-answer feedback: the just-graded level. levelKind picks the
             // chip wording: post-acceptance ownership vs failure reasoning.
             level,
-            levelKind: rdoc.status === STATUS.STATUS_ACCEPTED ? 'ownership' : 'reasoning',
+            levelKind: accepted ? 'ownership' : 'reasoning',
             gate,
         };
     }
@@ -6265,6 +6277,13 @@ class ProblemTrajectoryHandler extends Handler {
         if (rid) {
             const rdoc = await record.get(domainId, rid);
             if (!rdoc || rdoc.uid !== this.user._id || rdoc.pid !== pid) throw new NotFoundError(rid);
+            /*
+             * A record made inside a test or homework is masked exactly as
+             * the activity page masks it (lib/record_visibility): this
+             * endpoint used to return the true verdict, score and test
+             * cases of a submission the running activity was hiding.
+             */
+            await maskOwnRecords(this, domainId, [rdoc]);
             const judged = !JUDGING.includes(rdoc.status);
             this.response.body = {
                 rid: rid.toHexString(),
@@ -6300,8 +6319,13 @@ class ProblemTrajectoryHandler extends Handler {
         const history = await record.getMulti(domainId, {
             pid, uid: this.user._id, contest: { $ne: record.RECORD_PRETEST },
         }).sort({ _id: -1 }).limit(10)
-            .project({ code: 1, lang: 1, status: 1, score: 1 })
+            .project({
+                code: 1, lang: 1, status: 1, score: 1, contest: 1,
+            })
             .toArray();
+        // Same gate for the attempt list: an in-activity attempt shows as
+        // "handed in", never as a verdict, until its results are released.
+        await maskOwnRecords(this, domainId, history as any[]);
         this.response.body = {
             attempts: history.reverse().map((r: any) => ({
                 rid: r._id.toHexString(),
@@ -6317,12 +6341,34 @@ class ProblemTrajectoryHandler extends Handler {
     }
 }
 
-/** Kinds+titles of a contest/homework's problems (they share TYPE_CONTEST). */
+/**
+ * Kinds+titles of a contest/homework's problems (they share TYPE_CONTEST).
+ *
+ * The task LIST of an activity is itself exam material: before the activity
+ * starts, and for anyone who is not taking part, it must not be readable.
+ * This endpoint answered for any signed-in user, which leaked the titles of
+ * an unstarted test. It now applies the same visibility the activity page
+ * does: staff always; a participant once the activity has begun; nobody
+ * else.
+ */
 class ActivityProblemKindsHandler extends Handler {
     @param('tid', Types.ObjectId)
     async get({ domainId }, tid: ObjectId) {
         const tdoc = await contest.get(domainId, tid);
         if (!tdoc) throw new NotFoundError(tid);
+        const canManage = this.user.own(tdoc) || this.user.role === 'root'
+            || this.user.hasPerm(tdoc.rule === 'homework' ? PERM.PERM_EDIT_HOMEWORK : PERM.PERM_EDIT_CONTEST)
+            || (tdoc.maintainer || []).includes(this.user._id);
+        if (!canManage) {
+            // Assigned activities stay invisible outside the assignment.
+            if (tdoc.assign?.length && !this.user.hasPerm(PERM.PERM_VIEW_HIDDEN_CONTEST)) {
+                const groups = await user.listGroup(domainId, this.user._id);
+                if (!new Set(tdoc.assign).intersection(new Set(groups.map((i) => i.name))).size) throw new NotAssignedError('contest', tid);
+            }
+            if (contest.isNotStarted(tdoc)) throw new ContestNotLiveError(domainId, tid);
+            const tsdoc = await contest.getStatus(domainId, tid, this.user._id);
+            if (!tsdoc?.attend) throw new ContestNotAttendedError(domainId, tid);
+        }
         this.response.body = { pids: await activityKinds(domainId, tdoc.pids || [], this.user?._id, tdoc) };
     }
 }
@@ -6480,6 +6526,9 @@ class BulkAddUsersHandler extends Handler {
         if (!Array.isArray(assignments) || !assignments.length || assignments.length > 20) {
             throw new BadRequestError('Provide between 1 and 20 domain assignments.');
         }
+        // Default ON: a freshly imported account must not keep the password
+        // the roster implies (handler/first_login.ts).
+        const forceChange = !(['false', '0', 'no', 'off'].includes(String(this.args.forcePasswordChange ?? '').toLowerCase()));
         // Validate every assignment up front: unknown domains abort the run.
         for (const a of assignments) {
             const ddoc = await domain.get(String(a.domainId));
@@ -6514,6 +6563,16 @@ class BulkAddUsersHandler extends Handler {
                     const password = `${uname}_${lastName}_${firstName}`;
                     const mailLocal = uname.toLowerCase().replace(/[^a-z0-9._-]/g, '') || `u${Date.now()}`;
                     uid = await user.create(`${mailLocal}@bulk-import.invalid`, uname, password);
+                    /*
+                     * The initial password is derived from the roster, so the
+                     * teacher (and anyone holding the roster) knows it. The
+                     * account is therefore locked to the change-password page
+                     * until the student sets their own — every request is
+                     * redirected there (handler/first_login.ts). Pass
+                     * forcePasswordChange: false in the payload to import
+                     * accounts without the lock.
+                     */
+                    if (forceChange) await requirePasswordChange(uid);
                     isNew = true;
                 }
                 for (const a of assignments) {
@@ -7729,8 +7788,84 @@ const cleanFileName = (name: string) => String(name || '').replace(/.*[\\/]/, ''
  * write a markdown report; teachers (problem owner or domain root) list all
  * submissions and read/download them. Nothing here touches the judge.
  */
+/**
+ * The homework a subjective hand-in belongs to, and whether it may be
+ * written to right now. Resolved SERVER-SIDE (a client-supplied tid is
+ * verified, never trusted) so a student cannot hand in through a homework
+ * they are not taking, or after its deadline.
+ */
+export interface SubjectiveContext {
+    tdoc: any | null;
+    tid: string | null;
+    /** Writes allowed: the homework is open for this student (or they are staff). */
+    open: boolean;
+    /** Why writing is refused, for the message and for the page. */
+    reason: string;
+    deadline: Date | null;
+}
+
+async function resolveSubjectiveContext(h: any, domainId: string, pid: number, wantTid?: string): Promise<SubjectiveContext> {
+    const staff = subjectiveTeacher(h, h.pdoc);
+    const uid = h.user._id;
+    const none: SubjectiveContext = {
+        tdoc: null, tid: null, open: staff, reason: staff ? '' : 'This task is not part of any homework you are taking.', deadline: null,
+    };
+    const tdocs = await contest.getMulti(domainId, { rule: 'homework', pids: pid } as any)
+        .project({
+            docId: 1, title: 1, owner: 1, maintainer: 1, rule: 1, beginAt: 1, endAt: 1, penaltySince: 1, extensionDays: 1, assign: 1, pids: 1, manualEval: 1, evaluatedAt: 1,
+        }).limit(50).toArray() as any[];
+    if (!tdocs.length) return none;
+    // VISIBILITY: an assigned homework is invisible outside its groups.
+    const groups = (await user.listGroup(domainId, uid).catch(() => [])).map((i: any) => i.name);
+    const visible = tdocs.filter((t) => staff || !t.assign?.length || h.user.hasPerm(PERM.PERM_VIEW_HIDDEN_HOMEWORK)
+        || new Set(t.assign).intersection(new Set(groups)).size);
+    if (!visible.length) throw new NotAssignedError('homework', tdocs[0].docId);
+    let candidates = visible;
+    if (wantTid) {
+        const wanted = visible.find((t) => t.docId.toHexString() === String(wantTid));
+        if (!wanted) throw new NotFoundError(wantTid);
+        candidates = [wanted];
+    }
+    // ATTENDANCE: only a homework this student has claimed collects their work.
+    const attended: any[] = [];
+    for (const t of candidates) {
+        if (staff) { attended.push(t); continue; }
+        // eslint-disable-next-line no-await-in-loop
+        const tsdoc = await contest.getStatus(domainId, t.docId, uid).catch(() => null);
+        if (tsdoc?.attend) attended.push(t);
+    }
+    if (!attended.length) {
+        if (wantTid) throw new ContestNotAttendedError(domainId, candidates[0].docId);
+        return { ...none, reason: 'Claim the homework before handing anything in.' };
+    }
+    // Prefer the homework that is OPEN now; otherwise the one that ended last.
+    const now = new Date();
+    const hardEnd = (t: any) => new Date(new Date(t.endAt).getTime() + (t.extensionDays || 0) * 24 * 3600 * 1000);
+    const open = attended.filter((t) => t.beginAt <= now && now <= hardEnd(t));
+    const tdoc = open.sort((a, b) => +hardEnd(a) - +hardEnd(b))[0]
+        || attended.sort((a, b) => +hardEnd(b) - +hardEnd(a))[0];
+    const deadline = hardEnd(tdoc);
+    if (staff) return { tdoc, tid: tdoc.docId.toHexString(), open: true, reason: '', deadline };
+    if (tdoc.beginAt > now) {
+        return {
+            tdoc, tid: tdoc.docId.toHexString(), open: false, reason: 'This homework has not started yet.', deadline,
+        };
+    }
+    if (now > deadline) {
+        // DEADLINE (including the late window): the hand-in is closed, and it
+        // stays closed — a report may already have been graded and released.
+        return {
+            tdoc, tid: tdoc.docId.toHexString(), open: false, reason: 'The deadline (and any late window) has passed — this homework no longer accepts hand-ins.', deadline,
+        };
+    }
+    return {
+        tdoc, tid: tdoc.docId.toHexString(), open: true, reason: '', deadline,
+    };
+}
+
 class SubjectiveTaskHandler extends Handler {
     pdoc: any;
+    ctxHw: SubjectiveContext;
 
     /** Canonical numeric problem id: URLs may carry the display pid (e.g. "S1000"). */
     get npid(): number {
@@ -7738,10 +7873,24 @@ class SubjectiveTaskHandler extends Handler {
     }
 
     @param('pid', Types.ProblemId)
-    async prepare({ domainId }, pid: number | string) {
+    @param('tid', Types.String, true)
+    async prepare({ domainId }, pid: number | string, tid?: string) {
         this.pdoc = await problem.get(domainId, pid);
         if (!this.pdoc) throw new NotFoundError(pid);
         if (!isSubjectivePdoc(this.pdoc)) throw new BadRequestError('This problem is not a subjective task.');
+        /*
+         * VISIBILITY: the task must be readable at all. The route carries
+         * only PRIV_USER_PROFILE, so without this any signed-in user could
+         * read and write another course's hand-ins.
+         */
+        if (!problem.canViewBy(this.pdoc, this.user)) throw new ProblemNotFoundError(domainId, pid);
+        // Which homework this hand-in belongs to, and whether it is open.
+        this.ctxHw = await resolveSubjectiveContext(this, domainId, this.pdoc.docId, tid);
+    }
+
+    /** Writes (upload, report, delete) are refused outside the homework's window. */
+    requireOpen() {
+        if (!this.ctxHw.open) throw new ForbiddenError(this.ctxHw.reason || 'This task does not accept hand-ins right now.');
     }
 
     @param('uid', Types.PositiveInt, true)
@@ -7753,7 +7902,7 @@ class SubjectiveTaskHandler extends Handler {
         const config = await subjectiveConfigOfPdoc(this.pdoc);
         if (list) {
             if (!teacher) throw new ForbiddenError('Only the problem owner or a domain root can list submissions.');
-            const docs = await listSubjective(domainId, pid);
+            const docs = await listSubjective(domainId, pid, this.ctxHw.tid);
             let udict: any = {};
             try {
                 udict = await user.getList(domainId, docs.map((d) => d.uid));
@@ -7794,7 +7943,7 @@ class SubjectiveTaskHandler extends Handler {
         }
         const targetUid = (uid && uid !== this.user._id) ? uid : this.user._id;
         if (targetUid !== this.user._id && !teacher) throw new ForbiddenError('Not your submission.');
-        const doc = await getSubjective(domainId, pid, targetUid);
+        const doc = await getSubjective(domainId, pid, targetUid, this.ctxHw.tid);
         // The student's own released grade (null until the teacher releases it).
         let grade: any = null;
         if (config.type === 'report') {
@@ -7809,6 +7958,15 @@ class SubjectiveTaskHandler extends Handler {
             updateAt: doc?.updateAt || null,
             teacher,
             grade,
+            // Which homework this hand-in belongs to, and whether it is open —
+            // the page disables the drop zone and says why when it is not.
+            homework: this.ctxHw.tdoc ? {
+                tid: this.ctxHw.tid,
+                title: this.ctxHw.tdoc.title,
+                deadline: this.ctxHw.deadline,
+                open: this.ctxHw.open,
+                reason: this.ctxHw.reason,
+            } : { tid: null, open: this.ctxHw.open, reason: this.ctxHw.reason },
         };
     }
 
@@ -7820,17 +7978,19 @@ class SubjectiveTaskHandler extends Handler {
      * client operation gets its own method here.
      */
     async postReport({ domainId }) {
+        this.requireOpen();
         const report = String(this.args.report || '').slice(0, SUBJECTIVE_MAX_REPORT);
-        const updateAt = await setSubjectiveReport(domainId, this.npid, this.user._id, report);
+        const updateAt = await setSubjectiveReport(domainId, this.npid, this.user._id, report, this.ctxHw.tid);
         this.response.body = { updateAt };
     }
 
     async postUpload({ domainId }) {
+        this.requireOpen();
         const pid = this.npid;
         const file = this.request.files?.file;
         if (!file || !file.size) throw new BadRequestError('No file received.');
         if (file.size > SUBJECTIVE_MAX_FILE) throw new BadRequestError('The file exceeds the 25 MB limit.');
-        const doc = await getSubjective(domainId, pid, this.user._id);
+        const doc = await getSubjective(domainId, pid, this.user._id, this.ctxHw.tid);
         const name = cleanFileName(file.originalFilename || file.newFilename || 'file');
         const config = await subjectiveConfigOfPdoc(this.pdoc);
         if (config.type === 'report') {
@@ -7854,50 +8014,61 @@ class SubjectiveTaskHandler extends Handler {
                 try {
                     await storage.del([f.target]);
                 } catch (e) { /* the entry removal is authoritative */ }
-                await removeSubjectiveFile(domainId, pid, this.user._id, f.name);
+                await removeSubjectiveFile(domainId, pid, this.user._id, f.name, this.ctxHw.tid);
             }
         } else {
             const existing = (doc?.files || []).filter((f) => f.name !== name);
             if (existing.length >= SUBJECTIVE_MAX_FILES) throw new BadRequestError(`At most ${SUBJECTIVE_MAX_FILES} files.`);
         }
-        const target = `subjective/${domainId}/${pid}/${this.user._id}/${name}`;
+        // The storage key carries the homework too, so the same task used by
+        // two homeworks never overwrites one student's file with another's.
+        const target = `subjective/${domainId}/${this.ctxHw.tid || '-'}/${pid}/${this.user._id}/${name}`;
         await storage.put(target, file.filepath, this.user._id);
         await upsertSubjectiveFile(domainId, pid, this.user._id, {
             name, size: file.size, target, uploadAt: new Date(),
-        });
-        const fresh = await getSubjective(domainId, pid, this.user._id);
+        }, this.ctxHw.tid);
+        const fresh = await getSubjective(domainId, pid, this.user._id, this.ctxHw.tid);
         this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
         logger.info('[pta-ui] subjective upload: uid=%d pid=%d "%s" (%d bytes)', this.user._id, pid, name, file.size);
     }
 
     async postDelete({ domainId }) {
+        this.requireOpen();
         const pid = this.npid;
         const name = cleanFileName(this.args.name);
-        const doc = await getSubjective(domainId, pid, this.user._id);
+        const doc = await getSubjective(domainId, pid, this.user._id, this.ctxHw.tid);
         const entry = (doc?.files || []).find((f) => f.name === name);
         if (entry) {
             try {
                 await storage.del([entry.target]);
             } catch (e) { /* the entry removal below is authoritative */ }
-            await removeSubjectiveFile(domainId, pid, this.user._id, name);
+            await removeSubjectiveFile(domainId, pid, this.user._id, name, this.ctxHw.tid);
         }
-        const fresh = await getSubjective(domainId, pid, this.user._id);
+        const fresh = await getSubjective(domainId, pid, this.user._id, this.ctxHw.tid);
         this.response.body = { files: (fresh?.files || []).map((f) => ({ name: f.name, size: f.size, uploadAt: f.uploadAt })) };
     }
 }
 
 /** Download one submitted file (own, or any as teacher) via a signed link. */
 class SubjectiveFileHandler extends Handler {
+    pdoc: any;
+
     @param('pid', Types.ProblemId)
     @param('name', Types.String)
     @param('uid', Types.PositiveInt, true)
-    async get({ domainId }, pid: number | string, name: string, uid?: number) {
+    @param('tid', Types.String, true)
+    async get({ domainId }, pid: number | string, name: string, uid?: number, tid?: string) {
         const pdoc = await problem.get(domainId, pid);
         if (!pdoc) throw new NotFoundError(pid);
         if (!isSubjectivePdoc(pdoc)) throw new BadRequestError('This problem is not a subjective task.');
+        if (!problem.canViewBy(pdoc, this.user)) throw new ProblemNotFoundError(domainId, pid);
         const targetUid = (uid && uid !== this.user._id) ? uid : this.user._id;
         if (targetUid !== this.user._id && !subjectiveTeacher(this, pdoc)) throw new ForbiddenError('Not your submission.');
-        const doc = await getSubjective(domainId, pdoc.docId, targetUid);
+        // Same homework resolution as the task page, so a download names the
+        // hand-in of the right activity (and honours visibility / attendance).
+        this.pdoc = pdoc;
+        const hw = await resolveSubjectiveContext(this, domainId, pdoc.docId, tid);
+        const doc = await getSubjective(domainId, pdoc.docId, targetUid, hw.tid);
         const entry = (doc?.files || []).find((f) => f.name === cleanFileName(name));
         if (!entry) throw new NotFoundError(name);
         this.response.redirect = await storage.signDownloadLink(entry.target, entry.name, false);
@@ -8242,6 +8413,8 @@ export async function apply(ctx: Context) {
     // Registered from here too, so a dev-mode watcher that never discovered the
     // new file still serves them (the global flag prevents double registration).
     registerSubjectiveGradingRoutes(ctx);
+    // PTA fork: forced password change for imported accounts (handler/first_login.ts).
+    registerFirstLoginRoutes(ctx);
     // ai-speedup: the stream transport lives in handler/ai_stream.ts; register it
     // from here as well when that new file was not picked up (see its header).
     registerAiStreamRoutes(ctx);
@@ -8267,7 +8440,8 @@ export async function apply(ctx: Context) {
     ctx.Route('subjective_task_file', '/p/:pid/subjective/file', SubjectiveFileHandler, PRIV.PRIV_USER_PROFILE);
     // The AI Studio routes (/ai-studio, /ai-studio/:id) are registered by
     // ai_author.ts itself — see the HMR note in that file's apply().
-    ctx.Route('contest_paper', '/contest/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_paper', '/test/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_paper_legacy', '/contest/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_CONTEST);
     ctx.Route('homework_paper', '/homework/:tid/paper', ObjectivePaperHandler, PERM.PERM_VIEW_HOMEWORK);
     ctx.Route('self_learning_paper', '/self-learning/:ssid/paper', SelfLearningPaperHandler, PRIV.PRIV_USER_PROFILE);
     ctx.Route('self_learning_bonus', '/self-learning/:ssid/bonus', SelfLearningBonusHandler, PRIV.PRIV_USER_PROFILE);

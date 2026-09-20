@@ -13,6 +13,7 @@ import record from '../model/record';
 import * as setting from '../model/setting';
 import system from '../model/system';
 import user from '../model/user';
+import { requirePasswordChange } from './first_login';
 import {
     ConnectionHandler, Handler, param, requireSudo, Types,
 } from '../service/server';
@@ -289,6 +290,14 @@ class SystemUserImportHandler extends SystemHandler {
                 try {
                     const uid = await user.create(udoc.email, udoc.username, udoc.password);
                     mapping[udoc.email] = uid;
+                    /*
+                     * PTA fork: the password in the import file is known to
+                     * whoever prepared it, so the account is locked to the
+                     * change-password page until the student picks their own
+                     * (handler/first_login.ts). Put `"forcePasswordChange":
+                     * false` in a row's extra JSON to import without it.
+                     */
+                    if (udoc.forcePasswordChange !== false) await requirePasswordChange(uid);
                     if (udoc.displayName) await domain.setUserInDomain(domainId, uid, { displayName: udoc.displayName });
                     if (udoc.school) await user.setById(uid, { school: udoc.school });
                     if (udoc.studentId) await user.setById(uid, { studentId: udoc.studentId });

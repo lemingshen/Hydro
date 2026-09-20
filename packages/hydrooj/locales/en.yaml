@@ -11,13 +11,13 @@ ai_tutor.provider: AI Provider
 ai_tutor.temperature: Sampling Temperature
 ai_tutor.timeout: "Request Timeout (legacy — no longer used)"
 Can be Extended For: Extension
-contest_create: Contest Create
-contest_detail_problem_submit: Submit Contest Problem
+contest_create: Test Create
+contest_detail_problem_submit: Submit Test Problem
 contest_detail_problem: Problem Detail
-contest_detail: Contest Detail
-contest_edit: Contest Edit
-contest_main: Contest
-contest_manage: Contest Management
+contest_detail: Test Detail
+contest_edit: Test Edit
+contest_main: Test
+contest_manage: Test Management
 contest_print: Print
 contest_problemlist: Problem List
 contest_scoreboard: Scoreboard
@@ -70,7 +70,7 @@ pager_first: « First
 pager_last: Last »
 pager_next: Next ›
 pager_previous: ‹ Previous
-perm_contest: Contests
+perm_contest: Tests
 perm_discussion: Discussions
 perm_general: General
 perm_homework: Homework
@@ -170,3 +170,9 @@ ai_tutor.subjective_grade_max_chars: "Report Grading — Max Characters of Repor
 homework_subjective_review: "AI Report Grading"
 ai_tutor.subjective_grade_vision: "Report Grading — Also Send the PDF Itself to the Model (Claude / OpenAI)"
 homework_report_review: "AI Report Grading"
+user_first_login: "Set Your Own Password"
+# PTA fork — page titles for the test pages that had none.
+contest_balloon: Balloons
+contest_code: Download Test Code
+contest_clarification: Clarifications
+contest_paper: Test Paper

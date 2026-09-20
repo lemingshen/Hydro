@@ -14,6 +14,7 @@ import parser from '@hydrooj/utils/lib/search';
 import { randomstring, sortFiles, streamToBuffer } from '@hydrooj/utils/lib/utils';
 import type { Context } from '../context';
 import {
+    ForbiddenError,
     BadRequestError, ContestNotAttendedError, ContestNotEndedError, ContestNotFoundError, ContestNotLiveError,
     FileLimitExceededError, FileTooLargeError, HackFailedError, NoProblemError, NotFoundError,
     PermissionError, ProblemAlreadyExistError, ProblemAlreadyUsedByContestError, ProblemConfigError,
@@ -28,6 +29,7 @@ import { readRawProblemConfig } from '../lib/problem_config';
 import { normalizeRubric, SUBJECTIVE_TYPES, subjectiveConfigOf } from '../lib/subjective_rubric';
 import { isObjectivePid, objectiveTitleOf } from '../lib/objective_title';
 import { activityOwners, activityPids, applyActivityPidsCache, entitledToActivityTask } from '../lib/activity_pids';
+import { liveActivitiesOwning } from '../lib/record_visibility';
 import { PERM, PRIV, STATUS } from '../model/builtin';
 import * as contest from '../model/contest';
 import * as discussion from '../model/discussion';
@@ -897,6 +899,25 @@ export class ProblemSubmitHandler extends ProblemDetailHandler {
     @param('input', Types.ArrayOf(Types.String, true), true)
     @param('tid', Types.ObjectId, true)
     async post(domainId: string, lang: string, code: string, pretest = false, input: string[] = [], tid?: ObjectId) {
+        /*
+         * PTA fork — DEFENCE IN DEPTH. ProblemDetailHandler._prepare hides
+         * an activity-owned task from the problem set, but this is the
+         * endpoint that would actually reveal an answer: an objective task
+         * submitted WITHOUT a tid is judged immediately and its verdict is
+         * not masked (applyProjection only sees records that carry
+         * `contest`). So a direct POST to /p/:pid/submit during a live test
+         * would return the answer key. Any owning activity that has not
+         * released its results blocks the out-of-activity submission —
+         * staff and the in-activity path (tid present) are unaffected.
+         */
+        if (!tid && !pretest) {
+            const live = await liveActivitiesOwning(this, domainId, this.pdoc.docId);
+            if (live.length) {
+                throw new ForbiddenError(
+                    `This task belongs to "${live[0].title}". Submit it from that ${live[0].rule === 'homework' ? 'homework' : 'test'}; it is not available in the problem set while the results are withheld.`,
+                );
+            }
+        }
         const config = this.pdoc.config;
         if (typeof config === 'string' || config === null) throw new ProblemConfigError();
         if (['submit_answer', 'objective'].includes(config.type)) {

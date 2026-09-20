@@ -455,7 +455,7 @@ export async function myResultsOf(domainId: string, tdoc: Tdoc, detail: Record<n
     const handedIn: Record<number, { files: number, hasReport: boolean, updateAt?: Date } | null> = {};
     if (uid && subjPids.length) {
         await Promise.all(subjPids.map(async (pid) => {
-            const doc = await getSubjective(domainId, pid, uid).catch(() => null);
+            const doc = await getSubjective(domainId, pid, uid, tdoc.docId.toHexString()).catch(() => null);
             handedIn[pid] = doc ? { files: (doc.files || []).length, hasReport: !!(doc.report || '').trim(), updateAt: doc.updateAt } : null;
         }));
     }
@@ -1541,20 +1541,41 @@ declare module 'cordis' {
 }
 
 export async function apply(ctx: Context) {
-    ctx.Route('contest_create', '/contest/create', ContestEditHandler);
-    ctx.Route('contest_main', '/contest', ContestListHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_detail', '/contest/:tid', ContestDetailHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_problemlist', '/contest/:tid/problems', ContestProblemListHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_edit', '/contest/:tid/edit', ContestEditHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_print', '/contest/:tid/print', ContestPrintHandler, PERM.PERM_VIEW_CONTEST);
+    /*
+     * PTA fork — the activity is called a TEST here, so its URLs read
+     * /test/... The route NAMES are unchanged, so every url('contest_*')
+     * call, template and page script keeps working and now emits the new
+     * path. The old /contest/... paths stay registered below as aliases so
+     * links already handed to students do not break.
+     */
+    ctx.Route('contest_create', '/test/create', ContestEditHandler);
+    ctx.Route('contest_main', '/test', ContestListHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_detail', '/test/:tid', ContestDetailHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_problemlist', '/test/:tid/problems', ContestProblemListHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_edit', '/test/:tid/edit', ContestEditHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_print', '/test/:tid/print', ContestPrintHandler, PERM.PERM_VIEW_CONTEST);
     // Support for DOMJudge printfile
-    ctx.Route('contest_print_alt', '/contest/:tid/api/printing/team', ContestPrintHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_manage', '/contest/:tid/management', ContestManagementHandler);
-    ctx.Route('contest_clarification', '/contest/:tid/clarification', ContestClarificationHandler);
-    ctx.Route('contest_code', '/contest/:tid/code', ContestCodeHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_file_download', '/contest/:tid/file/:type/:filename', ContestFileDownloadHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_user', '/contest/:tid/user', ContestUserHandler, PERM.PERM_VIEW_CONTEST);
-    ctx.Route('contest_balloon', '/contest/:tid/balloon', ContestBalloonHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_print_alt', '/test/:tid/api/printing/team', ContestPrintHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_manage', '/test/:tid/management', ContestManagementHandler);
+    ctx.Route('contest_clarification', '/test/:tid/clarification', ContestClarificationHandler);
+    ctx.Route('contest_code', '/test/:tid/code', ContestCodeHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_file_download', '/test/:tid/file/:type/:filename', ContestFileDownloadHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_user', '/test/:tid/user', ContestUserHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_balloon', '/test/:tid/balloon', ContestBalloonHandler, PERM.PERM_VIEW_CONTEST);
+    // Legacy paths: same handlers, so existing /contest/... links still resolve.
+    ctx.Route('contest_create_legacy', '/contest/create', ContestEditHandler);
+    ctx.Route('contest_main_legacy', '/contest', ContestListHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_detail_legacy', '/contest/:tid', ContestDetailHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_problemlist_legacy', '/contest/:tid/problems', ContestProblemListHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_edit_legacy', '/contest/:tid/edit', ContestEditHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_print_legacy', '/contest/:tid/print', ContestPrintHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_print_alt_legacy', '/contest/:tid/api/printing/team', ContestPrintHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_manage_legacy', '/contest/:tid/management', ContestManagementHandler);
+    ctx.Route('contest_clarification_legacy', '/contest/:tid/clarification', ContestClarificationHandler);
+    ctx.Route('contest_code_legacy', '/contest/:tid/code', ContestCodeHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_file_download_legacy', '/contest/:tid/file/:type/:filename', ContestFileDownloadHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_user_legacy', '/contest/:tid/user', ContestUserHandler, PERM.PERM_VIEW_CONTEST);
+    ctx.Route('contest_balloon_legacy', '/contest/:tid/balloon', ContestBalloonHandler, PERM.PERM_VIEW_CONTEST);
     ctx.worker.addHandler('contest', async (doc) => {
         const tdoc = await contest.get(doc.domainId, doc.tid);
         if (!tdoc) return;
@@ -1578,8 +1599,10 @@ export async function apply(ctx: Context) {
     });
     ctx.plugin(ScoreboardService);
     await ctx.inject(['scoreboard'], ({ Route, scoreboard }) => {
-        Route('contest_scoreboard', '/contest/:tid/scoreboard', ContestScoreboardHandler, PERM.PERM_VIEW_CONTEST_SCOREBOARD);
-        Route('contest_scoreboard_view', '/contest/:tid/scoreboard/:view', ContestScoreboardHandler, PERM.PERM_VIEW_CONTEST_SCOREBOARD);
+        Route('contest_scoreboard', '/test/:tid/scoreboard', ContestScoreboardHandler, PERM.PERM_VIEW_CONTEST_SCOREBOARD);
+        Route('contest_scoreboard_view', '/test/:tid/scoreboard/:view', ContestScoreboardHandler, PERM.PERM_VIEW_CONTEST_SCOREBOARD);
+        Route('contest_scoreboard_legacy', '/contest/:tid/scoreboard', ContestScoreboardHandler, PERM.PERM_VIEW_CONTEST_SCOREBOARD);
+        Route('contest_scoreboard_view_legacy', '/contest/:tid/scoreboard/:view', ContestScoreboardHandler, PERM.PERM_VIEW_CONTEST_SCOREBOARD);
         scoreboard.addView('default', 'Default', { tdoc: 'tdoc', groups: 'groups', realtime: Types.Boolean }, {
             async display({ realtime, tdoc, groups }) {
                 if (realtime && !this.user.own(tdoc)) {

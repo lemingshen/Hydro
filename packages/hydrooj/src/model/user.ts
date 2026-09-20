@@ -63,6 +63,8 @@ export class User {
 
     mail: string;
     uname: string;
+    /** PTA fork — the account is still on its initial password (handler/first_login.ts). */
+    forcePasswordChange: boolean;
     hashType: string;
     priv: number;
     regat: Date;
@@ -91,6 +93,8 @@ export class User {
 
         this.mail = udoc.mail;
         this.uname = udoc.uname;
+        // PTA fork: still on the password the account was created with.
+        this.forcePasswordChange = !!udoc.forcePasswordChange;
         this.hashType = udoc.hashType || 'hydro';
         this.priv = udoc.priv;
         this.regat = udoc.regat;

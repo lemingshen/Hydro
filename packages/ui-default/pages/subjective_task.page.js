@@ -137,9 +137,19 @@ function baseUrl() {
   const docId = window.UiContext && UiContext.pdoc && UiContext.pdoc.docId;
   if (docId != null) {
     const domainPrefix = (window.location.pathname.match(/^\/d\/[^/]+/) || [''])[0];
-    return `${domainPrefix}/p/${docId}/subjective`;
+    // PTA fork: hand-ins are stored per homework, so every call names the
+    // activity the page was opened from (the server verifies it).
+    const uc = window.UiContext || {};
+    const tid = uc.tdoc ? String(uc.tdoc.docId || uc.tdoc._id || '') : '';
+    return `${domainPrefix}/p/${docId}/subjective${tid ? `?tid=${encodeURIComponent(tid)}` : ''}`;
   }
   return `${window.location.pathname.split('?')[0]}/subjective`; // fallback
+}
+
+/** The download endpoint for one file, with the homework carried over. */
+function fileUrl(name) {
+  const [path, query] = baseUrl().split('?');
+  return `${path}/file?name=${encodeURIComponent(name)}${query ? `&${query}` : ''}`;
 }
 
 async function uploadFile(file) {
@@ -158,7 +168,7 @@ function fileRows(files, { deletable, uid } = {}) {
   const uidQ = uid ? `&uid=${uid}` : '';
   return files.map((f) => '<div class="sbt__file">'
     + '<span class="sbt__fic">📄</span>'
-    + `<a href="${baseUrl()}/file?name=${encodeURIComponent(f.name)}${uidQ}" target="_blank" rel="noopener">${esc(f.name)}</a>`
+    + `<a href="${fileUrl(f.name)}${uidQ}" target="_blank" rel="noopener">${esc(f.name)}</a>`
     + `<span class="sbt__fmeta">${fmtSize(f.size)} · ${esc(fmtTs(f.uploadAt))}</span>${
       deletable ? `<button type="button" class="sbt__del" data-name="${esc(f.name)}" title="${esc(i18n('Delete'))}">×</button>` : ''
     }</div>`).join('');
@@ -212,7 +222,7 @@ function feedbackCardHtml(grade) {
   }
   const sm = grade.summary || {};
   const li = (arr) => (arr && arr.length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '');
-  const annotatedUrl = grade.annotated ? `${baseUrl()}/annotated` : '';
+  const annotatedUrl = grade.annotated ? `${baseUrl().split('?')[0]}/annotated` : '';
   return `<div class="sbt sbt--grade"><div class="sbt__head">🤖 <span class="sbt__title">${esc(i18n('AI feedback on your report'))}</span>`
     + `<span class="sbt__hint">${esc(i18n('Graded'))} ${esc(fmtTs(grade.gradedAt))}${grade.fileName ? ` · ${esc(grade.fileName)}` : ''}</span></div>`
     + '<div class="sbt__body">'
@@ -449,6 +459,21 @@ function studentPanel($mount) {
   request.get(baseUrl()).then((res) => {
     applyMode(res.config);
     $rubric.html(rubricCardHtml(res.config));
+    // PTA fork: hand-ins are bound to a homework and its deadline. When the
+    // window is shut the drop zone goes away and the card says why.
+    const hw = res.homework || {};
+    if (!hw.open) {
+      $panel.find('.sbt__drop, .sbt__pick').prop('hidden', true).hide();
+      $panel.find('.sbt__report').prop('disabled', true);
+      $panel.find('.sbt__body').first().prepend(
+        `<div class="pta-note pta-note--warn">🔒 ${esc(hw.reason || i18n('This task does not accept hand-ins right now.'))}`
+        + `${hw.deadline ? ` <span class="sbt__ts">${esc(i18n('Deadline'))}: ${esc(fmtTs(hw.deadline))}</span>` : ''}</div>`,
+      );
+    } else if (hw.title) {
+      $panel.find('.sbt__head .sbt__hint').first().append(
+        ` · ${esc(i18n('for'))} ${esc(hw.title)}${hw.deadline ? ` · ${esc(i18n('due'))} ${esc(fmtTs(hw.deadline))}` : ''}`,
+      );
+    }
     if (res.grade) {
       $feedback.html(feedbackCardHtml(res.grade));
       // The score counts up and the rubric rows / comments fade in one after another.

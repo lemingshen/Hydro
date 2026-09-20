@@ -679,7 +679,8 @@ export async function runGradingJob(domainId: string, tid: string, pid: number, 
         const cfg = await subjectiveConfigOfPdoc(pdoc);
         if (cfg.type !== 'report') throw new Error('Only report tasks (one PDF) are graded automatically for now.');
         if (!cfg.rubric) throw new Error('This task has no rubric yet — add one on the task\'s edit page.');
-        const subs = (await listSubjective(domainId, pid)).filter((s) => pdfFileOf(s) && (!opts.uids || opts.uids.includes(s.uid)));
+        // Per homework: a task shared by two homeworks grades each one's own hand-ins.
+        const subs = (await listSubjective(domainId, pid, tid)).filter((s) => pdfFileOf(s) && (!opts.uids || opts.uids.includes(s.uid)));
         await patch({ stage: 'grading', total: subs.length, done: 0 });
         const counts = { graded: 0, failed: 0, skipped: 0 };
         let done = 0;

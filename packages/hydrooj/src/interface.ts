@@ -90,6 +90,13 @@ export interface Udoc extends Record<string, any> {
     loginat: Date;
     ip: string[];
     loginip: string;
+    /**
+     * PTA fork — the account still has the password it was created with
+     * (roster import, administrative reset). Every request is redirected to
+     * /user/first-login until the user picks their own
+     * (handler/first_login.ts).
+     */
+    forcePasswordChange?: boolean;
 }
 
 export interface VUdoc {

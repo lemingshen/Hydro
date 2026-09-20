@@ -104,7 +104,7 @@ class HomeworkSubjectiveReviewHandler extends Handler {
     async rows(domainId: string) {
         const pid = this.pdoc.docId;
         const [subs, grades, tsdocs] = await Promise.all([
-            listSubjective(domainId, pid),
+            listSubjective(domainId, pid, this.tidStr),
             GradeModel.gradeMapOf(domainId, pid),
             contest.getMultiStatus(domainId, { docId: this.tdoc.docId }).project({ uid: 1, attend: 1 }).toArray() as Promise<any[]>,
         ]);
@@ -175,7 +175,7 @@ class HomeworkSubjectiveReviewHandler extends Handler {
         // One student opened (?uid=): their full grade, comments and submission.
         let detail: any = null;
         if (uid) {
-            const [doc, sub] = await Promise.all([GradeModel.getGrade(domainId, this.pdoc.docId, uid), getSubjective(domainId, this.pdoc.docId, uid)]);
+            const [doc, sub] = await Promise.all([GradeModel.getGrade(domainId, this.pdoc.docId, uid), getSubjective(domainId, this.pdoc.docId, uid, this.tidStr)]);
             const udict: any = await user.getList(domainId, [uid]);
             const u = udict[uid] || {};
             detail = {
@@ -471,7 +471,7 @@ export function registerSubjectiveGradingRoutes(ctx: Context) {
                 const cfg = await subjectiveConfigOfPdoc(pdoc);
                 const isReport = cfg.type === 'report';
                 // eslint-disable-next-line no-await-in-loop
-                const [subs, grades] = await Promise.all([listSubjective(domainId, pid), isReport ? GradeModel.gradeMapOf(domainId, pid) : Promise.resolve(new Map())]);
+                const [subs, grades] = await Promise.all([listSubjective(domainId, pid, tdoc.docId.toHexString()), isReport ? GradeModel.gradeMapOf(domainId, pid) : Promise.resolve(new Map())]);
                 const students = subs.filter((sub) => !staffUids.has(sub.uid));
                 allUids = allUids.concat(students.map((sub) => sub.uid));
                 const submissions = students

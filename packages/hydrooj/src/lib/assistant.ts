@@ -40,9 +40,11 @@ import problem from '../model/problem';
 import RecordModel from '../model/record';
 import SelfLearningModel, { collTutor, getClassReportMapCache } from '../model/selflearning';
 import system from '../model/system';
+import UserModel from '../model/user';
 import {
     AgentMessage, AiCallMeta, aiScheduler, callProvider, callProviderWithTools, ToolCall, ToolSpec, tutorConfigured,
 } from './ai_tutor';
+import { ownRecordWithheld } from './record_visibility';
 
 const logger = new Logger('assistant');
 
@@ -80,7 +82,7 @@ const fmtLeft = (d: Date) => {
  */
 export async function postureOf(domainId: string, uid: number, page: PageContext): Promise<{ posture: Posture, reason?: string, activity?: string }> {
     if (!assistantEnabled()) return { posture: 'off', reason: 'The AI assistant is not enabled.' };
-    if (/^self_learning/.test(String(page.name || ''))) return { posture: 'off', reason: 'Self-learning sessions have their own tutor.' };
+    if (String(page.name || '').startsWith('self_learning')) return { posture: 'off', reason: 'Self-learning sessions have their own tutor.' };
     const now = new Date();
     // 1. A running TEST the student is sitting → off everywhere, not just on its pages.
     const running = await contest.getMulti(domainId, { rule: { $ne: 'homework' }, beginAt: { $lte: now }, endAt: { $gt: now } })
@@ -91,7 +93,7 @@ export async function postureOf(domainId: string, uid: number, page: PageContext
         if (st?.attend) return { posture: 'off', reason: 'The AI assistant is unavailable while a test is running.', activity: t.title };
     }
     // 2. On a task page: which activities hold this task, and are any open?
-    let pid = page.pid;
+    const pid = page.pid;
     let tdoc: any = null;
     if (page.tid) {
         try { tdoc = await contest.get(domainId, new ObjectId(page.tid)); } catch { tdoc = null; }
@@ -220,7 +222,7 @@ const obj = (props: Record<string, any>, required: string[] = []) => ({ type: 'o
 
 const TOOLS: ToolSpec[] = [
     { name: 'my_map', description: "The student's full knowledge map: every point with state, confidence and task counts. Use for 'what am I weak at' style questions.", parameters: obj({}) },
-    { name: 'evidence', description: "Why the map says what it says about ONE knowledge point: the evidence lines (which tasks, what the tutor found). Use before explaining a weakness.", parameters: obj({ point: { type: 'string', description: 'knowledge point name' } }, ['point']) },
+    { name: 'evidence', description: 'Why the map says what it says about ONE knowledge point: the evidence lines (which tasks, what the tutor found). Use before explaining a weakness.', parameters: obj({ point: { type: 'string', description: 'knowledge point name' } }, ['point']) },
     { name: 'explain_point', description: "Course material for a knowledge point: its catalog description, its place in the tree, and THIS student's own recorded misconceptions on it. Use it to ground an explanation in their own mistakes.", parameters: obj({ point: { type: 'string' } }, ['point']) },
     { name: 'my_submission', description: "The student's latest submission to a task (code + verdict + compiler text), or a specific record id. Only their own code.", parameters: obj({ pid: { type: 'number', description: 'task docId' }, rid: { type: 'string', description: 'record id (optional)' } }) },
     { name: 'deadlines', description: 'Open homework, tests and sessions with time left and how many of their tasks the student has not solved yet.', parameters: obj({}) },
@@ -278,6 +280,29 @@ async function runTool(c: Ctx, call: ToolCall): Promise<string> {
             else return 'Give a pid or a rid.';
             const r = await RecordModel.coll.find(q).sort({ _id: -1 }).limit(1).next() as any;
             if (!r) return 'No submission found.';
+            /*
+             * The assistant is a side channel into the student's own
+             * records, so it obeys the same rule as every other surface
+             * (lib/record_visibility): while the owning test or homework
+             * withholds results, the verdict, the score and the judge's
+             * output are not returned — only the student's own code, which
+             * they wrote. Without this the assistant would cheerfully
+             * report "Wrong Answer, 40 points" for a submission the running
+             * test is hiding, and a student could brute-force a quiz
+             * through the chat window.
+             */
+            const udoc = await UserModel.getById(c.domainId, c.uid);
+            const withheld = udoc ? await ownRecordWithheld({ user: udoc }, c.domainId, r) : true;
+            if (withheld) {
+                return JSON.stringify({
+                    rid: String(r._id),
+                    pid: r.pid,
+                    lang: r.lang,
+                    verdict: 'withheld',
+                    note: 'This submission belongs to an assessment whose results have not been released. Tell the student you can see their code but not their result yet, and help them reason about the code itself.',
+                    code: String(r.code || '').slice(0, 6000),
+                });
+            }
             return JSON.stringify({
                 rid: String(r._id), pid: r.pid, lang: r.lang, verdict: STATUS_TEXTS[r.status] || r.status, score: r.score,
                 compilerText: (r.compilerTexts || []).join('\n').slice(0, 1500), code: String(r.code || '').slice(0, 6000),
@@ -352,8 +377,8 @@ async function deadlinesOf(domainId: string, uid: number) {
 
 function systemPrompt(c: Ctx, course: string, student: string, page: string, summary: string): string {
     const posture = c.posture === 'tutor'
-        ? `POSTURE: TUTOR. The task on screen belongs to an OPEN homework. You may explain concepts, clarify the statement, explain compiler errors and verdicts, and discuss THE STUDENT'S OWN approach with questions — but you must NOT give the algorithm, a solution outline, pseudocode, or working code for this task, and you must not fix their code for them. If asked, say plainly that during an open homework you help them think, not solve, and offer a guiding question instead.`
-        : `POSTURE: DIRECT. Nothing on screen is an open assessment. Help fully — explanations, worked examples on the concept, feedback on their code. Prefer helping them see it themselves when that is quick, but do not withhold.`;
+        ? 'POSTURE: TUTOR. The task on screen belongs to an OPEN homework. You may explain concepts, clarify the statement, explain compiler errors and verdicts, and discuss THE STUDENT\'S OWN approach with questions — but you must NOT give the algorithm, a solution outline, pseudocode, or working code for this task, and you must not fix their code for them. If asked, say plainly that during an open homework you help them think, not solve, and offer a guiding question instead.'
+        : 'POSTURE: DIRECT. Nothing on screen is an open assessment. Help fully — explanations, worked examples on the concept, feedback on their code. Prefer helping them see it themselves when that is quick, but do not withhold.';
     return [
         'You are a personal learning assistant inside a university programming course platform. You talk to ONE student, about THIS course, and you already know them (below). Be warm, concrete and brief; use their own data whenever it is relevant.',
         '',

@@ -1,8 +1,8 @@
 import { ObjectId } from 'mongodb';
 import type { PenaltyRules } from '../interface';
 import db from '../service/db';
-import * as document from './document';
 import type { ScoreOverride, ScoreOverrideEntry } from './contest';
+import * as document from './document';
 
 export const TYPE_SELF_LEARNING = 75 as const;
 
@@ -16,10 +16,10 @@ export interface SelfLearningDoc {
      * and may be restarted.
      */
     evalJob?: {
-        state: 'running' | 'done' | 'failed',
-        startedAt: Date,
-        finishedAt?: Date,
-        error?: string,
+        state: 'running' | 'done' | 'failed';
+        startedAt: Date;
+        finishedAt?: Date;
+        error?: string;
         /** ♻️ True for the teacher-button run that re-judges everything from scratch. */
         force?: boolean;
         /**
@@ -28,22 +28,22 @@ export interface SelfLearningDoc {
          * progress card; the final 'done' write keeps the summary counts.
          */
         progress?: {
-            uid?: number, uname?: string, pid?: number | string, done?: number, total?: number, graded?: number, failed?: number,
+            uid?: number; uname?: string; pid?: number | string; done?: number; total?: number; graded?: number; failed?: number;
             /** Which grader is running: 'own' (🎓 walkthrough) or 'fix' (🔧 guidance-to-fix). */
-            phase?: string,
+            phase?: string;
             /** 🎓 split of the final combined counts (the done write). */
-            own?: { graded: number, total: number },
+            own?: { graded: number, total: number };
             /** 🔧 split of the final combined counts (the done write). */
-            fix?: { graded: number, total: number },
+            fix?: { graded: number, total: number };
             /** 🧩 split of the final combined counts (the done write). */
-            rea?: { graded: number, total: number },
+            rea?: { graded: number, total: number };
             /** 💡 split of the final combined counts (the done write). */
-            ini?: { graded: number, total: number },
+            ini?: { graded: number, total: number };
             /** 📈 split of the final combined counts (the done write). */
             trj?: { graded: number, total: number };
             /** 🧠 split of the final combined counts (the done write). */
             trf?: { graded: number, total: number };
-        },
+        };
     };
     _id: ObjectId;
     domainId: string;
@@ -426,10 +426,10 @@ export interface SessionResultRow {
     trajectory?: number | null;
     /** 📈 The breakdown behind trajectory, for the teacher's hover pop-up. */
     trajectoryInfo?: {
-        level: number,
-        improvement: number,
-        slope: number | null,
-        points: { pid: number, pos: number, idx: number, pct: number }[],
+        level: number;
+        improvement: number;
+        slope: number | null;
+        points: { pid: number, pos: number, idx: number, pct: number }[];
     };
     /**
      * 🧠 The CONCEPT-TRANSFER rubric component: does a lesson learned on
@@ -1237,8 +1237,21 @@ export interface SubjectiveFile {
 }
 
 export interface SubjectiveSubmissionDoc {
-    _id: string; // `${domainId}/${pid}/${uid}` — the latest submission wins
+    /**
+     * `${domainId}/${tid}/${pid}/${uid}` — ONE submission per student per
+     * homework. The same subjective task can sit in two homeworks (two
+     * sections, two terms), and each must collect its own hand-ins: keying
+     * on the task alone made the second homework overwrite the first and
+     * let a student's old PDF be graded for a new deadline.
+     *
+     * Documents written before the key changed have `${domainId}/${pid}/${uid}`
+     * and no `tid`; reads fall back to them so nothing is lost, and
+     * `script/migrateSubjectiveTid.ts` assigns them to their homework.
+     */
+    _id: string;
     domainId: string;
+    /** The homework this hand-in belongs to ('-' = none: the task was opened outside any activity). */
+    tid?: string;
     pid: number;
     uid: number;
     report: string; // markdown
@@ -1248,42 +1261,82 @@ export interface SubjectiveSubmissionDoc {
 
 const collSubjective = db.collection('subjective.submission' as any);
 
-const subjectiveId = (domainId: string, pid: number, uid: number) => `${domainId}/${pid}/${uid}`;
+/** '-' stands for "no homework": a subjective task opened from the problem set. */
+export const SUBJECTIVE_NO_TID = '-';
+const tidKey = (tid?: string | null) => (tid ? String(tid) : SUBJECTIVE_NO_TID);
+const subjectiveId = (domainId: string, pid: number, uid: number, tid?: string | null) => `${domainId}/${tidKey(tid)}/${pid}/${uid}`;
+/** The pre-per-homework key, still read (never written). */
+const legacyId = (domainId: string, pid: number, uid: number) => `${domainId}/${pid}/${uid}`;
 
-export async function getSubjective(domainId: string, pid: number, uid: number): Promise<SubjectiveSubmissionDoc | null> {
-    return await collSubjective.findOne({ _id: subjectiveId(domainId, pid, uid) as any }) as any;
+export async function getSubjective(domainId: string, pid: number, uid: number, tid?: string | null): Promise<SubjectiveSubmissionDoc | null> {
+    const doc = await collSubjective.findOne({ _id: subjectiveId(domainId, pid, uid, tid) as any }) as any;
+    if (doc) return doc;
+    // Legacy document (written before submissions were per homework).
+    const old = await collSubjective.findOne({ _id: legacyId(domainId, pid, uid) as any }) as any;
+    return old || null;
 }
 
-export async function setSubjectiveReport(domainId: string, pid: number, uid: number, report: string): Promise<Date> {
+export async function setSubjectiveReport(domainId: string, pid: number, uid: number, report: string, tid?: string | null): Promise<Date> {
     const updateAt = new Date();
     await collSubjective.updateOne(
-        { _id: subjectiveId(domainId, pid, uid) as any },
-        { $set: { domainId, pid, uid, report, updateAt }, $setOnInsert: { files: [] } },
+        { _id: subjectiveId(domainId, pid, uid, tid) as any },
+        { $set: { domainId, tid: tidKey(tid), pid, uid, report, updateAt }, $setOnInsert: { files: [] } },
         { upsert: true },
     );
     return updateAt;
 }
 
-export async function upsertSubjectiveFile(domainId: string, pid: number, uid: number, file: SubjectiveFile): Promise<void> {
-    const _id = subjectiveId(domainId, pid, uid) as any;
+export async function upsertSubjectiveFile(domainId: string, pid: number, uid: number, file: SubjectiveFile, tid?: string | null): Promise<void> {
+    const _id = subjectiveId(domainId, pid, uid, tid) as any;
     await collSubjective.updateOne(
         { _id },
-        { $setOnInsert: { domainId, pid, uid, report: '' }, $set: { updateAt: new Date() } },
+        { $setOnInsert: { domainId, tid: tidKey(tid), pid, uid, report: '' }, $set: { updateAt: new Date() } },
         { upsert: true },
     );
     await collSubjective.updateOne({ _id }, { $pull: { files: { name: file.name } } as any });
     await collSubjective.updateOne({ _id }, { $push: { files: file } as any });
 }
 
-export async function removeSubjectiveFile(domainId: string, pid: number, uid: number, name: string): Promise<void> {
+export async function removeSubjectiveFile(domainId: string, pid: number, uid: number, name: string, tid?: string | null): Promise<void> {
     await collSubjective.updateOne(
-        { _id: subjectiveId(domainId, pid, uid) as any },
+        { _id: subjectiveId(domainId, pid, uid, tid) as any },
+        { $pull: { files: { name } } as any, $set: { updateAt: new Date() } },
+    );
+    // A legacy document may still hold the file under the old key.
+    await collSubjective.updateOne(
+        { _id: legacyId(domainId, pid, uid) as any },
         { $pull: { files: { name } } as any, $set: { updateAt: new Date() } },
     );
 }
 
-export async function listSubjective(domainId: string, pid: number): Promise<SubjectiveSubmissionDoc[]> {
-    return await collSubjective.find({ domainId, pid }).sort({ updateAt: -1 }).limit(500).toArray() as any;
+/**
+ * Hand-ins of a task. With `tid`, only that homework's — plus the legacy
+ * documents that predate the per-homework key, so an existing course keeps
+ * seeing its submissions until the migration script runs.
+ */
+export async function listSubjective(domainId: string, pid: number, tid?: string | null): Promise<SubjectiveSubmissionDoc[]> {
+    const q: any = { domainId, pid };
+    if (tid) q.$or = [{ tid: String(tid) }, { tid: { $exists: false } }, { tid: null }];
+    return await collSubjective.find(q).sort({ updateAt: -1 }).limit(500).toArray() as any;
+}
+
+/** Every hand-in of a task, whichever homework it belongs to (migration, housekeeping). */
+export async function listSubjectiveAll(domainId: string, pid?: number): Promise<SubjectiveSubmissionDoc[]> {
+    const q: any = { domainId };
+    if (pid !== undefined) q.pid = pid;
+    return await collSubjective.find(q).limit(20000).toArray() as any;
+}
+
+/** Move a document to the per-homework key (migration). */
+export async function assignSubjectiveTid(doc: SubjectiveSubmissionDoc, tid: string): Promise<void> {
+    const _id = subjectiveId(doc.domainId, doc.pid, doc.uid, tid);
+    if (_id === doc._id) return;
+    await collSubjective.updateOne({ _id: _id as any }, {
+        $set: {
+            domainId: doc.domainId, tid, pid: doc.pid, uid: doc.uid, report: doc.report || '', files: doc.files || [], updateAt: doc.updateAt || new Date(),
+        },
+    }, { upsert: true });
+    await collSubjective.deleteOne({ _id: doc._id as any });
 }
 
 export default SelfLearningModel;

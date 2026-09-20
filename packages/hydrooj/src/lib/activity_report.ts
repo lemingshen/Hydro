@@ -420,7 +420,7 @@ export async function buildActivityCorpus(domainId: string, tdoc: any, kind: 'ho
     const handIn = new Map<string, { files: number, words: number, at: Date | null }>();
     for (const t of tasks) {
         if (t.kind !== 'subjective') continue;
-        const docs = await listSubjective(domainId, t.pid).catch(() => []);
+        const docs = await listSubjective(domainId, t.pid, String(tdoc.docId)).catch(() => []);
         for (const d of docs as any[]) {
             if (!uidSet.has(d.uid)) continue;
             handIn.set(cellKey(d.uid, t.pid), { files: (d.files || []).length, words: String(d.report || '').split(/\s+/).filter((x: string) => x).length, at: d.updateAt || null });
